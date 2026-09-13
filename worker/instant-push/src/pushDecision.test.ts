@@ -156,6 +156,52 @@ describe('buildPushDecision D 系列 (pushPayloads 数组)', () => {
     // 最后一条带, 防客户端 replay 多次
     expect(ps[2].metadata?.directives).toEqual([{ type: 'poke' }]);
   });
+
+  // 工具轮里的生图请求：tool_request push 不进聊天流，directive 挂它上面没人消费；
+  // 追加一条 directive-only content push 排在本批最后，isLastChunk 守卫在这里命中。
+  it('D7 tool-request + GEN_IMAGE → narration + toolReq + directive-only 三条，directives 在末条', () => {
+    const r = buildPushDecision(baseInput({
+      llmOutputText: '给你看\n[[GEN_IMAGE: 1girl, cat | portrait]]\n[[RECALL: 2026-06]]',
+    }));
+    expect(r.decision).toBe('tool-request');
+    const ps = pushes(r);
+    expect(ps).toHaveLength(3);
+    expect(ps[0].message).toBe('给你看');
+    expect(ps[1].messageKind).toBe('tool_request');
+    expect(ps[1].notification).toBeUndefined();
+    expect(ps[2].messageKind).toBe('content');
+    expect(ps[2].message).toBe('');
+    expect(ps[2].notification).toBeUndefined();
+    expect(ps[2].messageId).toContain('_directive');
+    expect(ps[2].metadata?.directives).toEqual([
+      { type: 'gen_image', prompt: '1girl, cat', resolution: 'portrait' },
+    ]);
+  });
+
+  it('D7+ tool-request 只有生图请求没有旁白 → toolReq + directive-only 两条', () => {
+    const r = buildPushDecision(baseInput({
+      llmOutputText: '[[SEARCH: a]]\n[[GEN_IMAGE: cat | square]]',
+    }));
+    expect(r.decision).toBe('tool-request');
+    const ps = pushes(r);
+    expect(ps).toHaveLength(2);
+    expect(ps[0].messageKind).toBe('tool_request');
+    expect(ps[1].message).toBe('');
+    expect(ps[1].metadata?.directives).toEqual([
+      { type: 'gen_image', prompt: 'cat', resolution: 'square' },
+    ]);
+  });
+
+  it('D7++ tool-request 没有生图请求 → 不多发 directive-only push（回归）', () => {
+    const r = buildPushDecision(baseInput({
+      llmOutputText: '让我查查[[RECALL: 2024-05]]',
+    }));
+    expect(r.decision).toBe('tool-request');
+    const ps = pushes(r);
+    expect(ps).toHaveLength(2);
+    expect(ps[1].messageKind).toBe('tool_request');
+    expect(ps[1].metadata?.directives).toBeUndefined();
+  });
 });
 
 // ─── E 系列: title fallback ──────────────────────────────────────────────

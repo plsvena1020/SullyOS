@@ -68,6 +68,16 @@ export interface FireSessionState {
    * 一轮都没给过思考的模型留 null，那时候一个字段都不挂。
    */
   finalReasoning: string | null;
+  /**
+   * 穿透收尾那一轮里摘出的生图请求。
+   *
+   * 工具轮还能继续转时，旁白（含副作用标签）进 narrations，finish 拼回全文统一扫，
+   * 生图请求在那里落进 directives。但轮到「这轮工具请求不再放行、直接收尾」（撞轮次
+   * 上限 / 连续重复调用）时，本轮旁白整句丢掉（半句「等我查查」没有下文，发出去更假）——
+   * 旁白里的 [[GEN_IMAGE:]] 也跟着没了。它不该陪葬：图是角色已经决定要发的东西，
+   * 跟这轮旁白发不发无关。所以穿透收尾时先摘出来存这，finish 时并进 directives。
+   */
+  strayGenImageDirectives: Directive[];
 }
 
 export const createFireSessionState = (): FireSessionState => ({
@@ -77,6 +87,7 @@ export const createFireSessionState = (): FireSessionState => ({
   mcpCallSeq: 0,
   xhsShareNotes: null,
   finalReasoning: null,
+  strayGenImageDirectives: [],
 });
 
 /**
@@ -207,6 +218,26 @@ export function attachSceneSong(
 ): Directive[] {
   if (!sceneSong) return directives;
   return directives.map((d) => (d.type === 'music_action' ? { ...d, song: sceneSong } : d));
+}
+
+/**
+ * 把穿透收尾轮攒下的 directives 并进 finish 扫出的那一份，按 JSON 键去重。
+ *
+ * 去重是必须的：同一张图的标签可能在两处都出现——收尾轮的原文里一次（被摘进
+ * strayGenImageDirectives），更早的旁白里一次（finish 拼回 narrations 时又扫到一次）。
+ * 客户端重放不去重，重叠执行就是同一张图生两遍。
+ */
+function mergeDirectives(base: Directive[], extra: Directive[]): Directive[] {
+  if (extra.length === 0) return base;
+  const out = [...base];
+  const seen = new Set(out.map((d) => JSON.stringify(d)));
+  for (const d of extra) {
+    const key = JSON.stringify(d);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(d);
+  }
+  return out;
 }
 
 export type RoundDecision =
@@ -411,6 +442,11 @@ export function processLLMRound(
     // 穿透收尾：这一轮的旁白是「等我翻翻记录哈」这种半句，而它请求的工具永远不会跑了。
     // 发出去用户收到的最后一条就是一句没有下文的话，比少说这句更假——丢掉，只发之前
     // 几轮已经说完的内容。
+    // 旁白里的 [[GEN_IMAGE:]] 是例外：它不是旁白，是角色已经决定要发的图，摘出来
+    // 留给 finish 并进 directives（见 FireSessionState.strayGenImageDirectives）。
+    for (const d of result.directives) {
+      if (d.type === 'gen_image') (state.strayGenImageDirectives ??= []).push(d);
+    }
   }
 
   // 拼回全文再扫一次。中间轮 prefix 里不含数据标签（prefix 定义即「首个数据标签
@@ -430,8 +466,10 @@ export function processLLMRound(
   const finalScan = fullText === scanText ? result : classifyLLMOutput(fullText);
   const cleanedText = finalScan.kind === 'finish' ? finalScan.cleanedText : finalScan.prefix;
   // 角色写了 MUSIC_ACTION 的话，把 prompt 里那句「你此刻在听」的那首歌冻进去（见 attachSceneSong）。
+  // 穿透收尾轮摘出来的生图请求并进来（见 strayGenImageDirectives）——同一请求可能在
+  // 两侧都出现（模型下一轮又把标签重写了一遍），按 type+参数去重，重叠执行就是同图两张。
   const directives = attachSceneSong(
-    finalScan.kind === 'finish' ? finalScan.directives : [],
+    mergeDirectives(finalScan.directives, state.strayGenImageDirectives ?? []),
     build.sceneSong,
   );
 

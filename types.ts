@@ -3378,6 +3378,25 @@ export interface CharacterProfile {
    * - 首次生图时档案为空 → 从人设自动提取一次存档；之后可在「设置 → AI 生图」里手动改。
    */
   imageGenProfile?: string;
+  /**
+   * AI 生图固定注入的画风 / 画师 tag（per-character，**通用**注入）。
+   * 该角色所有生图都带上：聊天自动配图、主动消息、Spark 首图、聊天相册手动生成；
+   * 纯景色生成也注入。逗号分隔，英文 danbooru 风格（如 "by wlop, watercolor"）。
+   * 在哪里改：神经链接（角色 App）→ 角色 → 设定 → AI 生图 · 外貌提示词。
+   */
+  imageGenStyleTags?: string;
+  /**
+   * AI 生图性别矫正（per-character）：**仅当画面里出现该角色**（prompt 里有 @角色名）时，
+   * 注入 1boy/1girl 并剔除模型写错的性别标记；纯景色不注入。
+   * 在哪里改：神经链接（角色 App）→ 角色 → 设定 → AI 生图 · 外貌提示词。
+   */
+  imageGenGender?: 'male' | 'female';
+  /**
+   * 是否允许这个角色自己生图（per-character，聊天设置里改）。
+   * 缺省视为开（保持「全局自动生图开关是唯一门槛」的旧行为）；显式 false 后角色写的
+   * `[[GEN_IMAGE:]]` 只剥离不执行（相册里用户手动生成不受影响）。
+   */
+  imageGenCharEnabled?: boolean;
   /** 可选：在日常 ChatApp 注入任务优先的协同工作规则。提示词较长，默认关闭。 */
   chatCollaborationEnabled?: boolean;
   /** 该角色专属的聊天「白框」自定义 CSS（叠加在全局 osTheme.chatChromeCustomCss 之上）。 */

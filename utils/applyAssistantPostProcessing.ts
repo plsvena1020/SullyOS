@@ -60,6 +60,8 @@ import { isBlobRef } from './blobRef';
 import { stripLeakedSourceTags } from './sanitize';
 import { extractGenImageTags, stripGenImageTags } from './imageGenTags';
 import { runImageGenReply } from './imageGenFlow';
+import { appendDevDebugLog } from './devDebug';
+import { lastUserMessageWantsImage } from './imageRequestIntent';
 
 // ─── 模块内辅助 ──────────────────────────────────────────────────────────────
 
@@ -285,7 +287,11 @@ export type PostProcessDirective =
     // Notion / 飞书 写日记 — worker classifier 提取 title/content/mood, 我们拼回原 tag 给
     // line 465 (Notion) / 649 (飞书) 既有 handler 跑. title 可空, 客户端兜底.
     | { type: 'notion_write_diary'; title: string; content: string; mood?: string }
-    | { type: 'feishu_write_diary'; title: string; content: string; mood?: string };
+    | { type: 'feishu_write_diary'; title: string; content: string; mood?: string }
+    // AI 生图：worker 把 [[GEN_IMAGE:]] 摘成结构化请求传回来。这里拼回原 tag，
+    // 让 Step 5b 用与本地生成完全同一份执行路径（开关 / Key 的门都在那边；
+    // 关着或没钥匙时只剥离、不烧额度）。
+    | { type: 'gen_image'; prompt: string; resolution: 'square' | 'portrait' | 'landscape' };
 
 /**
  * 把结构化 directive 反向拼回原 tag 字符串. 拼回的目的是让下游 chatParser.parseAndExecuteActions
@@ -367,6 +373,10 @@ function reconstructDirectiveTags(directives: PostProcessDirective[] | undefined
                 parts.push(`[[FS_DIARY_START: ${header}]]\n${d.content}\n[[FS_DIARY_END]]`);
                 break;
             }
+            case 'gen_image':
+                // 拼回规范形态交给 Step 5b 执行（它自己会剥离标签并 fire-and-forget 生图）。
+                parts.push(`[[GEN_IMAGE: ${d.prompt} | ${d.resolution}]]`);
+                break;
             default:
                 console.warn('[directive-replay] unknown directive type, skipping', d);
         }
@@ -533,6 +543,23 @@ export interface ImageGenRuntime {
     apiConfig: APIConfig;
     characters: CharacterProfile[];
     saveCharProfile: (charId: string, profile: string) => void;
+}
+
+// 生图标签被拦下时的用户提示：每 10 分钟最多一次，说明去哪里开。
+// 以前这里是全静默的——角色明明写了「给你看张照片」，图却没来，用户查无头绪。
+let imageGenBlockedNoticeAt = 0;
+function notifyImageGenBlocked(
+    reason: 'no-runtime' | 'disabled' | 'no-key' | 'char-disabled',
+    addToast: (msg: string, type: 'info' | 'success' | 'error') => void,
+): void {
+    // 角色自己的开关是用户主动关的，不用提示（提示反而像 bug）；
+    // 只有「想开但没配好」的两种情形才引导去设置。
+    if (reason === 'char-disabled' || reason === 'no-runtime') return;
+    const now = Date.now();
+    if (now - imageGenBlockedNoticeAt < 10 * 60_000) return;
+    imageGenBlockedNoticeAt = now;
+    if (reason === 'no-key') addToast('角色想发图，但还没填 Latent API Key（设置 → AI 生图）', 'info');
+    else if (reason === 'disabled') addToast('角色想发图，但「自动生图」开关没开（设置 → AI 生图）', 'info');
 }
 
 // ─── 主入口 ─────────────────────────────────────────────────────────────────
@@ -2342,7 +2369,8 @@ ${material}
     // [[GEN_IMAGE: ...]] 先从正文剥离（展示 / 历史 / 二轮都不该看到它），再决定执不执行：
     // 调用方给了 imageGen 运行时 + 总开关开着 + 有 key → 取第一个标签 fire-and-forget
     // 跑后台生图（文字消息 Step 6 照常先落库，图片生成完再追加一条 image 消息）。
-    // 开关关着 / 没 key / 没传运行时的路径 → 只剥离不执行（flow 里缺 key 也会 toast）。
+    // 开关关着 / 没 key / 没传运行时的路径 → 只剥离不执行，但**不再静默**：留 devDebug +
+    // console 痕，本地路径每会话节流提示一次（push 路径的 addToast 本来就是静默 log）。
     const genImageReqs = extractGenImageTags(aiContent);
     if (genImageReqs.length > 0) {
         aiContent = stripGenImageTags(aiContent);
@@ -2350,7 +2378,15 @@ ${material}
             console.warn('[imageGen] 一轮多个 GEN_IMAGE 标签，只执行第一个', { charId: char.id, count: genImageReqs.length });
         }
         const imgReq = genImageReqs[0];
-        if (imageGen && imageGen.apiConfig?.imageGenEnabled === true && imgReq) {
+        const imageGenEnabled = imageGen?.apiConfig?.imageGenEnabled === true;
+        const imageGenHasKey = !!(imageGen?.apiConfig?.latentImageKey || '').trim();
+        // 角色自己的开关（聊天设置里改）缺省视为开；关掉只挡它自己发图。
+        const charAllowsImageGen = char.imageGenCharEnabled !== false;
+        if (imageGen && imageGenEnabled && imageGenHasKey && charAllowsImageGen && imgReq) {
+            appendDevDebugLog('api', {
+                label: '[imageGen] 已触发后台生图',
+                data: { charId: char.id, prompt: imgReq.prompt, resolution: imgReq.resolution },
+            });
             void runImageGenReply(imgReq, {
                 apiConfig: imageGen.apiConfig,
                 char,
@@ -2360,7 +2396,26 @@ ${material}
                 hooks: { addToast },
                 saveCharProfile: imageGen.saveCharProfile,
             });
+        } else if (imgReq) {
+            const reason: 'no-runtime' | 'disabled' | 'no-key' | 'char-disabled' =
+                !imageGen ? 'no-runtime'
+                    : (!imageGenEnabled ? 'disabled'
+                        : (!charAllowsImageGen ? 'char-disabled' : 'no-key'));
+            console.warn('[imageGen] 角色写了生图标签但没执行', { charId: char.id, reason, prompt: imgReq.prompt });
+            appendDevDebugLog('api', {
+                label: '[imageGen] 生图标签被拦下',
+                data: { charId: char.id, reason, prompt: imgReq.prompt },
+            });
+            notifyImageGenBlocked(reason, addToast);
         }
+    }
+
+    // 诊断闭环：用户这条像是在要图，而模型回复里一个生图标签都没有——「没图」里最常见
+    // 的一种其实是模型没按格式写标签。留一条痕（不改行为、不弹 toast）：复现后
+    // Console/devDebug 必能看到三类之一：已触发 / 被拦下（带原因）/ 模型没写。
+    if (genImageReqs.length === 0 && lastUserMessageWantsImage(contextMsgs)) {
+        console.warn('[imageGen] 像是在要图但模型没写标签', { charId: char.id });
+        appendDevDebugLog('api', { label: '[imageGen] 像是在要图但模型没写标签', data: { charId: char.id } });
     }
 
     // ─── Step 6: 展示本轮回复 (二轮结果 B / 无二轮时的单轮回复) ───

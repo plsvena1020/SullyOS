@@ -2767,6 +2767,54 @@ var extractScheduleChangeDirectives = (text) => {
   };
 };
 
+// utils/imageGenTags.ts
+var DEFAULT_IMAGE_GEN_RESOLUTION = "portrait";
+var TAG_RE = /\[\s*\[\s*GEN_IMAGE\s*[:：]\s*([\s\S]*?)\s*\]\s*\]/gi;
+var RESOLUTION_ALIASES = {
+  square: "square",
+  portrait: "portrait",
+  landscape: "landscape",
+  "\u65B9": "square",
+  "\u7AD6": "portrait",
+  "\u6A2A": "landscape"
+};
+function normalizeImageGenResolution(token) {
+  if (typeof token !== "string" || !token.trim()) return null;
+  return RESOLUTION_ALIASES[token.trim().toLowerCase()] ?? null;
+}
+function cleanPrompt(raw) {
+  return raw.replace(/\s+/g, " ").trim();
+}
+function extractGenImageTags(text) {
+  if (!text || !/gen_image/i.test(text)) return [];
+  const out = [];
+  TAG_RE.lastIndex = 0;
+  let m;
+  while ((m = TAG_RE.exec(text)) !== null) {
+    const body = (m[1] || "").trim();
+    if (!body) continue;
+    const parts = body.split("|");
+    let resolution = null;
+    let promptRaw = body;
+    if (parts.length > 1) {
+      const maybeRes = normalizeImageGenResolution(parts[parts.length - 1]);
+      if (maybeRes) {
+        resolution = maybeRes;
+        promptRaw = parts.slice(0, -1).join("|");
+      }
+    }
+    const prompt = cleanPrompt(promptRaw);
+    if (!prompt) continue;
+    out.push({ prompt, resolution: resolution ?? DEFAULT_IMAGE_GEN_RESOLUTION });
+  }
+  return out;
+}
+function stripGenImageTags(text) {
+  if (!text || !/gen_image/i.test(text)) return text;
+  TAG_RE.lastIndex = 0;
+  return text.replace(TAG_RE, "").split("\n").map((line) => line.trimEnd()).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 // worker/instant-push/src/classifier.ts
 var DATA_TAGS = [
   // [[RECALL: 2024-05]] / [[RECALL: 2024年5]]
@@ -2953,6 +3001,20 @@ function parseDiaryShort(m, type) {
   }
   return { type, title, content };
 }
+function dedupeDirectives(directives) {
+  const dedupedDirectives = [];
+  const seenDirectives = /* @__PURE__ */ new Set();
+  for (const d of directives) {
+    const key = JSON.stringify(d);
+    if (seenDirectives.has(key)) {
+      console.warn("[classifier] \u540C\u4E00\u6761\u6D88\u606F\u91CC\u91CD\u590D\u7684\u526F\u4F5C\u7528, \u53EA\u4FDD\u7559\u7B2C\u4E00\u4E2A:", key);
+      continue;
+    }
+    seenDirectives.add(key);
+    dedupedDirectives.push(d);
+  }
+  return dedupedDirectives;
+}
 function classifyLLMOutput(text) {
   const toolCalls = [];
   for (const spec of DATA_TAGS) {
@@ -2970,9 +3032,15 @@ function classifyLLMOutput(text) {
   if (toolCalls.length > 0) {
     let prefix = text;
     for (const spec of DATA_TAGS) prefix = prefix.replace(spec.re, "");
-    prefix = prefix.trim();
+    const genImageReqs2 = extractGenImageTags(prefix);
+    prefix = stripGenImageTags(prefix).trim();
+    const directives2 = dedupeDirectives(genImageReqs2.map((req) => ({
+      type: "gen_image",
+      prompt: req.prompt,
+      resolution: req.resolution
+    })));
     const sanitizedPrefix = sanitizeForNotification(prefix);
-    return { kind: "tool-request", prefix, sanitizedPrefix, toolCalls };
+    return { kind: "tool-request", prefix, sanitizedPrefix, toolCalls, directives: directives2 };
   }
   const directives = [];
   const { text: textAfterTransfers, events: transferEvents } = extractTransferCommands(text);
@@ -2991,25 +3059,20 @@ function classifyLLMOutput(text) {
   for (const d of scheduleParsed.directives) {
     directives.push({ type: "change_schedule", time: d.startTime, activity: d.activity });
   }
+  const genImageReqs = extractGenImageTags(textAfterSchedule);
+  const textAfterGenImage = stripGenImageTags(textAfterSchedule);
+  for (const req of genImageReqs) {
+    directives.push({ type: "gen_image", prompt: req.prompt, resolution: req.resolution });
+  }
   for (const spec of SIDE_EFFECT_TAGS) {
-    const matches = Array.from(textAfterSchedule.matchAll(spec.re));
+    const matches = Array.from(textAfterGenImage.matchAll(spec.re));
     for (const m of matches) {
       const d = spec.toDirective(m);
       if (d) directives.push(d);
     }
   }
-  const dedupedDirectives = [];
-  const seenDirectives = /* @__PURE__ */ new Set();
-  for (const d of directives) {
-    const key = JSON.stringify(d);
-    if (seenDirectives.has(key)) {
-      console.warn("[classifier] \u540C\u4E00\u6761\u6D88\u606F\u91CC\u91CD\u590D\u7684\u526F\u4F5C\u7528, \u53EA\u4FDD\u7559\u7B2C\u4E00\u4E2A:", key);
-      continue;
-    }
-    seenDirectives.add(key);
-    dedupedDirectives.push(d);
-  }
-  let cleanedText = textAfterSchedule;
+  const dedupedDirectives = dedupeDirectives(directives);
+  let cleanedText = textAfterGenImage;
   for (const spec of DATA_TAGS) cleanedText = cleanedText.replace(spec.re, "");
   for (const spec of SIDE_EFFECT_TAGS) cleanedText = cleanedText.replace(spec.re, "");
   cleanedText = cleanedText.trim();
@@ -3018,7 +3081,7 @@ function classifyLLMOutput(text) {
 }
 
 // utils/instantWorkerVersion.ts
-var INSTANT_WORKER_VERSION = "2026-09-08";
+var INSTANT_WORKER_VERSION = "2026-09-13";
 
 // utils/emotionEvalCore.ts
 var EMOTION_EVAL_SYSTEM_SLOT = "__EMOTION_EVAL_SYSTEM_PROMPT__";
@@ -3700,6 +3763,15 @@ function buildPushDecision(input, deps) {
       })
     };
     const pushPayloads2 = [...narrationPushes, toolPush];
+    if (result.directives.length > 0) {
+      pushPayloads2.push(buildDirectiveOnlyPush({
+        baseCommon,
+        callerMetadata,
+        iteration,
+        sessionId: sessionId2,
+        directives: result.directives
+      }));
+    }
     pushPayloads2.forEach((p) => warnIfPayloadLarge(p, deps?.onSizeWarn));
     return { decision: "tool-request", pushPayloads: pushPayloads2 };
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractGenImageTags, resolveAppearanceRefs, stripGenImageTags } from './imageGenTags';
+import { extractGenImageTags, resolveAppearanceRefs, stripGenImageTags, composeImagePrompt, mentionsCharacterRef } from './imageGenTags';
 
 describe('extractGenImageTags', () => {
     it('parses a basic tag with explicit resolution', () => {
@@ -42,6 +42,18 @@ describe('extractGenImageTags', () => {
         const reqs = extractGenImageTags('[[GEN_IMAGE: 1girl,\n  silver   hair]]');
         expect(reqs[0].prompt).toBe('1girl, silver hair');
     });
+
+    // 模型手滑变体：全角冒号 / 中括号间空格 / 收尾空格——以前会漏解析、标签原样漏进气泡。
+    it('tolerates full-width colon and stray spaces', () => {
+        const fullWidth = extractGenImageTags('[[GEN_IMAGE：1girl, cat | 竖]]');
+        expect(fullWidth).toHaveLength(1);
+        expect(fullWidth[0].prompt).toBe('1girl, cat');
+        expect(fullWidth[0].resolution).toBe('portrait');
+
+        const spaced = extractGenImageTags('[[ GEN_IMAGE ： 1girl, moonlight ]]');
+        expect(spaced).toHaveLength(1);
+        expect(spaced[0].prompt).toBe('1girl, moonlight');
+    });
 });
 
 describe('stripGenImageTags', () => {
@@ -50,6 +62,13 @@ describe('stripGenImageTags', () => {
         expect(out).not.toContain('GEN_IMAGE');
         expect(out).toContain('第一句');
         expect(out).toContain('第二句');
+    });
+
+    it('also strips the full-width / spaced variants', () => {
+        const out = stripGenImageTags('看这个\n[[ GEN_IMAGE：1girl, cat ]]\n好看吧');
+        expect(out).not.toContain('GEN_IMAGE');
+        expect(out).toContain('看这个');
+        expect(out).toContain('好看吧');
     });
 
     it('leaves text without tags untouched', () => {
@@ -84,5 +103,61 @@ describe('resolveAppearanceRefs', () => {
             { names: ['小白脸'], tags: 'LONG' },
         ];
         expect(resolveAppearanceRefs('@小白脸 笑了', ps)).toBe('LONG 笑了');
+    });
+
+    it('名字大小写不敏感（模型把 @Sully 写成 @sully 也认）', () => {
+        expect(resolveAppearanceRefs('@sully smiling', profiles))
+            .toBe('cat girl, silver hair, green eyes smiling');
+    });
+});
+
+// 提示词合成：质量词 / 性别 / 主体 / 画风固定注入四层合并，必须不重复、不打架。
+describe('mentionsCharacterRef', () => {
+    it('大小写不敏感，且要求是一个完整的 @引用', () => {
+        expect(mentionsCharacterRef('@Sully smiling', 'sully')).toBe(true);
+        expect(mentionsCharacterRef('@sully smiling', 'Sully')).toBe(true);
+        expect(mentionsCharacterRef('sully smiling', 'Sully')).toBe(false);
+        expect(mentionsCharacterRef('@Sullyface', 'Sully')).toBe(false);
+        expect(mentionsCharacterRef('', 'Sully')).toBe(false);
+    });
+});
+
+describe('composeImagePrompt', () => {
+    const Q = 'masterpiece, best quality';
+
+    it('顺序为 质量词 → 性别 → 主体 → 画风；全部去重（大小写不敏感）', () => {
+        const out = composeImagePrompt('1boy, moonlight, lake, Best Quality', {
+            qualityTags: Q,
+            gender: 'male',
+            styleTags: 'by wlop, watercolor, MOONLIGHT',
+        });
+        expect(out).toBe('masterpiece, best quality, 1boy, moonlight, lake, by wlop, watercolor');
+    });
+
+    it('显式性别会剔除主体/画风里的性别标记（含裸 male/female），不打架', () => {
+        const out = composeImagePrompt('1girl, female, smiling', {
+            qualityTags: Q,
+            gender: 'male',
+            styleTags: 'by artist, male',
+        });
+        expect(out).toBe('masterpiece, best quality, 1boy, smiling, by artist');
+    });
+
+    it('不传性别时原样保留（聊天自动生图不受影响）', () => {
+        const out = composeImagePrompt('1girl, silver hair', { qualityTags: Q });
+        expect(out).toBe('masterpiece, best quality, 1girl, silver hair');
+    });
+
+    it('纯景色（无性别、无角色 tag）只合并质量词与画风', () => {
+        const out = composeImagePrompt('misty forest, morning light', {
+            qualityTags: Q,
+            styleTags: 'by guweiz',
+        });
+        expect(out).toBe('masterpiece, best quality, misty forest, morning light, by guweiz');
+    });
+
+    it('中文逗号也能切分，空层不产生多余逗号', () => {
+        const out = composeImagePrompt('girl，smiling', { qualityTags: Q, styleTags: '  ' });
+        expect(out).toBe('masterpiece, best quality, girl, smiling');
     });
 });

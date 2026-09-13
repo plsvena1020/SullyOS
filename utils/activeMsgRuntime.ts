@@ -765,6 +765,21 @@ const processInboxMessageWithPostProcessing = async (
     //   3. 送达时人不在场：系统通知已经把整句话完整显示过，他是看着通知点进来的。
     // App 在前台时收到的实时消息照旧慢放——那才是「角色正在你眼前打字」的场景。
     instantRender: shouldRenderInstantly(message.metadata, message.receivedAt, Date.now()),
+    // AI 生图运行时：与本地聊天路径同一份执行器（runImageGenReply）。worker 只把
+    // [[GEN_IMAGE:]] 摘成 directive 带回来，图片在浏览器里生成——latent key 不上云，
+    // 页面关着时也不烧额度。开关 / Key 的门在 Step 5b：imageGenEnabled !== true
+    // 只剥离不执行，与本地聊天口径一致。
+    // characters 用本函数开头读好的全量列表（prompt 里 @ 到的别角色也要查档案）；
+    // saveCharProfile 走读改写落库——React 的 updateCharacter 在收件箱管线里够不着。
+    imageGen: {
+      apiConfig,
+      characters,
+      saveCharProfile: (charId, profile) => {
+        const target = characters.find(c => c.id === charId);
+        if (!target) return;
+        void DB.saveCharacter({ ...target, imageGenProfile: profile });
+      },
+    },
   });
 
   // ─── 即时对话（amsg2）的情绪评估结果 ───

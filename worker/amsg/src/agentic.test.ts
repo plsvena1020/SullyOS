@@ -294,6 +294,54 @@ describe('processLLMRound — 副作用标签块被数据标签劈成两轮（�
   });
 });
 
+// 穿透收尾（撞轮次上限 / 连续重复调用）时，本轮旁白整句丢掉；旁白里的
+// [[GEN_IMAGE:]] 不能陪葬——图是角色已经决定要发的，跟这轮旁白发不发无关。
+describe('processLLMRound — 穿透收尾轮里的生图请求不陪葬', () => {
+  const genImageOf = (decision: ReturnType<typeof processLLMRound>) => {
+    if (decision.decision !== 'finish') return undefined;
+    const last = decision.pushPayloads[decision.pushPayloads.length - 1];
+    return (last.metadata as any)?.directives;
+  };
+
+  it('撞最后一轮：本轮正文丢掉，但生图请求并进 finish 的 directives', () => {
+    const state = createFireSessionState();
+    const round1 = processLLMRound(state, '我翻翻记录。[[SEARCH: 流星雨]]', build, null, null, 0, 5);
+    expect(round1.decision).toBe('tool-request');
+
+    // iteration 4 = maxToolIterations(5) - 1 → 工具请求不再放行，穿透收尾。
+    const round2 = processLLMRound(
+      state,
+      '找到了，给你看。\n[[GEN_IMAGE: 1girl, meteor shower | landscape]]\n[[RECALL: 2026-06]]',
+      build, null, null, 4, 5,
+    );
+    expect(round2.decision).toBe('finish');
+    if (round2.decision !== 'finish') return;
+    expect(round2.pushPayloads.map((p) => p.message)).toEqual(['我翻翻记录。']);
+    expect(genImageOf(round2)).toEqual([
+      { type: 'gen_image', prompt: '1girl, meteor shower', resolution: 'landscape' },
+    ]);
+  });
+
+  it('更早的旁白里已有同一张图的标签：去重后只留一个 directive', () => {
+    const state = createFireSessionState();
+    processLLMRound(
+      state,
+      '给你看[[GEN_IMAGE: cat | portrait]]\n[[SEARCH: cat]]',
+      build, null, null, 0, 5,
+    );
+    const round2 = processLLMRound(
+      state,
+      '[[GEN_IMAGE: cat | portrait]]\n[[RECALL: 2026-06]]',
+      build, null, null, 4, 5,
+    );
+    expect(round2.decision).toBe('finish');
+    if (round2.decision !== 'finish') return;
+    expect(genImageOf(round2)).toEqual([
+      { type: 'gen_image', prompt: 'cat', resolution: 'portrait' },
+    ]);
+  });
+});
+
 // ─── XHS 笔记随 push 带回（amsg2 round 1 在 worker 跑，客户端缺笔记缓冲） ────────
 
 const makeNote = (n: number, descLen = 10): XhsNote => ({

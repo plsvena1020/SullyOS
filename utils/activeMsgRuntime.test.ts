@@ -53,6 +53,13 @@ import { AMSG_SELF_LOG_KEY, amsgStateNamespace } from './amsgFirePack';
 import { CHAT_GEN_EVENTS } from './chatGenEvents';
 import { DB } from './db';
 import { readAllInstantTraces } from './instantTraceLog';
+import { runImageGenReply } from './imageGenFlow';
+
+// 主动消息发图的执行器按「被调用到」断言即可，真正的生图链路（latent 调用、
+// 落库、相册）由 imageGenFlow / applyAssistantPostProcessing 各自的测试覆盖。
+vi.mock('./imageGenFlow', () => ({
+  runImageGenReply: vi.fn(async () => {}),
+}));
 
 // resolveFireExpireDecision 是从「防穿帮闸·客户端兜底」吞没闸抽出来的 get-or-compute
 // helper（带 TTL 清扫），单测把闸的关键不变量钉住，防回归：
@@ -588,6 +595,44 @@ describe('flushInboxToChat 落库时间戳（走真库）', () => {
     const msgs = await assistantMsgs('char-ts-main');
     expect(msgs.length).toBeGreaterThan(0);
     for (const m of msgs) expect(m.timestamp).toBe(sentAt);
+  }, 20000);
+
+  // 主动消息发图：worker classifier 把 [[GEN_IMAGE:]] 摘成 gen_image directive 随
+  // push metadata 回来，收件箱管线必须把它接到本地生图器上（开关 / Key 的门在
+  // Step 5b）。修复前 push 路径没传 imageGen 运行时，标签被静默剥离、图永远不来。
+  it('带 gen_image directive 的推送 → 触发本地生图（开关开 + 有 Key）', async () => {
+    const charId = 'char-img-push';
+    await DB.saveCharacter({ id: charId, name: '发图角色' } as any);
+    localStorage.setItem('os_api_config', JSON.stringify({
+      baseUrl: 'http://localhost:0', apiKey: 'k', model: 'm',
+      latentImageKey: 'lat_sk_x', imageGenEnabled: true,
+    }));
+    const mockedRun = vi.mocked(runImageGenReply);
+    mockedRun.mockClear();
+    try {
+      await ActiveMsgStore.saveInboxMessage(inboxMsg({
+        messageId: 'msg-img-push-1',
+        charId,
+        charName: '发图角色',
+        body: '给你看看\n',
+        messageType: 'text',
+        sentAt: Date.now() - 60_000,
+        metadata: {
+          charId,
+          directives: [{ type: 'gen_image', prompt: '1girl, cat', resolution: 'portrait' }],
+        },
+      }));
+
+      await flushInboxToChat();
+
+      expect(mockedRun).toHaveBeenCalledTimes(1);
+      expect(mockedRun.mock.calls[0][0]).toMatchObject({
+        prompt: '1girl, cat',
+        resolution: 'portrait',
+      });
+    } finally {
+      localStorage.removeItem('os_api_config');
+    }
   }, 20000);
 
   // 循环判定读的是 push 顶层的 recurrenceType（库盖上去的，用户排的和角色自排的走同

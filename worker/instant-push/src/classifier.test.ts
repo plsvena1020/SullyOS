@@ -437,3 +437,86 @@ describe('classifyLLMOutput — 日程修改走 directive 通道', () => {
   });
 });
 
+// AI 生图标签 [[GEN_IMAGE: tag | 画幅]] 跟转账 / 日程同理要走 directive 通道：
+// 标签独占一行时，留在正文里会被 sanitizeIntoSegments 的段级判空整段吞掉，
+// 客户端永远收不到生图请求。worker 只摘请求，生图在客户端跑（latent key 不过云）。
+describe('classifyLLMOutput — AI 生图走 directive 通道', () => {
+  it('独占行标签 → gen_image directive，正文里不留痕', () => {
+    const r = classifyLLMOutput('看这个\n[[GEN_IMAGE: 1girl, cat ears, moonlight | landscape]]\n好看吧');
+    expect(r.kind).toBe('finish');
+    if (r.kind === 'finish') {
+      expect(r.directives).toEqual([
+        { type: 'gen_image', prompt: '1girl, cat ears, moonlight', resolution: 'landscape' },
+      ]);
+      expect(r.cleanedText).toContain('看这个');
+      expect(r.cleanedText).toContain('好看吧');
+      expect(r.cleanedText).not.toContain('GEN_IMAGE');
+    }
+  });
+
+  it('不写画幅 → 默认 portrait（跟客户端同一份解析）', () => {
+    const r = classifyLLMOutput('给你看[[GEN_IMAGE: 1girl, silver hair]]');
+    expect(r.kind).toBe('finish');
+    if (r.kind === 'finish') {
+      expect(r.directives).toEqual([
+        { type: 'gen_image', prompt: '1girl, silver hair', resolution: 'portrait' },
+      ]);
+      expect(r.cleanedText).toBe('给你看');
+    }
+  });
+
+  it('中文画幅别名照认（｜ 方）', () => {
+    const r = classifyLLMOutput('[[GEN_IMAGE: 1girl, hanfu | 方]]');
+    expect(r.kind).toBe('finish');
+    if (r.kind === 'finish') {
+      expect(r.directives).toEqual([
+        { type: 'gen_image', prompt: '1girl, hanfu', resolution: 'square' },
+      ]);
+      expect(r.cleanedText).toBe('');
+    }
+  });
+
+  it('跟别的副作用标签共存时互不干扰', () => {
+    const r = classifyLLMOutput('[[ACTION:POKE]]\n[[GEN_IMAGE: 1girl, cat | portrait]]');
+    expect(r.kind).toBe('finish');
+    if (r.kind === 'finish') {
+      expect(r.directives).toEqual([
+        { type: 'gen_image', prompt: '1girl, cat', resolution: 'portrait' },
+        { type: 'poke' },
+      ]);
+    }
+  });
+
+  it('没有这个标签时正文一个字都不动（stripGenImageTags 的空白压缩不该殃及普通消息）', () => {
+    const text = '今天好累。\n\n\n不过还是想跟你说说话。';
+    const r = classifyLLMOutput(text);
+    expect(r.kind).toBe('finish');
+    if (r.kind === 'finish') expect(r.cleanedText).toBe(text);
+  });
+
+  // 数据标签命中会让 classifier 提前 return，走不到 finish 的 2.1 段。生图请求
+  // 必须在提前返回之前摘出来——否则角色同一轮既查记忆又要发图时，图永远不来
+  // （实机反馈的根因）。
+  it('工具轮（数据标签同轮）也摘出来走 directive 通道，不留正文', () => {
+    const r = classifyLLMOutput('给你看\n[[GEN_IMAGE: 1girl, cat ears | portrait]]\n[[RECALL: 2026-06]]');
+    expect(r.kind).toBe('tool-request');
+    if (r.kind === 'tool-request') {
+      expect(r.directives).toEqual([
+        { type: 'gen_image', prompt: '1girl, cat ears', resolution: 'portrait' },
+      ]);
+      expect(r.toolCalls).toHaveLength(1);
+      expect(r.toolCalls[0].function.name).toBe('recall');
+      expect(r.prefix).toBe('给你看');
+      expect(r.prefix).not.toContain('GEN_IMAGE');
+    }
+  });
+
+  it('工具轮里重复的生图标签只留一个（复读型模型）', () => {
+    const r = classifyLLMOutput('[[SEARCH: a]]\n[[GEN_IMAGE: cat | square]]\n[[GEN_IMAGE: cat | square]]');
+    expect(r.kind).toBe('tool-request');
+    if (r.kind === 'tool-request') {
+      expect(r.directives).toEqual([{ type: 'gen_image', prompt: 'cat', resolution: 'square' }]);
+    }
+  });
+});
+

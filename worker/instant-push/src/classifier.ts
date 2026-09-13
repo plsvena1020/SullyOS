@@ -23,6 +23,7 @@
 import { sanitizeForNotification } from '../../../utils/sanitize';
 import { extractTransferCommands, parseTransferAmount } from '../../../utils/transferFormat';
 import { extractScheduleChangeDirectives } from '../../../utils/scheduleChangeParse';
+import { extractGenImageTags, stripGenImageTags, type ImageGenResolution } from '../../../utils/imageGenTags';
 
 export type ToolCall = {
   id: string;
@@ -75,7 +76,10 @@ export type Directive =
   // 写日记: 短形态 [[DIARY: title|content]] 或长形态 [[DIARY_START: title|mood]]\n content \n[[DIARY_END]],
   // 飞书同形态 (FS_ 前缀). title 可空 → 客户端兜底用 `${char.name}的日记 - M/D`. mood 可空.
   | { type: 'notion_write_diary'; title: string; content: string; mood?: string }
-  | { type: 'feishu_write_diary'; title: string; content: string; mood?: string };
+  | { type: 'feishu_write_diary'; title: string; content: string; mood?: string }
+  // AI 生图 [[GEN_IMAGE: tag | 画幅]]：worker 只摘成生图请求（不执行），客户端收到后
+  // 走本地 imageGenFlow 生图——latent key 与自动生图开关都不过云端，云端也不碰额度。
+  | { type: 'gen_image'; prompt: string; resolution: ImageGenResolution };
 
 export type ClassificationResult =
   | {
@@ -89,6 +93,12 @@ export type ClassificationResult =
        */
       sanitizedPrefix: string;
       toolCalls: ToolCall[];
+      /**
+       * 工具轮里同轮出现的生图请求。数据标签命中会在本函数入口提前 return，走不到
+       * finish 的 2.1 段；提前摘出来交给 index.ts 单独发一条 directive-only push
+       * （tool_request push 本身不进聊天流，directive 挂它上面没人消费）。
+       */
+      directives: Directive[];
     }
   | {
       kind: 'finish';
@@ -321,6 +331,27 @@ function parseDiaryShort(m: RegExpMatchArray, type: DiaryDirectiveType): Directi
 }
 
 /**
+ * 同一件事只出一个 directive.
+ * 复述型模型经常把整条消息重写一遍 (先说一遍、再"总结"一遍), 同一个 [[ACTION:TRANSFER:520]]
+ * 就会出现两次; 客户端重放没有去重, 放过去就是同一笔钱转两次账、同一篇日记写两遍。
+ * 判据是 type + 参数**完全一致**: 金额不同 / 笔记 id 不同的两条仍是两件事, 照常都留。
+ */
+function dedupeDirectives(directives: Directive[]): Directive[] {
+  const dedupedDirectives: Directive[] = [];
+  const seenDirectives = new Set<string>();
+  for (const d of directives) {
+    const key = JSON.stringify(d);
+    if (seenDirectives.has(key)) {
+      console.warn('[classifier] 同一条消息里重复的副作用, 只保留第一个:', key);
+      continue;
+    }
+    seenDirectives.add(key);
+    dedupedDirectives.push(d);
+  }
+  return dedupedDirectives;
+}
+
+/**
  * 把 LLM 输出分类成一个 decision payload.
  *
  * @param text  ctx.llmOutputText (可能为空串 —— 纯 tool_calls 响应也合法; 不过那种情况我们
@@ -349,9 +380,19 @@ export function classifyLLMOutput(text: string): ClassificationResult {
     // inbox, 客户端 applyAssistantPostProcessing 会在那次扫到并执行 (跟本地 fetch 路径一致).
     let prefix = text;
     for (const spec of DATA_TAGS) prefix = prefix.replace(spec.re, '');
-    prefix = prefix.trim();
+    // 生图标签是例外: 它必须走 directive 通道。独占一行的 [[GEN_IMAGE:]] 会被
+    // sanitizeIntoSegments 的段级判空整段吞掉 (utils/sanitize.ts:613), 留在 prefix 里
+    // 到不了客户端; 而数据标签轮走不到下面 finish 的 2.1 段——不提前摘的话这一轮的
+    // 生图请求就随工具轮一起丢了 (实机反馈: 角色发文要图、图永远不来).
+    const genImageReqs = extractGenImageTags(prefix);
+    prefix = stripGenImageTags(prefix).trim();
+    const directives = dedupeDirectives(genImageReqs.map((req) => ({
+      type: 'gen_image',
+      prompt: req.prompt,
+      resolution: req.resolution,
+    })));
     const sanitizedPrefix = sanitizeForNotification(prefix);
-    return { kind: 'tool-request', prefix, sanitizedPrefix, toolCalls };
+    return { kind: 'tool-request', prefix, sanitizedPrefix, toolCalls, directives };
   }
 
   // 2. 没数据标签 → 扫副作用标签, 凑成 directives.
@@ -389,32 +430,28 @@ export function classifyLLMOutput(text: string): ClassificationResult {
     directives.push({ type: 'change_schedule', time: d.startTime, activity: d.activity });
   }
 
+  // 2.1 AI 生图标签：跟转账 / 日程同理走 directive 通道。留在正文里的话，
+  // sanitizeIntoSegments 会把「剥光 [[...]] 后为空」的独占行整段丢掉，客户端
+  // 永远收不到生图请求。解析与客户端共用 utils/imageGenTags 同一份源码。
+  const genImageReqs = extractGenImageTags(textAfterSchedule);
+  const textAfterGenImage = stripGenImageTags(textAfterSchedule);
+  for (const req of genImageReqs) {
+    directives.push({ type: 'gen_image', prompt: req.prompt, resolution: req.resolution });
+  }
+
   for (const spec of SIDE_EFFECT_TAGS) {
-    const matches = Array.from(textAfterSchedule.matchAll(spec.re));
+    const matches = Array.from(textAfterGenImage.matchAll(spec.re));
     for (const m of matches) {
       const d = spec.toDirective(m);
       if (d) directives.push(d);
     }
   }
 
-  // 2.5 同一件事只出一个 directive.
-  // 复述型模型经常把整条消息重写一遍 (先说一遍、再"总结"一遍), 同一个 [[ACTION:TRANSFER:520]]
-  // 就会出现两次; 客户端重放没有去重, 放过去就是同一笔钱转两次账、同一篇日记写两遍。
-  // 判据是 type + 参数**完全一致**: 金额不同 / 笔记 id 不同的两条仍是两件事, 照常都留。
-  const dedupedDirectives: Directive[] = [];
-  const seenDirectives = new Set<string>();
-  for (const d of directives) {
-    const key = JSON.stringify(d);
-    if (seenDirectives.has(key)) {
-      console.warn('[classifier] 同一条消息里重复的副作用, 只保留第一个:', key);
-      continue;
-    }
-    seenDirectives.add(key);
-    dedupedDirectives.push(d);
-  }
+  // 2.5 同一件事只出一个 directive (判据见 dedupeDirectives).
+  const dedupedDirectives = dedupeDirectives(directives);
 
   // 3. 不管 directives 有没有, 都剥光所有标签 (数据 + 副作用) 出干净文本.
-  let cleanedText = textAfterSchedule;
+  let cleanedText = textAfterGenImage;
   for (const spec of DATA_TAGS) cleanedText = cleanedText.replace(spec.re, '');
   for (const spec of SIDE_EFFECT_TAGS) cleanedText = cleanedText.replace(spec.re, '');
   cleanedText = cleanedText.trim();

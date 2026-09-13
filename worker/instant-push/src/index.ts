@@ -652,7 +652,8 @@ export type PushDecision =
  *
  * Directives (副作用标签): finish 路径只在**最后一条** push 的 metadata 上挂,
  * 防止客户端 N 条 inbox entry 都跑一次 replay (applyAssistantPostProcessing
- * 这边也加了 messageIndex==totalMessages 守卫双保险).
+ * 这边也加了 messageIndex==totalMessages 守卫双保险)。工具轮里同轮出现的生图
+ * request 走单独一条 directive-only push, 同样排在本批最后 (见 tool-request 分支)。
  */
 export function buildPushDecision(
   input: PushDecisionInput,
@@ -694,6 +695,20 @@ export function buildPushDecision(
       }),
     };
     const pushPayloads = [...narrationPushes, toolPush];
+    // 这一轮里角色还写了 [[GEN_IMAGE:]]：directive 不能挂在 tool_request push 上
+    // (那条不进聊天流, 客户端只拿它跑工具), 也不能等 finish (工具轮不保证有下一轮,
+    // 模型下一轮也通常不会重复标签)。追加一条 directive-only content push 排在本批
+    // 最后——message 空、不弹 banner, 收侧 isLastChunk 守卫在这里天然命中, 重放链路
+    // 与 finish 路径的 directive-only push 完全同一条。
+    if (result.directives.length > 0) {
+      pushPayloads.push(buildDirectiveOnlyPush({
+        baseCommon,
+        callerMetadata,
+        iteration,
+        sessionId,
+        directives: result.directives,
+      }));
+    }
     pushPayloads.forEach((p) => warnIfPayloadLarge(p, deps?.onSizeWarn));
     return { decision: 'tool-request', pushPayloads };
   }
