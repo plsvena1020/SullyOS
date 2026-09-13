@@ -100,6 +100,9 @@ assertCorsContract('post-office worker', async () => (await import('./post-offic
 // proactive-push（esbuild worker）
 assertCorsContract('proactive-push worker', async () => (await import('./proactive-push/src/index.ts')) as any, {});
 
+// perspective（esbuild worker，用户自建透视窗后端）
+assertCorsContract('perspective worker', async () => (await import('./perspective/src/index.ts')) as any, {});
+
 // heartbeat（VPS 单文件）
 // @ts-expect-error 纯 JS worker 无类型声明
 assertCorsContract('heartbeat worker', async () => (await import('./heartbeat/src/index.js')) as any, {});

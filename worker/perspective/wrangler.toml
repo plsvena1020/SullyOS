@@ -1,0 +1,18 @@
+name = "sullyos-perspective"
+main = "worker.bundle.js"
+compatibility_date = "2026-01-01"
+keep_vars = true
+
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "sullyos-perspective"
+database_id = "REPLACE_WITH_YOUR_D1_ID"
+
+[triggers]
+crons = ["17 4 * * *"]

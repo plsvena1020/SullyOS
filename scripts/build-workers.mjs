@@ -62,6 +62,12 @@ const WORKERS = [
   // worker.bundle.js；此前 bundle 是 src 的手工合并版，2026-09-11 起改为
   // esbuild 产物，与其它走构建的 worker 同形态（避免 src 改了 bundle 忘了跟）。
   { name: 'proactive-push', skipPublicOut: true },
+  // perspective = 透视窗三端共用后端（用户自建 Worker + D1）。
+  // 纯后端，不被前端静态 fetch，只产 worker.bundle.js 供粘进 CF 面板或 wrangler deploy。
+  {
+    name: 'perspective',
+    skipPublicOut: true,
+  },
 ];
 
 // amsg-instant 0.3.0+ uses only Web Crypto (globalThis.crypto.subtle); the
