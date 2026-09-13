@@ -86,6 +86,7 @@ import {
   buildToolConfig,
   buildToolPack,
 } from './amsgToolPack';
+import { ensurePerspectiveRoleToken } from './perspectiveTokens';
 import { readUserCity } from './cityPlaces';
 // 只取一个常量：客户端算 firstSendTime 时要留的提前量，和包装层「把任务行拉到期」
 // 那一步是同一个数，各写各的就会出现「校验说时间要在未来 / cron 说还没到」的死角。
@@ -1187,22 +1188,35 @@ const buildCharStateEntries = async (
   char: CharacterProfile,
   firePack: AmsgFirePack,
   updatedAt: number,
-) => [
-  {
-    namespace: amsgStateNamespace(char.id),
-    key: AMSG_FIRE_PACK_KEY,
-    // 压在加密之前：上游 putClientState 先加密再发，密文压不动（见 amsgFirePack）。
-    value: await packStateValue(JSON.stringify(firePack)),
-    updatedAt,
-  },
-  // v2 服务端工具循环的角色侧数据（recall 月度总结 / XHS 开关 / 角色名）。
-  {
-    namespace: amsgStateNamespace(char.id),
-    key: AMSG_TOOL_PACK_KEY,
-    value: await packStateValue(JSON.stringify(buildToolPack(char))),
-    updatedAt,
-  },
-];
+  realtimeConfig?: RealtimeConfig,
+) => {
+  // 透视窗角色只读令牌：仅角色开关开且 Worker 已配对时签发；失败即不带，fire 侧按无工具处理。
+  let perspectiveRoleToken: string | undefined;
+  try {
+    if (char.perspectiveEnabled && realtimeConfig?.perspectiveEnabled && realtimeConfig?.perspectiveWorkerUrl) {
+      perspectiveRoleToken =
+        (await ensurePerspectiveRoleToken(realtimeConfig.perspectiveWorkerUrl, char.id)) ?? undefined;
+    }
+  } catch {
+    perspectiveRoleToken = undefined;
+  }
+  return [
+    {
+      namespace: amsgStateNamespace(char.id),
+      key: AMSG_FIRE_PACK_KEY,
+      // 压在加密之前：上游 putClientState 先加密再发，密文压不动（见 amsgFirePack）。
+      value: await packStateValue(JSON.stringify(firePack)),
+      updatedAt,
+    },
+    // v2 服务端工具循环的角色侧数据（recall 月度总结 / XHS 开关 / 角色名 / 透视窗只读令牌）。
+    {
+      namespace: amsgStateNamespace(char.id),
+      key: AMSG_TOOL_PACK_KEY,
+      value: await packStateValue(JSON.stringify(buildToolPack(char, perspectiveRoleToken))),
+      updatedAt,
+    },
+  ];
+};
 
 /** 全局工具凭据条目（v2 服务端工具循环用的搜索 / Notion / 飞书 / 小红书 / 自配 MCP 配置）。 */
 const buildToolConfigEntry = (
@@ -2278,7 +2292,7 @@ export const ActiveMsgClient = {
       if (owesChat) {
         console.warn(`${ACTIVE_MSG_RUNTIME_HEADER} 该角色还欠着一条即时对话回复，这次排程不覆盖云端 fire_pack（等回复销账后由状态同步补传）`);
       }
-      const charEntries = await buildCharStateEntries(char, firePack, now);
+      const charEntries = await buildCharStateEntries(char, firePack, now, realtimeConfig);
       await putClientStateOrThrow(client, [
         ...(owesChat ? charEntries.filter((entry) => entry.key !== AMSG_FIRE_PACK_KEY) : charEntries),
         buildToolConfigEntry(realtimeConfig, now, char.location?.city?.trim()),
@@ -2685,7 +2699,7 @@ export const ActiveMsgClient = {
 
     const stateEntries = {
       entries: [
-        ...(await buildCharStateEntries(char, firePack, now)),
+        ...(await buildCharStateEntries(char, firePack, now, realtimeConfig)),
         buildToolConfigEntry(realtimeConfig, now, char.location?.city?.trim()),
       ],
     };
@@ -2763,7 +2777,7 @@ export const ActiveMsgClient = {
       );
       // 大值由 amsg-server 2.6.0-next.4+ 在 worker 存储层透明分块，整条直传，
       // 内容一个字不裁；老 worker 拒超限条目 → 设置页 capabilities 探测亮牌。
-      entries.push(...(await buildCharStateEntries(item.char, firePack, now)));
+      entries.push(...(await buildCharStateEntries(item.char, firePack, now, item.realtimeConfig)));
     }
     const response = await client.putClientState(entries);
     if (!response?.success) {

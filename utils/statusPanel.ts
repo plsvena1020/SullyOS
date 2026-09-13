@@ -14,7 +14,6 @@
  *   checking 脉冲 —— 探测中
  */
 import type { APIConfig, RealtimeConfig } from '../types';
-import { queryPerspectiveEvents } from './perspective';
 import { getEffectiveBridges } from './bridgeRegistry';
 import { ActiveMsgStore } from './activeMsgStore';
 import { loadMcpServers } from './mcpClient';
@@ -303,22 +302,21 @@ export const probeMcpServers = async (): Promise<StatusEntry> => {
 };
 
 /**
- * 透视窗：Supabase 端点配好 + 拉一次空查询即 ok。失败给具体 HTTP 状态。
+ * 透视窗：Worker 地址配好 + /health 可达即 ok。失败给具体 HTTP 状态。
  * off = 未配置（不是错误）；配了但连不上才是红。
  */
 export const probePerspective = async (realtimeConfig: RealtimeConfig): Promise<StatusEntry> => {
     const entry: StatusEntry = { key: 'perspective', label: '透视窗', status: 'off', detail: '未配置' };
     if (!realtimeConfig.perspectiveEnabled) return entry;
-    if (!realtimeConfig.perspectiveSupabaseUrl?.trim() || !realtimeConfig.perspectiveSupabaseAnonKey?.trim()) {
-        return { ...entry, status: 'warn', detail: '缺 URL 或 anon key' };
+    const base = (realtimeConfig.perspectiveWorkerUrl || '').trim().replace(/\/+$/, '');
+    if (!base) {
+        return { ...entry, status: 'warn', detail: '缺 Worker 地址' };
     }
     try {
-        const r = await queryPerspectiveEvents(realtimeConfig, { days: 1, limit: 1 });
-        if (r.ok) return { key: 'perspective', label: '透视窗', status: 'ok', detail: 'Supabase 已连接' };
-        if (r.reason === 'empty') return { key: 'perspective', label: '透视窗', status: 'ok', detail: '已连接 · 暂无记录' };
-        if (r.reason === 'http' && r.status === 401) return { ...entry, status: 'err', detail: '鉴权失败 (401)' };
-        if (r.reason === 'http') return { ...entry, status: 'err', detail: `HTTP ${r.status}` };
-        return { ...entry, status: 'err', detail: r.message || '不可达' };
+        const r = await fetch(`${base}/health`);
+        if (r.ok) return { key: 'perspective', label: '透视窗', status: 'ok', detail: '自建 Worker 已连接' };
+        if (r.status === 401 || r.status === 403) return { ...entry, status: 'err', detail: '鉴权失败 (401)' };
+        return { ...entry, status: 'err', detail: `HTTP ${r.status}` };
     } catch {
         return { ...entry, status: 'err', detail: '探测失败' };
     }

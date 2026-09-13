@@ -28,6 +28,8 @@ import {
   postSsePayloadToServiceWorker,
 } from './instantPushClient';
 import { pushXhsCaches, pushLastXhsNotesRef } from './activeMsgRuntime';
+import { PERSPECTIVE_QUERY_FIRE_TOOL, PERSPECTIVE_SUMMARY_FIRE_TOOL } from './amsgFirePerspective';
+import { resolvePerspectiveToolConfig } from './perspectiveTokens';
 import { describeToolForUser } from './amsgToolTrace';
 import { ReiClient } from '@rei-standard/amsg-client';
 import type { APIConfig, RealtimeConfig, UserProfile, InstantPushPendingToolCall } from '../types';
@@ -112,6 +114,12 @@ async function runOnePendingToolCall(item: InstantPushPendingToolCall): Promise<
       emitToolStatus(item.charId, 'running', `${text}，请先停留在此页。`, item.sessionId);
     },
   };
+
+  // 透视窗凭据按需解析：本批含 perspective 工具调用时才读令牌，其余工具路径不增加等待。
+  if (item.toolCalls.some((call) => call.function.name === PERSPECTIVE_QUERY_FIRE_TOOL || call.function.name === PERSPECTIVE_SUMMARY_FIRE_TOOL)) {
+    const perspCfg = await resolvePerspectiveToolConfig(char, realtimeConfig);
+    if (perspCfg) ctx.perspective = perspCfg;
+  }
 
   // 1. 跑所有 tool, 串行 — agenticTools 内部多步 (XHS retry / DIARY fallback) 不能并发.
   const toolResults: Array<{ tool_call_id: string; role: 'tool'; content: string }> = [];

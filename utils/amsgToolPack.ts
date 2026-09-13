@@ -31,6 +31,11 @@ export interface AmsgToolPack {
   xhsEnabled: boolean;
   /** 透视窗开关（只在开启时携带，老 pack/老测试零影响）。 */
   perspectiveEnabled?: boolean;
+  /**
+   * 该角色的透视窗只读令牌（pvc_，浏览器侧配对后签发并上云）。
+   * 只在角色开关打开且令牌存在时携带；设备 pvd_ 令牌绝不上云。
+   */
+  perspectiveRoleToken?: string;
   activeMemoryMonths: string[];
   memories: AgenticToolMemory[];
   /**
@@ -130,12 +135,14 @@ export const isWorkerReachableUrl = (url: string): boolean => {
   } catch { return false; }
 };
 
-export const buildToolPack = (char: CharacterProfile): AmsgToolPack => ({
+export const buildToolPack = (char: CharacterProfile, perspectiveRoleToken?: string): AmsgToolPack => ({
   v: 1,
   charName: char.name,
   xhsEnabled: !!char.xhsEnabled,
   // pack 布尔量：worker 端 buildToolCtx 要无条件读这个字段（AgenticToolChar 类型要求）。
   perspectiveEnabled: !!char.perspectiveEnabled,
+  // 角色关闭时不带令牌（与开关同进退，避免关了开关云端还留着可用令牌）。
+  ...(char.perspectiveEnabled && perspectiveRoleToken ? { perspectiveRoleToken } : {}),
   activeMemoryMonths: char.activeMemoryMonths || [],
   // id 等工具用不到的字段不上云；runRecall 只读 date / mood / summary。
   memories: (char.memories || []).map((mem) => ({
@@ -181,12 +188,11 @@ export const buildToolConfig = (
     // 用户那边：有城市才带；开关默认开，只在显式关掉时上云（省字节）。
     ...(userCity?.trim() ? { userCity: userCity.trim() } : {}),
     ...(rc?.userPerceptionEnabled === false ? { userPerceptionEnabled: false } : {}),
-    // 透视窗端点：Supabase 公网可达，worker 端能直连（与本地 XHS 服务器不同）。
-    ...(rc?.perspectiveEnabled && rc?.perspectiveSupabaseUrl && rc?.perspectiveSupabaseAnonKey
+    // 透视窗：用户自建 Worker（角色只读令牌走 per-char tool_pack，不进这份全局配置）。
+    ...(rc?.perspectiveEnabled && rc?.perspectiveWorkerUrl
       ? {
           perspectiveEnabled: true,
-          perspectiveSupabaseUrl: rc.perspectiveSupabaseUrl,
-          perspectiveSupabaseAnonKey: rc.perspectiveSupabaseAnonKey,
+          perspectiveWorkerUrl: rc.perspectiveWorkerUrl,
           ...(rc.perspectiveDays != null ? { perspectiveDays: rc.perspectiveDays } : {}),
           ...(rc.perspectiveMinIntervalSec != null ? { perspectiveMinIntervalSec: rc.perspectiveMinIntervalSec } : {}),
           ...(rc.perspectiveSummaryEnabled != null ? { perspectiveSummaryEnabled: rc.perspectiveSummaryEnabled } : {}),

@@ -35,14 +35,15 @@ import {
 } from './xhsMcpClient';
 import {
     isPerspectiveEnabled,
-    queryPerspectiveEvents,
-    countPerspectiveEvents,
+    queryPerspectiveSessions,
+    countPerspectiveSessions,
     getLatestPerspectiveSummary,
     checkPerspectiveInterval,
     markPerspectiveCalled,
     buildPerspectiveDigest,
     perspectiveWindow,
     PERSPECTIVE_MAX_DAYS,
+    type PerspectiveRuntimeAuth,
 } from './perspective';
 import { getLocalDateKey } from './localDate';
 
@@ -77,10 +78,9 @@ export interface XhsConfig {
  * 那边自动跟上——两份字段表靠人工对齐的话，漏一个就是 worker 侧运行时静默拿 undefined。
  */
 export interface AgenticToolRealtimeConfig {
-    // 透视窗端点（Supabase 公网可达，worker 端可直连；字段缺省 = 该功能未开）。
+    // 透视窗（用户自建 Worker；字段缺省 = 该功能未开）。
     perspectiveEnabled?: boolean;
-    perspectiveSupabaseUrl?: string;
-    perspectiveSupabaseAnonKey?: string;
+    perspectiveWorkerUrl?: string;
     perspectiveDays?: number;
     perspectiveMinIntervalSec?: number;
     perspectiveSummaryEnabled?: boolean;
@@ -152,6 +152,18 @@ export interface AgenticToolCtx {
     char: AgenticToolChar;
     userProfile: UserProfile;
     realtimeConfig?: AgenticToolRealtimeConfig;
+    /**
+     * 透视窗调用凭据（浏览器侧由 resolvePerspectiveToolConfig 逐次解析、
+     * worker 侧由 buildToolCtx 从 per-char tool_pack 组装）。
+     * 缺省 = 未配对 / 未授权，走 not_configured 圆场。
+     */
+    perspective?: {
+        endpoint: { baseUrl: string; token: string };
+        days: number;
+        minIntervalSec: number;
+        summaryEnabled: boolean;
+        summaryThreshold: number;
+    };
     /** XHS 跨 tool 共享缓存; XHS_SEARCH/BROWSE 写, XHS_DETAIL/COMMENT/REPLY 读 */
     xhsCaches?: XhsCaches;
     /** 上次浏览/搜索得到的笔记列表 (XHS_DETAIL retry 时复用) */
@@ -860,12 +872,35 @@ export async function dispatchAgenticTool(
     }
 }
 // ─── 透视窗（perspective）──────────────────────────────────────────────────
-// char 查看用户真实设备操作记录。数据在 Supabase，前端经 realtimeConfig 里的
-// perspective* 字段拿到端点；worker 端经 AmsgToolConfig 透传同名字段。
+// char 查看用户应用使用记录。数据在用户自建 Worker + D1；
+// 凭据经 ctx.perspective 注入（浏览器侧逐次解析角色只读令牌，
+// worker 侧从 per-char tool_pack 组装）。本文件保持环境无关，
+// 不得 import perspectiveTokens / SecureStore / window。
 
 export type PerspectiveQueryResult =
-    | { ok: true; eventsText: string; digestText: string; total: number; windowDays: number }
+    | { ok: true; eventsText: string; digestText: string; total: number; totalDurationMs: number; windowDays: number }
     | { ok: false; reason: 'not_enabled' | 'not_configured' | 'rate_limited' | 'unreachable' | 'empty'; waitSec?: number; message?: string };
+
+/** ctx.perspective 缺省时的统一出口（未配对 / 未授权 / 未配置）。 */
+function perspectiveNotConfigured(ctx: AgenticToolCtx): PerspectiveQueryResult {
+    if (ctx.char && ctx.char.perspectiveEnabled === false) {
+        return { ok: false, reason: 'not_enabled', message: '该角色未开启透视窗' };
+    }
+    return { ok: false, reason: 'not_configured', message: '透视窗未配置（缺少 Worker 端点或角色令牌）' };
+}
+
+function perspectiveAuth(ctx: AgenticToolCtx): PerspectiveRuntimeAuth | null {
+    const token = ctx.perspective?.endpoint.token;
+    if (!token) return null;
+    return { token };
+}
+
+function perspectiveRc(ctx: AgenticToolCtx): { perspectiveWorkerUrl: string; perspectiveEnabled: boolean } {
+    return {
+        perspectiveWorkerUrl: ctx.perspective?.endpoint.baseUrl ?? '',
+        perspectiveEnabled: true,
+    };
+}
 
 /**
  * [[PERSPECTIVE_QUERY: 天数]] 的工具实现。
@@ -876,51 +911,57 @@ export type PerspectiveQueryResult =
  * perspective_summary 工具（或二段 LLM 块）给出，避免把几千行原始记录塞进上下文。
  */
 export async function runPerspectiveQuery(
-    args: { days?: number; type?: string } | undefined,
+    args: { days?: number; appKey?: string } | undefined,
     ctx: AgenticToolCtx,
 ): Promise<PerspectiveQueryResult> {
     const rc = ctx.realtimeConfig;
-    if (!rc?.perspectiveEnabled || !isPerspectiveEnabled(rc)) {
-        return { ok: false, reason: 'not_configured', message: '透视窗未配置（缺少 Supabase 端点）' };
+    const auth = perspectiveAuth(ctx);
+    if (ctx.char && ctx.char.perspectiveEnabled === false) {
+        return { ok: false, reason: 'not_enabled', message: '该角色未开启透视窗' };
     }
-    const minInterval = rc.perspectiveMinIntervalSec ?? 60;
+    if (!rc?.perspectiveEnabled || !auth || !isPerspectiveEnabled(perspectiveRc(ctx) as any, auth)) {
+        return perspectiveNotConfigured(ctx);
+    }
+    const minInterval = ctx.perspective?.minIntervalSec ?? rc.perspectiveMinIntervalSec ?? 60;
     const gate = checkPerspectiveInterval(minInterval);
     if (!gate.allowed) {
         return { ok: false, reason: 'rate_limited', waitSec: gate.waitSec, message: `两次查询至少间隔 ${minInterval} 秒` };
     }
     markPerspectiveCalled();
 
-    const configuredDays = Math.min(Math.max(rc.perspectiveDays ?? 7, 0.001), PERSPECTIVE_MAX_DAYS);
+    const configuredDays = Math.min(Math.max(ctx.perspective?.days ?? rc.perspectiveDays ?? 7, 0.001), PERSPECTIVE_MAX_DAYS);
     const wantedDays = args?.days != null && Number.isFinite(Number(args.days)) ? Number(args.days) : configuredDays;
     const windowDays = Math.min(Math.max(wantedDays, 0.001), configuredDays);
 
     try {
         const win = perspectiveWindow(windowDays);
         // 查询冷却已过、写入 markPerspectiveCalled 后，数据面的耗时不再占冷却额度。
-        const qr = await queryPerspectiveEvents(rc, { days: windowDays, type: args?.type, limit: 200 });
+        const qr = await queryPerspectiveSessions(perspectiveRc(ctx) as any, auth, { days: windowDays, appKey: args?.appKey, limit: 200 });
         if (!qr.ok) {
             if (qr.reason === 'empty') return { ok: false, reason: 'empty', message: qr.message };
             return { ok: false, reason: 'unreachable', message: qr.message };
         }
-        const digest = buildPerspectiveDigest(qr.events, windowDays);
-        // 阈值判定走全窗口计数（Content-Range，不受 limit 200 截断）。
-        const cr = await countPerspectiveEvents(rc, { since: win.since, until: win.until });
+        const digest = buildPerspectiveDigest(qr.sessions, windowDays);
+        // 阈值判定走全窗口计数（不受 limit 200 截断）。
+        const cr = await countPerspectiveSessions(perspectiveRc(ctx) as any, auth, { since: win.since, until: win.until });
         const totalCount = cr.ok ? cr.count : qr.total;
-        const threshold = rc.perspectiveSummaryThreshold ?? 500;
-        if (rc.perspectiveSummaryEnabled && totalCount >= threshold) {
+        const threshold = ctx.perspective?.summaryThreshold ?? rc.perspectiveSummaryThreshold ?? 500;
+        if ((ctx.perspective?.summaryEnabled ?? rc.perspectiveSummaryEnabled) && totalCount >= threshold) {
             return {
                 ok: true,
-                eventsText: `（近 ${windowDays} 天共有 ${totalCount} 条记录，超出阈值。请改用 perspective_summary 查看总结，不要要求原始记录。）`,
+                eventsText: `（近 ${windowDays} 天共有 ${totalCount} 段使用记录，超出阈值。请改用 perspective_summary 查看总结，不要要求原始记录。）`,
                 digestText: digest.text,
                 total: totalCount,
+                totalDurationMs: qr.sessions.reduce((a, s) => a + s.duration_ms, 0),
                 windowDays,
             };
         }
         return {
             ok: true,
-            eventsText: qr.eventsText,
+            eventsText: qr.sessionsText,
             digestText: digest.text,
             total: qr.total,
+            totalDurationMs: qr.sessions.reduce((a, s) => a + s.duration_ms, 0),
             windowDays,
         };
     } catch (e: any) {
@@ -929,7 +970,7 @@ export async function runPerspectiveQuery(
 }
 
 export type PerspectiveSummaryResult =
-    | { ok: true; summaryText: string; fromCache: boolean; eventCount: number; windowDays: number }
+    | { ok: true; summaryText: string; fromCache: boolean; eventCount: number; totalDurationMs: number; windowDays: number }
     | { ok: false; reason: 'not_enabled' | 'not_configured' | 'rate_limited' | 'unreachable' | 'no_data'; waitSec?: number; message?: string };
 
 /**
@@ -943,39 +984,44 @@ export async function runPerspectiveSummary(
     ctx: AgenticToolCtx,
 ): Promise<PerspectiveSummaryResult> {
     const rc = ctx.realtimeConfig;
-    if (!rc?.perspectiveEnabled || !isPerspectiveEnabled(rc)) {
-        return { ok: false, reason: 'not_configured', message: '透视窗未配置（缺少 Supabase 端点）' };
+    const auth = perspectiveAuth(ctx);
+    if (ctx.char && ctx.char.perspectiveEnabled === false) {
+        return { ok: false, reason: 'not_enabled', message: '该角色未开启透视窗' };
     }
-    const minInterval = rc.perspectiveMinIntervalSec ?? 60;
+    if (!rc?.perspectiveEnabled || !auth || !isPerspectiveEnabled(perspectiveRc(ctx) as any, auth)) {
+        return perspectiveNotConfigured(ctx) as PerspectiveSummaryResult;
+    }
+    const minInterval = ctx.perspective?.minIntervalSec ?? rc.perspectiveMinIntervalSec ?? 60;
     const gate = checkPerspectiveInterval(minInterval);
     if (!gate.allowed) {
         return { ok: false, reason: 'rate_limited', waitSec: gate.waitSec, message: `两次查询至少间隔 ${minInterval} 秒` };
     }
-    const configuredDays = Math.min(Math.max(rc.perspectiveDays ?? 7, 0.001), PERSPECTIVE_MAX_DAYS);
+    const configuredDays = Math.min(Math.max(ctx.perspective?.days ?? rc.perspectiveDays ?? 7, 0.001), PERSPECTIVE_MAX_DAYS);
     const wantedDays = args?.days != null && Number.isFinite(Number(args.days)) ? Number(args.days) : configuredDays;
     const windowDays = Math.min(Math.max(wantedDays, 0.001), configuredDays);
 
     try {
         const win = perspectiveWindow(windowDays);
-        const cache = await getLatestPerspectiveSummary(rc, { until: win.since, windowDays });
-        if (cache.ok && cache.summary && cache.summary.event_count > 0) {
+        const cache = await getLatestPerspectiveSummary(perspectiveRc(ctx) as any, auth, { until: win.since });
+        if (cache.ok && cache.summary && cache.summary.session_count > 0) {
             markPerspectiveCalled();
             return {
                 ok: true,
                 summaryText: cache.summary.summary,
                 fromCache: true,
-                eventCount: cache.summary.event_count,
+                eventCount: cache.summary.session_count,
+                totalDurationMs: cache.summary.total_duration_ms,
                 windowDays,
             };
         }
         // 缓存未命中：落库一个空总结占位？——不。落库留给二段 LLM；这里直接给规则聚合兜底。
-        const qr = await queryPerspectiveEvents(rc, { days: windowDays, limit: 500 });
+        const qr = await queryPerspectiveSessions(perspectiveRc(ctx) as any, auth, { days: windowDays, limit: 500 });
         if (!qr.ok) {
             return { ok: false, reason: qr.reason === 'empty' ? 'no_data' : 'unreachable', message: qr.message };
         }
         markPerspectiveCalled();
-        const digest = buildPerspectiveDigest(qr.events, windowDays);
-        return { ok: true, summaryText: digest.text, fromCache: false, eventCount: qr.total, windowDays };
+        const digest = buildPerspectiveDigest(qr.sessions, windowDays);
+        return { ok: true, summaryText: digest.text, fromCache: false, eventCount: qr.total, totalDurationMs: qr.sessions.reduce((a, s) => a + s.duration_ms, 0), windowDays };
     } catch (e: any) {
         return { ok: false, reason: 'unreachable', message: e?.message };
     }

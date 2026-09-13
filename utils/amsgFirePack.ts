@@ -374,7 +374,8 @@ export interface AmsgFirePack {
   targetName: string;
   /**
    * 透视窗开关（与 AmsgToolPack.perspectiveEnabled 同步打包）。worker 端 buildToolCtx
-   * 无条件读它；真正的凭据在 tool_config 的 perspective* 字段（云端 buildToolConfig 写入）。
+   * 无条件读它；角色只读令牌在 per-char tool_pack（云端 buildToolPack 写入），
+   * Worker 端点在 tool_config（云端 buildToolConfig 写入）。设备令牌绝不上云。
    */
   perspectiveEnabled?: boolean;
   /**

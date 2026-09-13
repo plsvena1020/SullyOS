@@ -38,12 +38,25 @@ import { isGlobalStreamEnabled, upgradeChatBodyToStream, assembleUpgradedRespons
 import { rewriteStaleWorkerUrl } from '../utils/proxyWorker';
 import { writeUserCityMirror } from '../utils/cityPlaces';
 import { buildFetchFailureDetail, classifyFetchFailure, describeReachabilityProbe, parseTargetUrl, probeOriginReachability, shouldProbeReachability, summarizeFetchRequestBody } from '../utils/networkFailureDiagnosis';
-import { INSTALLED_APPS } from '../constants';
+import { INSTALLED_APPS, HIDDEN_APP_NAMES } from '../constants';
 import { normalizeApiConfig, normalizeApiPreset } from '../utils/apiConfigNormalize';
 import { getCheckPhoneApi, setCheckPhoneApi } from '../utils/checkPhoneApi';
 import { isPhoneAutoRefreshDue, maybeAutoRefreshPhone, type PhoneAutoApiConfig } from '../utils/phoneAutoRefresh';
 import { PERSPECTIVE_DEFAULTS } from '../types';
-import { setPerspectiveTelemetryRuntime, installPerspectiveLifecycle, emitPerspectiveEvent } from '../utils/perspectiveTelemetry';
+import {
+  installPerspectiveSync,
+  notePerspectiveSession,
+  setPerspectiveTelemetryRuntime,
+  uninstallPerspectiveSync,
+} from '../utils/perspectiveTelemetry';
+import {
+  getPerspectiveDeviceId,
+  getPerspectiveRuntimeAuth,
+  hydratePerspectiveTokens,
+} from '../utils/perspectiveTokens';
+import { runPerspectiveLegacyMigration } from '../utils/perspectiveMigrate';
+import { getPlatformBridge } from '../utils/platform/bridge';
+import { labelOfSullyosApp } from '../utils/platform/appActivity/labels';
 import { markBackupDone } from '../utils/backupReminder';
 import { normalizeCharacterImpression, normalizeCharacterDefaults } from '../utils/impression';
 import { normalizeModelIds } from '../utils/modelList';
@@ -863,13 +876,34 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       return () => clearInterval(timer);
   }, []);
 
-  // 透视窗遥测：注入配置读取器 + 挂生命周期埋点（setActiveCharacterId 在下面才声明，放 effect 里拿）。
+  // 透视窗上报：注入配置/令牌/设备读取器 + 启动平台采集与补传调度。
+  // SullyOS 内部 App 会话由下面的 activeApp effect 经平台桥上报；
+  // Android / Windows 壳的系统应用会话由各自 provider 经同一通道上报。
   useEffect(() => {
       setPerspectiveTelemetryRuntime({
           getConfig: () => realtimeConfigRef.current,
+          getAuth: () => getPerspectiveRuntimeAuth(),
+          getDeviceId: () => getPerspectiveDeviceId(),
       });
-      installPerspectiveLifecycle();
-      return () => setPerspectiveTelemetryRuntime(null);
+      void hydratePerspectiveTokens();
+      installPerspectiveSync();
+      let stopped = false;
+      try {
+          const bridge = getPlatformBridge();
+          void bridge.appActivity.start((session) => {
+              if (stopped) return;
+              const deviceId = getPerspectiveDeviceId();
+              void notePerspectiveSession(deviceId ? { ...session, deviceId } : session);
+          });
+      } catch { /* 采集启动失败不影响主流程 */ }
+      return () => {
+          stopped = true;
+          try {
+              void getPlatformBridge().appActivity.stop();
+          } catch { /* 忽略 */ }
+          uninstallPerspectiveSync();
+          setPerspectiveTelemetryRuntime(null);
+      };
   }, []);
 
   // 启动后台扫描一次，把还停留在老 number[] 形态的向量记录升级到 Uint8Array
@@ -930,9 +964,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
 
   const [characters, setCharacters] = useState<CharacterProfile[]>([]);
   const [activeCharacterId, setActiveCharacterIdRaw] = useState<string>('');
-  // 透视窗埋点：切角色是一道明确的行为信号（char 能看到 user 在跟谁聊）。
   const setActiveCharacterId = (id: string) => {
-      if (id && id !== activeCharacterId) emitPerspectiveEvent('char.switch', id);
       setActiveCharacterIdRaw(id);
   };
 
@@ -943,6 +975,18 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       try { localStorage.setItem('os_last_active_char_id', activeCharacterId); } catch {}
     }
   }, [activeCharacterId]);
+
+  // 透视窗：SullyOS 内部 App 会话（打开/切换/关闭）经平台桥记录。
+  // activeApp 是唯一事实来源：openApp / closeApp / 直接 setActiveApp 全走这里，
+  // 不在各调用点重复埋点。Launcher 本体也记一段（回到桌面 = 一段会话的结束与开始）。
+  useEffect(() => {
+    try {
+      getPlatformBridge().appActivity.noteSullyosForeground(
+        activeApp,
+        labelOfSullyosApp(activeApp, INSTALLED_APPS, HIDDEN_APP_NAMES),
+      );
+    } catch { /* 采集失败不影响主流程 */ }
+  }, [activeApp]);
   
   const [groups, setGroups] = useState<GroupProfile[]>([]);
   const [characterGroups, setCharacterGroups] = useState<CharacterGroup[]>([]);
@@ -3002,6 +3046,16 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   };
   const updateApiConfig = (updates: Partial<APIConfig>) => { const newConfig = normalizeApiConfig({ ...apiConfig, ...updates }); setApiConfig(newConfig); localStorage.setItem('os_api_config', JSON.stringify(newConfig)); };
   const updateRealtimeConfig = (updates: Partial<RealtimeConfig>) => { const newConfig = { ...realtimeConfig, ...updates }; setRealtimeConfig(newConfig); localStorage.setItem('os_realtime_config', JSON.stringify(newConfig)); };
+
+  // 透视窗旧 Supabase 一次性迁移：删旧端点 device_id='default' 行 + 清本地旧字段。
+  // fire-and-forget，不阻塞启动；已执行过则直接跳过。
+  useEffect(() => {
+    void runPerspectiveLegacyMigration(realtimeConfig, () => {
+      updateRealtimeConfig({ perspectiveSupabaseUrl: '', perspectiveSupabaseAnonKey: '' } as Partial<RealtimeConfig>);
+    });
+    // 只在启动时跑一次（realtimeConfig 后续变化不再触发）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Cloud Backup functions
   const updateCloudBackupConfig = (updates: Partial<CloudBackupConfig>) => {
@@ -5328,7 +5382,6 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
 
   const resetSystem = async () => { try { await DB.deleteDB(); localStorage.clear(); window.location.reload(); } catch (e) { console.error(e); addToast('重置失败，请手动清除浏览器数据', 'error'); } };
   const openApp = (appId: AppID, context?: Record<string, unknown>) => {
-    emitPerspectiveEvent('app.open', appId);
     // App 启动上下文（如查手机入口带 placedBy=charId / owner=charId）：
     // 冻进 sessionStorage，目标 App 挂载时自取（mount-only effect），读完即清。
     if (context && Object.keys(context).length > 0) {

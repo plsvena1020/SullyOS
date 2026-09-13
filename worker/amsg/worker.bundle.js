@@ -8006,14 +8006,14 @@ var buildPerspectiveFireTools = () => [
     function: {
       name: PERSPECTIVE_QUERY_FIRE_TOOL,
       description: [
-        "\u67E5\u770B\u7528\u6237\uFF08\u673A\u4E3B\uFF09\u6700\u8FD1\u5728 SullyOS \u91CC\u7684\u64CD\u4F5C\u8BB0\u5F55\uFF1A\u6253\u5F00\u8FC7\u54EA\u4E9B App\u3001\u53D1\u6D88\u606F\u3001\u5207\u6362\u89D2\u8272\u7B49\u884C\u4E3A\u6D41\u6C34\u3002",
-        "\u53EA\u6709\u884C\u4E3A\u4E0E\u65F6\u95F4\uFF0C\u6CA1\u6709\u804A\u5929\u5185\u5BB9\u3002\u4EC5\u5728\u5F53\u4E0B\u5BF9\u8BDD\u6709\u771F\u5B9E\u9700\u8981\u65F6\u624D\u8C03\u7528\uFF08\u673A\u4E3B\u95EE\u8D77\u3001\u804A\u5230\u4F5C\u606F\u7B49\uFF09\uFF1B\u4E0D\u8981\u5B9A\u671F\u4F8B\u884C\u67E5\u770B\uFF0C\u4E24\u6B21\u8C03\u7528\u4E4B\u95F4\u4E5F\u6709\u51B7\u5374\u95F4\u9694\u3002"
+        "\u67E5\u770B\u7528\u6237\uFF08\u673A\u4E3B\uFF09\u6700\u8FD1\u4F7F\u7528\u8FC7\u54EA\u4E9B\u5E94\u7528\u3001\u6BCF\u4E2A\u5E94\u7528\u5927\u6982\u505C\u7559\u591A\u4E45\uFF1A\u5E94\u7528\u8EAB\u4EFD\u4E0E\u4F1A\u8BDD\u65F6\u957F\u3002",
+        "\u6CA1\u6709\u804A\u5929\u5185\u5BB9\uFF0C\u6CA1\u6709\u7A97\u53E3\u6807\u9898\u4E0E\u7F51\u5740\u3002\u4EC5\u5728\u5F53\u4E0B\u5BF9\u8BDD\u6709\u771F\u5B9E\u9700\u8981\u65F6\u624D\u8C03\u7528\uFF08\u673A\u4E3B\u95EE\u8D77\u3001\u804A\u5230\u4F5C\u606F\u7B49\uFF09\uFF1B\u4E0D\u8981\u5B9A\u671F\u4F8B\u884C\u67E5\u770B\uFF0C\u4E24\u6B21\u8C03\u7528\u4E4B\u95F4\u4E5F\u6709\u51B7\u5374\u95F4\u9694\u3002"
       ].join("\n"),
       parameters: {
         type: "object",
         properties: {
           days: { type: "number", description: "\u60F3\u770B\u6700\u8FD1\u51E0\u5929\uFF08\u9ED8\u8BA4\u4E0E\u4E0A\u9650\u6309\u673A\u4E3B\u914D\u7F6E\u8D70\uFF09\u3002" },
-          type: { type: "string", description: "\u53EF\u9009\uFF0C\u53EA\u770B\u67D0\u4E00\u7C7B\u884C\u4E3A\uFF08\u5982 app.open / chat.send\uFF0C\u65E0\u70B9\u53F7\u4E3A\u524D\u7F00\u5339\u914D\uFF09\u3002" }
+          appKey: { type: "string", description: "\u53EF\u9009\uFF0C\u53EA\u770B\u67D0\u4E2A\u5E94\u7528\uFF08\u5305\u540D/\u8FDB\u7A0B\u540D/\u5E94\u7528\u540D\u5B50\u4E32\u5339\u914D\uFF09\u3002" }
         }
       }
     }
@@ -8023,8 +8023,8 @@ var buildPerspectiveFireTools = () => [
     function: {
       name: PERSPECTIVE_SUMMARY_FIRE_TOOL,
       description: [
-        "\u770B\u7528\u6237\u8FD1\u51E0\u5929\u7684\u884C\u4E3A\u603B\u7ED3\uFF1A\u4F7F\u7528\u9891\u7387\u3001\u6DF1\u591C\u6D3B\u8DC3\u3001\u5355\u65E5\u5CF0\u503C\u7B49\u7EDF\u8BA1\u8981\u70B9\u3002",
-        "\u6570\u636E\u91CF\u5927\u65F6\u6BD4 perspective_query \u66F4\u5408\u9002\uFF08\u8FD4\u56DE\u7684\u662F\u63D0\u70BC\u8FC7\u7684\u603B\u7ED3\u800C\u4E0D\u662F\u539F\u59CB\u6D41\u6C34\uFF09\u3002\u540C\u6837\u53EA\u5728\u6709\u771F\u5B9E\u7406\u7531\u65F6\u8C03\u7528\uFF0C\u4E0D\u8981\u4F8B\u884C\u67E5\u770B\u3002"
+        "\u770B\u7528\u6237\u8FD1\u51E0\u5929\u7684\u5E94\u7528\u4F7F\u7528\u603B\u7ED3\uFF1A\u5E38\u7528\u5E94\u7528\u3001\u6DF1\u591C\u6D3B\u8DC3\u3001\u5355\u65E5\u5CF0\u503C\u7B49\u7EDF\u8BA1\u8981\u70B9\u3002",
+        "\u6570\u636E\u91CF\u5927\u65F6\u6BD4 perspective_query \u66F4\u5408\u9002\uFF08\u8FD4\u56DE\u7684\u662F\u63D0\u70BC\u8FC7\u7684\u603B\u7ED3\u800C\u4E0D\u662F\u539F\u59CB\u4F1A\u8BDD\uFF09\u3002\u540C\u6837\u53EA\u5728\u6709\u771F\u5B9E\u7406\u7531\u65F6\u8C03\u7528\uFF0C\u4E0D\u8981\u4F8B\u884C\u67E5\u770B\u3002"
       ].join("\n"),
       parameters: {
         type: "object",
@@ -10849,149 +10849,155 @@ var normalizeXhsLiteDetail = (payload, commentLimit = 15) => {
 };
 
 // utils/perspective.ts
-function resolvePerspectiveEndpoint(rc) {
-  const url = (rc?.perspectiveSupabaseUrl || "").trim().replace(/\/+$/, "");
-  const key = (rc?.perspectiveSupabaseAnonKey || "").trim();
-  if (!url || !key) return null;
-  return { url, anonKey: key };
+function resolvePerspectiveEndpoint(rc, auth) {
+  const workerUrl = (rc?.["perspectiveWorkerUrl"] || "").trim().replace(/\/+$/, "");
+  const token = (auth?.token || "").trim();
+  if (!workerUrl || !token) return null;
+  if (!/^https?:\/\//.test(workerUrl)) return null;
+  return { workerUrl, authToken: token, deviceId: auth?.deviceId };
 }
-function isPerspectiveEnabled(rc) {
-  return !!(rc?.perspectiveEnabled && resolvePerspectiveEndpoint(rc));
+function isPerspectiveEnabled(rc, auth) {
+  return !!(rc?.perspectiveEnabled && resolvePerspectiveEndpoint(rc, auth));
 }
-function restHeaders(ep, prefer) {
-  const h = {
-    apikey: ep.anonKey,
-    Authorization: `Bearer ${ep.anonKey}`,
+function authHeaders(ep) {
+  return {
+    Authorization: `Bearer ${ep.authToken}`,
     "Content-Type": "application/json"
   };
-  if (prefer) h.Prefer = prefer;
-  return h;
-}
-var TYPE_RE = /^[a-z0-9]+(\.[a-z0-9]+)*$/;
-function normalizePerspectiveType(raw) {
-  const t = (raw || "").trim().toLowerCase().replace(/[^a-z0-9.]+/g, ".").replace(/\.{2,}/g, ".").replace(/^\.+|\.+$/g, "");
-  return TYPE_RE.test(t) ? t : null;
 }
 var PERSPECTIVE_MAX_DAYS = 30;
 var PERSPECTIVE_MAX_LIMIT = 500;
 var PERSPECTIVE_DEFAULT_LIMIT = 100;
-async function queryPerspectiveEvents(rc, args) {
-  const ep = resolvePerspectiveEndpoint(rc);
+async function queryPerspectiveSessions(rc, auth, args) {
+  const ep = resolvePerspectiveEndpoint(rc, auth);
   if (!ep) return { ok: false, reason: "not_configured" };
   const days = Math.min(Math.max(args.days ?? 7, 1e-3), PERSPECTIVE_MAX_DAYS);
-  const until = args.until || (/* @__PURE__ */ new Date()).toISOString();
-  const since = args.since || new Date(new Date(until).getTime() - days * 864e5).toISOString();
+  const until = args.until ?? Date.now();
+  const since = args.since ?? until - days * 864e5;
   const limit = Math.min(Math.max(args.limit ?? PERSPECTIVE_DEFAULT_LIMIT, 1), PERSPECTIVE_MAX_LIMIT);
-  const order = args.order === "asc" ? "asc" : "desc";
   const params = new URLSearchParams();
-  params.set("select", "id,device_id,type,value,ts");
-  params.append("ts", `gte.${since}`);
-  params.append("ts", `lte.${until}`);
-  if (args.type && args.type.trim()) {
-    const t = normalizePerspectiveType(args.type);
-    if (!t) return { ok: false, reason: "http", status: 400, message: `invalid type: ${args.type}` };
-    if (t.includes(".")) params.set("type", `eq.${t}`);
-    else params.set("type", `like.${t}.*`);
-  }
-  if (args.deviceId && args.deviceId.trim()) params.set("device_id", `eq.${args.deviceId.trim()}`);
-  params.set("order", `ts.${order}`);
+  params.set("since", String(Math.floor(since)));
+  params.set("until", String(Math.floor(until)));
   params.set("limit", String(limit));
   try {
-    const res = await fetch(`${ep.url}/rest/v1/perspective_events?${params.toString()}`, {
+    const res = await fetch(`${ep.workerUrl}/sessions?${params.toString()}`, {
       method: "GET",
-      headers: restHeaders(ep)
+      headers: authHeaders(ep)
     });
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, reason: "unauthorized", status: res.status };
+    }
     if (!res.ok) {
       let message = "";
       try {
-        const j = await res.json();
-        message = j?.message || "";
+        message = (await res.json())?.error || "";
       } catch {
       }
       return { ok: false, reason: "http", status: res.status, message };
     }
-    const rows = await res.json();
-    if (!Array.isArray(rows) || rows.length === 0) {
-      return { ok: false, reason: "empty", message: "\u7A97\u53E3\u5185\u6CA1\u6709\u4E8B\u4EF6\u8BB0\u5F55" };
+    const body = await res.json();
+    let rows = Array.isArray(body.sessions) ? body.sessions : [];
+    const keyFilter = (args.appKey || "").trim().toLowerCase();
+    if (keyFilter) {
+      rows = rows.filter(
+        (r) => r.app_key.toLowerCase().includes(keyFilter) || r.app_label.toLowerCase().includes(keyFilter)
+      );
     }
-    const counts = /* @__PURE__ */ new Map();
-    for (const r of rows) counts.set(r.type, (counts.get(r.type) || 0) + 1);
-    const typeCounts = Array.from(counts.entries()).map(([type, count]) => ({ type, count })).sort((a, b) => b.count - a.count);
+    if (rows.length === 0) {
+      return { ok: false, reason: "empty", message: "\u7A97\u53E3\u5185\u6CA1\u6709\u5E94\u7528\u4F7F\u7528\u8BB0\u5F55" };
+    }
+    const byApp = /* @__PURE__ */ new Map();
+    for (const r of rows) {
+      const cur = byApp.get(r.app_key) || {
+        appKey: r.app_key,
+        appLabel: r.app_label,
+        count: 0,
+        totalDurationMs: 0
+      };
+      cur.count += 1;
+      cur.totalDurationMs += r.duration_ms;
+      byApp.set(r.app_key, cur);
+    }
+    const appCounts = Array.from(byApp.values()).sort((a, b) => b.totalDurationMs - a.totalDurationMs);
     return {
       ok: true,
       since,
       until,
       total: rows.length,
-      events: rows,
-      eventsText: buildEventsText(rows, typeCounts),
-      typeCounts
+      sessions: rows,
+      sessionsText: buildSessionsText(rows, appCounts),
+      appCounts
     };
   } catch (e) {
     return { ok: false, reason: "network", message: e?.message };
   }
 }
-function fmtLocal(iso) {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
+function fmtLocal(ts) {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return String(ts);
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getMonth() + 1}\u6708${d.getDate()}\u65E5 ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
-function buildEventsText(rows, typeCounts) {
-  const lines = rows.map((r) => {
-    const v = r.value ? ` \u2192 ${r.value}` : "";
-    return `[${fmtLocal(r.ts)}] ${r.type}${v}`;
-  });
-  const summary = typeCounts.map((t) => `${t.type}\xD7${t.count}`).join("\u3001");
+function fmtMinutes(ms) {
+  const m = Math.max(1, Math.round(ms / 6e4));
+  if (m < 60) return `\u7EA6${m}\u5206\u949F`;
+  const h = Math.floor(m / 60);
+  const rest = m % 60;
+  return rest ? `\u7EA6${h}\u5C0F\u65F6${rest}\u5206\u949F` : `\u7EA6${h}\u5C0F\u65F6`;
+}
+function buildSessionsText(rows, appCounts) {
+  const lines = rows.map((r) => `[${fmtLocal(r.started_at)}] ${r.app_label}\uFF08${fmtMinutes(r.duration_ms)}\uFF09`);
+  const summary = appCounts.map((t) => `${t.appLabel}${fmtMinutes(t.totalDurationMs)}`).join("\u3001");
   return `${lines.join("\n")}
 
-\uFF08\u5171 ${rows.length} \u6761\uFF1A${summary}\uFF09`;
+\uFF08\u5171 ${rows.length} \u6BB5\uFF1A${summary}\uFF09`;
 }
-async function countPerspectiveEvents(rc, args) {
-  const ep = resolvePerspectiveEndpoint(rc);
+async function countPerspectiveSessions(rc, auth, args) {
+  const ep = resolvePerspectiveEndpoint(rc, auth);
   if (!ep) return { ok: false, reason: "not_configured" };
   const params = new URLSearchParams();
-  params.set("select", "id");
-  params.append("ts", `gte.${args.since}`);
-  params.append("ts", `lte.${args.until}`);
-  if (args.deviceId && args.deviceId.trim()) params.set("device_id", `eq.${args.deviceId.trim()}`);
+  params.set("since", String(Math.floor(args.since)));
+  params.set("until", String(Math.floor(args.until)));
+  params.set("limit", "1");
   try {
-    const res = await fetch(`${ep.url}/rest/v1/perspective_events?${params.toString()}`, {
+    const res = await fetch(`${ep.workerUrl}/sessions?${params.toString()}`, {
       method: "GET",
-      headers: { ...restHeaders(ep), Prefer: "count=exact", Range: "0-0" }
+      headers: authHeaders(ep)
     });
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, reason: "unauthorized", status: res.status };
+    }
     if (!res.ok) return { ok: false, reason: "http", status: res.status };
-    const range = res.headers.get("content-range") || "";
-    const m = range.match(/\/(\d+)$/);
-    return { ok: true, count: m ? parseInt(m[1], 10) : 0 };
+    const body = await res.json();
+    return { ok: true, count: Array.isArray(body.sessions) ? body.sessions.length : 0 };
   } catch (e) {
     return { ok: false, reason: "network", message: e?.message };
   }
 }
-async function getLatestPerspectiveSummary(rc, args) {
-  const ep = resolvePerspectiveEndpoint(rc);
+async function getLatestPerspectiveSummary(rc, auth, args) {
+  const ep = resolvePerspectiveEndpoint(rc, auth);
   if (!ep) return { ok: false, reason: "not_configured" };
   const params = new URLSearchParams();
-  params.set("select", "id,device_id,window_start,window_end,event_count,summary,model,created_at");
-  params.set("order", "window_end.desc");
-  params.set("limit", "1");
-  if (args.deviceId && args.deviceId.trim()) params.set("device_id", `eq.${args.deviceId.trim()}`);
-  if (args.until) params.set("window_end", `gte.${args.until}`);
+  if (args.until != null) params.set("until", String(Math.floor(args.until)));
   try {
-    const res = await fetch(`${ep.url}/rest/v1/perspective_summaries?${params.toString()}`, {
+    const res = await fetch(`${ep.workerUrl}/summaries?${params.toString()}`, {
       method: "GET",
-      headers: restHeaders(ep)
+      headers: authHeaders(ep)
     });
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, reason: "unauthorized", status: res.status };
+    }
     if (!res.ok) return { ok: false, reason: "http", status: res.status };
-    const rows = await res.json();
-    return { ok: true, summary: Array.isArray(rows) && rows.length ? rows[0] : null };
+    const body = await res.json();
+    return { ok: true, summary: body.summary ?? null };
   } catch (e) {
     return { ok: false, reason: "network", message: e?.message };
   }
 }
 function perspectiveWindow(days, until) {
-  const untilIso = until || (/* @__PURE__ */ new Date()).toISOString();
-  const since = new Date(new Date(untilIso).getTime() - Math.max(days, 1e-3) * 864e5).toISOString();
-  return { since, until: untilIso };
+  const untilMs = until ?? Date.now();
+  const since = untilMs - Math.max(days, 1e-3) * 864e5;
+  return { since, until: untilMs };
 }
 var lastPerspectiveQueryAt = 0;
 function checkPerspectiveInterval(minIntervalSec) {
@@ -11006,12 +11012,17 @@ function markPerspectiveCalled() {
 function buildPerspectiveDigest(rows, windowDays) {
   if (!rows.length) return { text: "", specialties: [] };
   const specialties = [];
-  const counts = /* @__PURE__ */ new Map();
+  const byApp = /* @__PURE__ */ new Map();
   const hourBuckets = new Array(24).fill(0);
   const dayBuckets = /* @__PURE__ */ new Map();
+  let totalMs = 0;
   for (const r of rows) {
-    counts.set(r.type, (counts.get(r.type) || 0) + 1);
-    const d = new Date(r.ts);
+    totalMs += r.duration_ms;
+    const cur = byApp.get(r.app_key) || { label: r.app_label, ms: 0, count: 0 };
+    cur.ms += r.duration_ms;
+    cur.count += 1;
+    byApp.set(r.app_key, cur);
+    const d = new Date(r.started_at);
     if (!Number.isNaN(d.getTime())) {
       hourBuckets[d.getHours()]++;
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -11021,11 +11032,11 @@ function buildPerspectiveDigest(rows, windowDays) {
   const total = rows.length;
   const nightCount = hourBuckets.slice(0, 6).reduce((a, b) => a + b, 0);
   if (nightCount >= 3 && nightCount / total > 0.15) {
-    specialties.push(`\u6DF1\u591C\u65F6\u6BB5\uFF080-5\u70B9\uFF09\u6709 ${nightCount} \u6761\u64CD\u4F5C\uFF0C\u5360 ${Math.round(nightCount / total * 100)}%`);
+    specialties.push(`\u6DF1\u591C\u65F6\u6BB5\uFF080-5\u70B9\uFF09\u6709 ${nightCount} \u6BB5\u4F7F\u7528\uFF0C\u5360 ${Math.round(nightCount / total * 100)}%`);
   }
-  const topType = Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0];
-  if (topType && topType[1] >= 3) {
-    specialties.push(`\u6700\u9AD8\u9891\u884C\u4E3A\u662F\u300C${topType[0]}\u300D\uFF08${topType[1]} \u6B21\uFF0C\u5360 ${Math.round(topType[1] / total * 100)}%\uFF09`);
+  const topApp = Array.from(byApp.values()).sort((a, b) => b.ms - a.ms)[0];
+  if (topApp && topApp.count >= 2) {
+    specialties.push(`\u4F7F\u7528\u6700\u4E45\u7684\u662F\u300C${topApp.label}\u300D\uFF08${topApp.count} \u6BB5\uFF0C${fmtMinutes(topApp.ms)}\uFF09`);
   }
   let peakDay = "";
   let peakCount = 0;
@@ -11035,11 +11046,11 @@ function buildPerspectiveDigest(rows, windowDays) {
       peakDay = k;
     }
   }
-  if (peakDay && peakCount >= 5) specialties.push(`\u5355\u65E5\u5CF0\u503C\u5728 ${peakDay}\uFF08${peakCount} \u6761\uFF09`);
+  if (peakDay && peakCount >= 5) specialties.push(`\u5355\u65E5\u5CF0\u503C\u5728 ${peakDay}\uFF08${peakCount} \u6BB5\uFF09`);
   const histMax = Math.max(...hourBuckets, 1);
   const hist = hourBuckets.map((c, h) => c ? `${String(h).padStart(2, "0")}\u65F6${"#".repeat(Math.max(1, Math.round(c / histMax * 8)))}(${c})` : "").filter(Boolean).join(" ");
   const lines = [
-    `\u7EDF\u8BA1\u7A97\u53E3\uFF1A\u8FD1 ${windowDays} \u5929\uFF0C\u5171 ${total} \u6761\u4E8B\u4EF6`,
+    `\u7EDF\u8BA1\u7A97\u53E3\uFF1A\u8FD1 ${windowDays} \u5929\uFF0C\u5171 ${total} \u6BB5\u4F7F\u7528\uFF0C\u603B\u8BA1${fmtMinutes(totalMs)}`,
     ...specialties.map((s) => `\xB7 ${s}`),
     hist ? `\u5206\u65F6\u5206\u5E03\uFF1A${hist}` : ""
   ].filter(Boolean);
@@ -11567,45 +11578,68 @@ async function dispatchAgenticTool(toolName, args, ctx) {
       throw new Error(`Unknown agentic tool: ${toolName}`);
   }
 }
+function perspectiveNotConfigured(ctx) {
+  if (ctx.char && ctx.char.perspectiveEnabled === false) {
+    return { ok: false, reason: "not_enabled", message: "\u8BE5\u89D2\u8272\u672A\u5F00\u542F\u900F\u89C6\u7A97" };
+  }
+  return { ok: false, reason: "not_configured", message: "\u900F\u89C6\u7A97\u672A\u914D\u7F6E\uFF08\u7F3A\u5C11 Worker \u7AEF\u70B9\u6216\u89D2\u8272\u4EE4\u724C\uFF09" };
+}
+function perspectiveAuth(ctx) {
+  const token = ctx.perspective?.endpoint.token;
+  if (!token) return null;
+  return { token };
+}
+function perspectiveRc(ctx) {
+  return {
+    perspectiveWorkerUrl: ctx.perspective?.endpoint.baseUrl ?? "",
+    perspectiveEnabled: true
+  };
+}
 async function runPerspectiveQuery(args, ctx) {
   const rc = ctx.realtimeConfig;
-  if (!rc?.perspectiveEnabled || !isPerspectiveEnabled(rc)) {
-    return { ok: false, reason: "not_configured", message: "\u900F\u89C6\u7A97\u672A\u914D\u7F6E\uFF08\u7F3A\u5C11 Supabase \u7AEF\u70B9\uFF09" };
+  const auth = perspectiveAuth(ctx);
+  if (ctx.char && ctx.char.perspectiveEnabled === false) {
+    return { ok: false, reason: "not_enabled", message: "\u8BE5\u89D2\u8272\u672A\u5F00\u542F\u900F\u89C6\u7A97" };
   }
-  const minInterval = rc.perspectiveMinIntervalSec ?? 60;
+  if (!rc?.perspectiveEnabled || !auth || !isPerspectiveEnabled(perspectiveRc(ctx), auth)) {
+    return perspectiveNotConfigured(ctx);
+  }
+  const minInterval = ctx.perspective?.minIntervalSec ?? rc.perspectiveMinIntervalSec ?? 60;
   const gate = checkPerspectiveInterval(minInterval);
   if (!gate.allowed) {
     return { ok: false, reason: "rate_limited", waitSec: gate.waitSec, message: `\u4E24\u6B21\u67E5\u8BE2\u81F3\u5C11\u95F4\u9694 ${minInterval} \u79D2` };
   }
   markPerspectiveCalled();
-  const configuredDays = Math.min(Math.max(rc.perspectiveDays ?? 7, 1e-3), PERSPECTIVE_MAX_DAYS);
+  const configuredDays = Math.min(Math.max(ctx.perspective?.days ?? rc.perspectiveDays ?? 7, 1e-3), PERSPECTIVE_MAX_DAYS);
   const wantedDays = args?.days != null && Number.isFinite(Number(args.days)) ? Number(args.days) : configuredDays;
   const windowDays = Math.min(Math.max(wantedDays, 1e-3), configuredDays);
   try {
     const win = perspectiveWindow(windowDays);
-    const qr = await queryPerspectiveEvents(rc, { days: windowDays, type: args?.type, limit: 200 });
+    const qr = await queryPerspectiveSessions(perspectiveRc(ctx), auth, { days: windowDays, appKey: args?.appKey, limit: 200 });
     if (!qr.ok) {
       if (qr.reason === "empty") return { ok: false, reason: "empty", message: qr.message };
       return { ok: false, reason: "unreachable", message: qr.message };
     }
-    const digest = buildPerspectiveDigest(qr.events, windowDays);
-    const cr = await countPerspectiveEvents(rc, { since: win.since, until: win.until });
+    const digest = buildPerspectiveDigest(qr.sessions, windowDays);
+    const cr = await countPerspectiveSessions(perspectiveRc(ctx), auth, { since: win.since, until: win.until });
     const totalCount = cr.ok ? cr.count : qr.total;
-    const threshold = rc.perspectiveSummaryThreshold ?? 500;
-    if (rc.perspectiveSummaryEnabled && totalCount >= threshold) {
+    const threshold = ctx.perspective?.summaryThreshold ?? rc.perspectiveSummaryThreshold ?? 500;
+    if ((ctx.perspective?.summaryEnabled ?? rc.perspectiveSummaryEnabled) && totalCount >= threshold) {
       return {
         ok: true,
-        eventsText: `\uFF08\u8FD1 ${windowDays} \u5929\u5171\u6709 ${totalCount} \u6761\u8BB0\u5F55\uFF0C\u8D85\u51FA\u9608\u503C\u3002\u8BF7\u6539\u7528 perspective_summary \u67E5\u770B\u603B\u7ED3\uFF0C\u4E0D\u8981\u8981\u6C42\u539F\u59CB\u8BB0\u5F55\u3002\uFF09`,
+        eventsText: `\uFF08\u8FD1 ${windowDays} \u5929\u5171\u6709 ${totalCount} \u6BB5\u4F7F\u7528\u8BB0\u5F55\uFF0C\u8D85\u51FA\u9608\u503C\u3002\u8BF7\u6539\u7528 perspective_summary \u67E5\u770B\u603B\u7ED3\uFF0C\u4E0D\u8981\u8981\u6C42\u539F\u59CB\u8BB0\u5F55\u3002\uFF09`,
         digestText: digest.text,
         total: totalCount,
+        totalDurationMs: qr.sessions.reduce((a, s) => a + s.duration_ms, 0),
         windowDays
       };
     }
     return {
       ok: true,
-      eventsText: qr.eventsText,
+      eventsText: qr.sessionsText,
       digestText: digest.text,
       total: qr.total,
+      totalDurationMs: qr.sessions.reduce((a, s) => a + s.duration_ms, 0),
       windowDays
     };
   } catch (e) {
@@ -11614,37 +11648,42 @@ async function runPerspectiveQuery(args, ctx) {
 }
 async function runPerspectiveSummary(args, ctx) {
   const rc = ctx.realtimeConfig;
-  if (!rc?.perspectiveEnabled || !isPerspectiveEnabled(rc)) {
-    return { ok: false, reason: "not_configured", message: "\u900F\u89C6\u7A97\u672A\u914D\u7F6E\uFF08\u7F3A\u5C11 Supabase \u7AEF\u70B9\uFF09" };
+  const auth = perspectiveAuth(ctx);
+  if (ctx.char && ctx.char.perspectiveEnabled === false) {
+    return { ok: false, reason: "not_enabled", message: "\u8BE5\u89D2\u8272\u672A\u5F00\u542F\u900F\u89C6\u7A97" };
   }
-  const minInterval = rc.perspectiveMinIntervalSec ?? 60;
+  if (!rc?.perspectiveEnabled || !auth || !isPerspectiveEnabled(perspectiveRc(ctx), auth)) {
+    return perspectiveNotConfigured(ctx);
+  }
+  const minInterval = ctx.perspective?.minIntervalSec ?? rc.perspectiveMinIntervalSec ?? 60;
   const gate = checkPerspectiveInterval(minInterval);
   if (!gate.allowed) {
     return { ok: false, reason: "rate_limited", waitSec: gate.waitSec, message: `\u4E24\u6B21\u67E5\u8BE2\u81F3\u5C11\u95F4\u9694 ${minInterval} \u79D2` };
   }
-  const configuredDays = Math.min(Math.max(rc.perspectiveDays ?? 7, 1e-3), PERSPECTIVE_MAX_DAYS);
+  const configuredDays = Math.min(Math.max(ctx.perspective?.days ?? rc.perspectiveDays ?? 7, 1e-3), PERSPECTIVE_MAX_DAYS);
   const wantedDays = args?.days != null && Number.isFinite(Number(args.days)) ? Number(args.days) : configuredDays;
   const windowDays = Math.min(Math.max(wantedDays, 1e-3), configuredDays);
   try {
     const win = perspectiveWindow(windowDays);
-    const cache = await getLatestPerspectiveSummary(rc, { until: win.since, windowDays });
-    if (cache.ok && cache.summary && cache.summary.event_count > 0) {
+    const cache = await getLatestPerspectiveSummary(perspectiveRc(ctx), auth, { until: win.since });
+    if (cache.ok && cache.summary && cache.summary.session_count > 0) {
       markPerspectiveCalled();
       return {
         ok: true,
         summaryText: cache.summary.summary,
         fromCache: true,
-        eventCount: cache.summary.event_count,
+        eventCount: cache.summary.session_count,
+        totalDurationMs: cache.summary.total_duration_ms,
         windowDays
       };
     }
-    const qr = await queryPerspectiveEvents(rc, { days: windowDays, limit: 500 });
+    const qr = await queryPerspectiveSessions(perspectiveRc(ctx), auth, { days: windowDays, limit: 500 });
     if (!qr.ok) {
       return { ok: false, reason: qr.reason === "empty" ? "no_data" : "unreachable", message: qr.message };
     }
     markPerspectiveCalled();
-    const digest = buildPerspectiveDigest(qr.events, windowDays);
-    return { ok: true, summaryText: digest.text, fromCache: false, eventCount: qr.total, windowDays };
+    const digest = buildPerspectiveDigest(qr.sessions, windowDays);
+    return { ok: true, summaryText: digest.text, fromCache: false, eventCount: qr.total, totalDurationMs: qr.sessions.reduce((a, s) => a + s.duration_ms, 0), windowDays };
   } catch (e) {
     return { ok: false, reason: "unreachable", message: e?.message };
   }
@@ -13446,6 +13485,15 @@ var buildToolCtx = (pack, config) => {
       // AmsgToolConfig 的凭据字段就是 AgenticToolRealtimeConfig，结构化直接满足——
       // 不用逐字段抄一遍再强转，那样 buildToolConfig 加字段这里不会报错。
       realtimeConfig: config,
+      // 透视窗凭据：只读令牌走 per-char tool_pack（设备令牌绝不上云）。
+      // 缺令牌 / 缺 Worker 地址 = 未配对，按 undefined 交给工具层走 not_configured。
+      perspective: pack.perspectiveEnabled === true && typeof pack.perspectiveRoleToken === "string" && pack.perspectiveRoleToken && typeof config.perspectiveWorkerUrl === "string" && config.perspectiveWorkerUrl ? {
+        endpoint: { baseUrl: config.perspectiveWorkerUrl, token: pack.perspectiveRoleToken },
+        days: config.perspectiveDays ?? 7,
+        minIntervalSec: config.perspectiveMinIntervalSec ?? 60,
+        summaryEnabled: !!config.perspectiveSummaryEnabled,
+        summaryThreshold: config.perspectiveSummaryThreshold ?? 500
+      } : void 0,
       // XHS 多步流程（search → detail 的 xsecToken 缓存）在同一次 fire 内共享。
       xhsCaches: {
         xsecTokenCache: /* @__PURE__ */ new Map(),
@@ -13460,6 +13508,9 @@ var buildToolCtx = (pack, config) => {
     xhsCookie: config.xhsMcpConfig?.cookie ?? ""
   };
 };
+function shouldInjectPerspectiveFireTools(mcpNative, toolPack, toolConfig) {
+  return !!(mcpNative && toolPack?.perspectiveEnabled === true && toolConfig?.perspectiveEnabled === true && typeof toolConfig?.perspectiveWorkerUrl === "string" && toolConfig.perspectiveWorkerUrl && typeof toolPack?.perspectiveRoleToken === "string" && toolPack.perspectiveRoleToken);
+}
 var fireStateError = (reason, detail) => {
   console.error("[amsg:fire-state-missing]", { reason, ...detail });
   const error = new Error(`AMSG2_FIRE_STATE_MISSING: ${reason}`);
@@ -14229,10 +14280,10 @@ var amsgHooks = {
     const scheduleBlock = canSelfSchedule ? buildFireScheduleBlock(mcpNative ? "native" : "text", { nowMs: ctx.now.getTime(), tz }) : "";
     const fireTools = [
       ...mcpResolve && mcpNative ? buildMcpFireTools(mcpResolve) : [],
-      // 透视窗：角色开了 + 凭据上了云才注入（缺一不可，否则角色会「看了一眼」并不存在的记录）。
-      // 开关以 tool_config 的 perspectiveEnabled 为准（云端 buildToolConfig 只在端点齐全时写 true），
-      // pack 上的布尔量仅用于 buildToolCtx 的 char 透传。
-      ...mcpNative && toolConfig?.perspectiveEnabled === true && typeof toolConfig?.perspectiveSupabaseUrl === "string" && toolConfig.perspectiveSupabaseUrl && typeof toolConfig?.perspectiveSupabaseAnonKey === "string" && toolConfig.perspectiveSupabaseAnonKey ? buildPerspectiveFireTools() : [],
+      // 透视窗：角色开了 + Worker 端点上了云 + 该角色只读令牌在包里才注入。
+      // 开关以 tool_pack 的 perspectiveEnabled 为准（逐角色），缺令牌时连声明都不给，
+      // 否则角色会「看了一眼」并不存在的记录。条件见 shouldInjectPerspectiveFireTools。
+      ...shouldInjectPerspectiveFireTools(mcpNative, toolPack, toolConfig) ? buildPerspectiveFireTools() : [],
       ...canSelfSchedule && mcpNative ? [buildFireScheduleTool({ nowMs: ctx.now.getTime(), tz })] : [],
       ...canManageTasks ? [buildFireCancelTool(), buildFireRenewTool({ nowMs: ctx.now.getTime(), tz })] : []
     ];
@@ -15099,5 +15150,6 @@ export {
   runFireRenewTool,
   runFireScheduleTool,
   runMcpFireTool,
+  shouldInjectPerspectiveFireTools,
   splitSchemaMissing
 };

@@ -12,7 +12,7 @@ import worker, {
   buildWorkerConfig, configureInstantErrorPush, inspectWorkerEnv,
   offloadOversizedPush, resolveVapidEmail, resetPushTestCooldown, runFireCancelTool, runFireRenewTool,
   inspectPushDelivery,
-  runFireScheduleTool, runMcpFireTool, splitSchemaMissing, classifySchemaProbeError,
+  runFireScheduleTool, runMcpFireTool, shouldInjectPerspectiveFireTools, splitSchemaMissing, classifySchemaProbeError,
 } from './index';
 import * as workerEntry from './index';
 import { DEFAULT_TOOL_ITERATIONS, MCP_MAX_TOOL_ITERATIONS } from './agentic';
@@ -4601,5 +4601,27 @@ describe('POST /push-subscription/remove 多设备端点移除', () => {
     const malformed = await call({ endpointHash: 'not-a-hash' }, { 'X-Client-Token': 'shared-secret' }, statements);
     expect(malformed.status).toBe(400);
     expect(statements.some((sql) => sql.includes('DELETE'))).toBe(false);
+  });
+});
+
+describe('perspective fire tool gate', () => {
+  const pack = (over: Record<string, unknown> = {}) => ({
+    perspectiveEnabled: true,
+    perspectiveRoleToken: 'pvc_test',
+    ...over,
+  });
+  const config = (over: Record<string, unknown> = {}) => ({
+    perspectiveEnabled: true,
+    perspectiveWorkerUrl: 'https://pv.test',
+    ...over,
+  });
+  it('injects only when pack switch + url + role token all present', () => {
+    expect(shouldInjectPerspectiveFireTools(true, pack() as any, config() as any)).toBe(true);
+  });
+  it('drops when role switch off / url missing / token missing / text mode', () => {
+    expect(shouldInjectPerspectiveFireTools(true, pack({ perspectiveEnabled: false }) as any, config() as any)).toBe(false);
+    expect(shouldInjectPerspectiveFireTools(true, pack() as any, config({ perspectiveWorkerUrl: '' }) as any)).toBe(false);
+    expect(shouldInjectPerspectiveFireTools(true, pack({ perspectiveRoleToken: undefined }) as any, config() as any)).toBe(false);
+    expect(shouldInjectPerspectiveFireTools(false, pack() as any, config() as any)).toBe(false);
   });
 });

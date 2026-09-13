@@ -84,6 +84,23 @@ describe('buildToolPack / parseToolPack', () => {
     expect('charCity' in bare).toBe(false);
     expect('charProvince' in bare).toBe(false);
   });
+
+  it('透视窗角色令牌：默认不带；开启且传入时才带；关闭时即使传入也不带', () => {
+    const off = buildToolPack({ id: 'c6', name: '九' } as unknown as CharacterProfile);
+    expect('perspectiveRoleToken' in off).toBe(false);
+
+    const on = buildToolPack(
+      { id: 'c7', name: '十', perspectiveEnabled: true } as unknown as CharacterProfile,
+      'pvc_test',
+    );
+    expect(on.perspectiveRoleToken).toBe('pvc_test');
+
+    const switchedOff = buildToolPack(
+      { id: 'c8', name: '十一', perspectiveEnabled: false } as unknown as CharacterProfile,
+      'pvc_test',
+    );
+    expect('perspectiveRoleToken' in switchedOff).toBe(false);
+  });
 });
 
 describe('buildToolConfig / parseToolConfig', () => {
@@ -193,5 +210,21 @@ describe('buildToolConfig / parseToolConfig', () => {
     const config = buildToolConfig(undefined);
     expect('mcpServers' in config).toBe(false);
     expect('mcpUseNativeTools' in config).toBe(false);
+  });
+
+  it('透视窗走自建 Worker：配 URL 才写 perspectiveWorkerUrl，不写 Supabase 字段', () => {
+    const rc = {
+      perspectiveEnabled: true,
+      perspectiveWorkerUrl: 'https://pv.example.workers.dev',
+    } as unknown as RealtimeConfig;
+    const config = buildToolConfig(rc);
+    expect(config.perspectiveEnabled).toBe(true);
+    expect(config.perspectiveWorkerUrl).toBe('https://pv.example.workers.dev');
+    expect('perspectiveSupabaseUrl' in config).toBe(false);
+    expect('perspectiveSupabaseAnonKey' in config).toBe(false);
+
+    const bare = buildToolConfig({ perspectiveEnabled: true } as unknown as RealtimeConfig);
+    expect('perspectiveWorkerUrl' in bare).toBe(false);
+    expect('perspectiveEnabled' in bare).toBe(false);
   });
 });

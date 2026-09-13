@@ -793,14 +793,16 @@ export interface RealtimeConfig {
   // 缓存配置
   cacheMinutes: number;
 
-  // 透视窗配置（char 查看用户真实设备操作记录；数据存 Supabase）
+  // 透视窗配置（char 查看用户应用使用记录；数据存用户自建 Worker + D1）
   perspectiveEnabled: boolean;
-  perspectiveSupabaseUrl: string;      // https://xxx.supabase.co（无尾斜杠）
-  perspectiveSupabaseAnonKey: string;  // anon key（公开角色，受 RLS 保护）
+  perspectiveWorkerUrl: string;      // https://xxx.workers.dev（无尾斜杠）
+  perspectiveSupabaseUrl: string;      // 旧 Supabase 端点（待迁移清理，见 perspectiveMigrate）
+  perspectiveSupabaseAnonKey: string;  // 旧 anon key（待迁移清理）
   perspectiveDays: number;             // char 最多可查近 N 天（1-30）
   perspectiveMinIntervalSec: number;   // 两次查询最小间隔秒数（0 = 不限）
   perspectiveSummaryEnabled: boolean;  // 副 API 总结开关（开 = 数据量大时给总结而非原始记录）
   perspectiveSummaryThreshold: number; // 触发总结的条数阈值
+  perspectiveRetentionDays: number;    // 服务端保留天数（默认 30，由 Worker cron 执行）
 
   // 蓝牙配置（缺省视为开启；只有真有已连接设备时才实际注入 prompt）
   bluetoothEnabled?: boolean;
@@ -809,12 +811,14 @@ export interface RealtimeConfig {
 // 透视窗默认值（realtimeConfig 是旧数据合并口径，这里统一出口）
 export const PERSPECTIVE_DEFAULTS = {
   perspectiveEnabled: false,
+  perspectiveWorkerUrl: '',
   perspectiveSupabaseUrl: '',
   perspectiveSupabaseAnonKey: '',
   perspectiveDays: 7,
   perspectiveMinIntervalSec: 60,
   perspectiveSummaryEnabled: false,
   perspectiveSummaryThreshold: 500,
+  perspectiveRetentionDays: 30,
 } as const;
 
 // 热点单条（与 realtimeContext 的 NewsItem 结构一致，单独放在 types 里避免循环依赖）

@@ -19,7 +19,6 @@ import { getElevenLabsVoiceActingGuide } from './elevenLabsTts';
 import { resolveCharTimeZone, nowInTimeZone } from './timezone';
 import { buildLifeRecordInjection } from './lifeRecords';
 import { isWorkerReachableUrl } from './amsgToolPack';
-import { isPerspectiveEnabled } from './perspective';
 import { isAmsg2EnabledForChar } from './amsg2Tasks';
 import { getCharNameById } from './charNameRegistry';
 import { getLocalDateKey } from './localDate';
@@ -791,8 +790,14 @@ ${uname} 的化身正挂在《彼方》的【${roomName}】${act ? `，状态写
             && (!forFirePack || isWorkerReachableUrl(xhsServerUrl))
         );
         const xhsEnabled = !!(char.xhsEnabled && mcpXhsAvailable);
-        // 透视窗：全局端点配好 + 角色开关打开。Supabase 是公网，fire_pack 场景天然可达。
-        const perspectiveEnabled = !!(char.perspectiveEnabled && isPerspectiveEnabled(realtimeConfig));
+        // 透视窗：全局开关 + Worker 地址 + 角色开关打开。提示词只教用法，
+        // 真正的凭据在工具调用时逐次解析（前台 resolvePerspectiveToolConfig /
+        // worker per-char tool_pack），缺凭据走 not_configured 圆场。
+        const perspectiveEnabled = !!(
+            char.perspectiveEnabled &&
+            realtimeConfig?.perspectiveEnabled &&
+            realtimeConfig?.perspectiveWorkerUrl?.trim()
+        );
 
         // 透视窗使用指南已迁入提示词目录（chat.perspectiveTool，预设 App 可编辑/启停）。
         // 读取链：DB 行（用户编辑/启停）优先 → 内置默认兜底；用户停用（null）→ 整段不注入。

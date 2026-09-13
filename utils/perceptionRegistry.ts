@@ -76,11 +76,11 @@ export const PERCEPTION_CAPABILITIES: PerceptionCapability[] = [
     {
         id: 'perspective',
         label: '透视窗',
-        description: '角色查看你的真实操作轨迹（Supabase 事件流）',
+        description: '角色查看你的应用使用记录（自建 Worker）',
         tint: 'bg-cyan-50 text-cyan-600',
         tintIdle: 'bg-slate-50 text-slate-400',
         enabled: (rc) => !!rc.perspectiveEnabled,
-        configured: (rc) => !!(rc.perspectiveSupabaseUrl?.trim() && rc.perspectiveSupabaseAnonKey?.trim()),
+        configured: (rc) => !!rc.perspectiveWorkerUrl?.trim(),
         iconKey: 'binoculars',
     },
     {

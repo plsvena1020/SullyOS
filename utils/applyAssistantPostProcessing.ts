@@ -51,7 +51,8 @@ import {
     runPerspectiveQuery,
     runPerspectiveSummary,
 } from './agenticTools';
-import { savePerspectiveSummary, perspectiveWindow } from './perspective';
+import { savePerspectiveSummary, perspectiveWindow, type PerspectiveRuntimeAuth } from './perspective';
+import { resolvePerspectiveToolConfig } from './perspectiveTokens';
 import { getLocalDateKey } from './localDate';
 import { normalizeAssistantActionFormatting } from './assistantActionFormat';
 import { markAmsgStateDirty } from './amsgStateSync';
@@ -1622,8 +1623,8 @@ export async function applyAssistantPostProcessing(
     aiContent = aiContent.replace(/\[\[XHS_BROWSE(?::.*?)?\]\]/g, '').trim();
 
     // 5.11 透视窗（[[PERSPECTIVE_QUERY / _SUMMARY]]）
-    // char 查用户设备操作记录。二段 LLM 走主聊天 API（与小红书同一模式），
-    // 数据量大时副 API 总结写回 perspective_summaries（下次走缓存，同批语义）。
+    // char 查用户应用使用记录。二段 LLM 走主聊天 API（与小红书同一模式），
+    // 数据量大时副 API 总结写回 summaries（下次走缓存，同批语义）。
     {
         const perspQueryMatch = aiContent.match(/\[\[PERSPECTIVE_QUERY(?::\s*([\d.]+))?\]\]/);
         const perspSummaryMatch = aiContent.match(/\[\[PERSPECTIVE_SUMMARY(?::\s*([\d.]+))?\]\]/);
@@ -1634,6 +1635,9 @@ export async function applyAssistantPostProcessing(
             console.log(`🔍 [透视窗] char想${isSummary ? '看总结' : '查记录'}: days=${daysArg ?? '默认'}`);
 
             try {
+                // 透视窗凭据按需解析：未命中标记时不读令牌；缺凭据走 not_configured 圆场。
+                const perspCfg = await resolvePerspectiveToolConfig(char, realtimeConfig);
+                if (perspCfg) agenticCtx.perspective = perspCfg;
                 const pr = isSummary
                     ? await runPerspectiveSummary({ days: daysArg }, agenticCtx)
                     : await runPerspectiveQuery({ days: daysArg }, agenticCtx);
@@ -1653,7 +1657,7 @@ export async function applyAssistantPostProcessing(
                     const perspMessages = [
                         ...fullMessages,
                         { role: 'assistant', content: cleaned },
-                        { role: 'user', content: `[系统: 你查看了${userProfile.name}最近${pr.windowDays}天的设备操作记录（仅操作轨迹，无聊天内容），结果如下]
+                        { role: 'user', content: `[系统: 你查看了${userProfile.name}最近${pr.windowDays}天的应用使用记录（仅用了哪些应用、大概用了多久，无聊天内容），结果如下]
 
 ${material}
 
@@ -1675,10 +1679,14 @@ ${material}
                     if (isSummary && 'fromCache' in pr && !pr.fromCache && pr.summaryText) {
                         try {
                             const win = perspectiveWindow(pr.windowDays);
-                            await savePerspectiveSummary(realtimeConfig, {
+                            const perspAuth: PerspectiveRuntimeAuth | null = perspCfg
+                                ? { token: perspCfg.endpoint.token }
+                                : null;
+                            await savePerspectiveSummary(realtimeConfig, perspAuth, {
                                 windowStart: win.since,
                                 windowEnd: win.until,
-                                eventCount: pr.eventCount,
+                                sessionCount: pr.eventCount,
+                                totalDurationMs: pr.totalDurationMs,
                                 summary: aiContent.slice(0, 2000),
                                 model: effectiveApi.model,
                             });

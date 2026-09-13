@@ -493,6 +493,22 @@ const buildToolCtx = (
       // AmsgToolConfig 的凭据字段就是 AgenticToolRealtimeConfig，结构化直接满足——
       // 不用逐字段抄一遍再强转，那样 buildToolConfig 加字段这里不会报错。
       realtimeConfig: config,
+      // 透视窗凭据：只读令牌走 per-char tool_pack（设备令牌绝不上云）。
+      // 缺令牌 / 缺 Worker 地址 = 未配对，按 undefined 交给工具层走 not_configured。
+      perspective:
+        pack.perspectiveEnabled === true &&
+        typeof pack.perspectiveRoleToken === 'string' &&
+        pack.perspectiveRoleToken &&
+        typeof config.perspectiveWorkerUrl === 'string' &&
+        config.perspectiveWorkerUrl
+          ? {
+              endpoint: { baseUrl: config.perspectiveWorkerUrl, token: pack.perspectiveRoleToken },
+              days: config.perspectiveDays ?? 7,
+              minIntervalSec: config.perspectiveMinIntervalSec ?? 60,
+              summaryEnabled: !!config.perspectiveSummaryEnabled,
+              summaryThreshold: config.perspectiveSummaryThreshold ?? 500,
+            }
+          : undefined,
       // XHS 多步流程（search → detail 的 xsecToken 缓存）在同一次 fire 内共享。
       xhsCaches: {
         xsecTokenCache: new Map(),
@@ -509,8 +525,28 @@ const buildToolCtx = (
 };
 
 /**
+ * 透视窗 fire 工具注入门控（三者齐备才注入）：
+ * 逐角色开关开 + 全局 Worker 端点已上云 + 该角色只读令牌在包里。
+ * 导出供单测；调用点与本函数同条件，改一处必须改另一处。
+ */
+export function shouldInjectPerspectiveFireTools(
+  mcpNative: boolean,
+  toolPack: Pick<AmsgToolPack, 'perspectiveEnabled' | 'perspectiveRoleToken'> | undefined | null,
+  toolConfig: Pick<AmsgToolConfig, 'perspectiveEnabled' | 'perspectiveWorkerUrl'> | undefined | null,
+): boolean {
+  return !!(
+    mcpNative &&
+    toolPack?.perspectiveEnabled === true &&
+    toolConfig?.perspectiveEnabled === true &&
+    typeof toolConfig?.perspectiveWorkerUrl === 'string' &&
+    toolConfig.perspectiveWorkerUrl &&
+    typeof toolPack?.perspectiveRoleToken === 'string' &&
+    toolPack.perspectiveRoleToken
+  );
+}
+
+/**
  * fire 前置状态不完整时抛这个 —— 不降级。
- *
  * 排程链已经保证「先传云端状态、成功了再建任务」（见 activeMsgClient 的
  * putClientStateOrThrow），所以到点读不到 fire_pack 只有三种可能：云端状态被删了、
  * 数据坏了、任务是开发期的旧格式。都是异常，不是能悄悄降级的正常分支。
@@ -1958,12 +1994,10 @@ export const amsgHooks = {
 
     const fireTools = [
       ...(mcpResolve && mcpNative ? buildMcpFireTools(mcpResolve) : []),
-      // 透视窗：角色开了 + 凭据上了云才注入（缺一不可，否则角色会「看了一眼」并不存在的记录）。
-      // 开关以 tool_config 的 perspectiveEnabled 为准（云端 buildToolConfig 只在端点齐全时写 true），
-      // pack 上的布尔量仅用于 buildToolCtx 的 char 透传。
-      ...(mcpNative && toolConfig?.perspectiveEnabled === true
-        && typeof toolConfig?.perspectiveSupabaseUrl === 'string' && toolConfig.perspectiveSupabaseUrl
-        && typeof toolConfig?.perspectiveSupabaseAnonKey === 'string' && toolConfig.perspectiveSupabaseAnonKey
+      // 透视窗：角色开了 + Worker 端点上了云 + 该角色只读令牌在包里才注入。
+      // 开关以 tool_pack 的 perspectiveEnabled 为准（逐角色），缺令牌时连声明都不给，
+      // 否则角色会「看了一眼」并不存在的记录。条件见 shouldInjectPerspectiveFireTools。
+      ...(shouldInjectPerspectiveFireTools(mcpNative, toolPack, toolConfig)
         ? buildPerspectiveFireTools()
         : []),
       ...(canSelfSchedule && mcpNative
