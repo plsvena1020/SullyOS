@@ -15,6 +15,26 @@ const K_DEVICE_TOKEN = 'perspective.deviceToken';
 const K_DEVICE_NAME = 'perspective.deviceName';
 const roleKey = (charId: string) => `perspective.roleToken.${charId}`;
 
+/** 暂停采集（本地开关，暂停期间不产生新会话；暂停前队列仍可上传）。 */
+const K_PAUSED_LS = 'sully_pv_paused_v1';
+
+export function isPerspectivePaused(): boolean {
+  try {
+    return localStorage.getItem(K_PAUSED_LS) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function setPerspectivePaused(paused: boolean): void {
+  try {
+    if (paused) localStorage.setItem(K_PAUSED_LS, '1');
+    else localStorage.removeItem(K_PAUSED_LS);
+  } catch {
+    /* 忽略 */
+  }
+}
+
 const mem: { deviceId: string | null; deviceToken: string | null; roles: Map<string, string>; hydrated: boolean } = {
   deviceId: null,
   deviceToken: null,

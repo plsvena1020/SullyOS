@@ -12,8 +12,7 @@
  */
 
 import { uploadPerspectiveSessions, type PerspectiveRuntimeAuth } from './perspective';
-import { ackSessions, drainSessions, enqueueSession, outboxCount } from './platform/appActivity/queue';
-import type { AppActivitySession } from './platform/appActivity/types';
+import { ackSessions, drainSessions, enqueueSession, outboxCount } from './platform/appActivity/queue';import type { AppActivitySession } from './platform/appActivity/types';
 import type { RealtimeConfig } from '../types';
 
 export interface PerspectiveTelemetryRuntime {
@@ -40,10 +39,16 @@ function uploadable(): { workerUrl: string; token: string; deviceId: string } | 
   return { workerUrl, token: auth.token, deviceId };
 }
 
-/** 会话入库（OS 层 / 平台 provider 的唯一入口）。未配对或暂停时直接丢弃。 */
+/** 会话入库（OS 层 / 平台 provider 的唯一入口）。未配置、未配对或暂停时直接丢弃。 */
 export async function notePerspectiveSession(session: AppActivitySession): Promise<void> {
   const cfg = runtime?.getConfig();
   if (!cfg?.perspectiveEnabled) return;
+  try {
+    const { isPerspectivePaused } = await import('./perspectiveTokens');
+    if (isPerspectivePaused()) return;
+  } catch {
+    /* 读不到暂停态按未暂停处理 */
+  }
   try {
     await enqueueSession(session);
   } catch {
@@ -93,6 +98,16 @@ async function safeCount(): Promise<number> {
     return await outboxCount();
   } catch {
     return 0;
+  }
+}
+
+/** 清空本地待上传队列（设置页「清空记录」时连带调用）。 */
+export async function clearPerspectiveQueue(): Promise<void> {
+  try {
+    const all = await drainSessions(5000);
+    await ackSessions(all.map((s) => s.id));
+  } catch {
+    /* 忽略 */
   }
 }
 

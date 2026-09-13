@@ -1707,6 +1707,41 @@ const Chat: React.FC = () => {
         triggerAI(messages, undefined, () => setInstantSendingActive(false));
     };
 
+    // 透视窗逐角色授权：打开时签发角色只读令牌（未配对则拒绝打开），
+    // 关闭时吊销令牌并同步主动消息云端状态。
+    const handleTogglePerspective = async () => {
+        if (!char) return;
+        if (!char.perspectiveEnabled) {
+            const { enableCharacterPerspective } = await import('../utils/perspectiveTokens');
+            const base = (realtimeConfig?.perspectiveWorkerUrl || '').trim().replace(/\/+$/, '');
+            if (!realtimeConfig?.perspectiveEnabled || !base) {
+                addToast('请先在设置 → 实时感知 → 透视窗中开启并填写 Worker 地址', 'info');
+                return;
+            }
+            const r = await enableCharacterPerspective(base, char.id);
+            if (!r.ok) {
+                addToast(
+                    r.reason === 'not_paired' ? '请先在设置 → 实时感知 → 透视窗完成设备配对' : '透视窗授权失败，请稍后重试',
+                    'error',
+                );
+                return;
+            }
+            updateCharacter(char.id, { perspectiveEnabled: true });
+            addToast(`已授权 ${char.name} 使用透视窗`, 'success');
+        } else {
+            try {
+                const { disableCharacterPerspective } = await import('../utils/perspectiveTokens');
+                const base = (realtimeConfig?.perspectiveWorkerUrl || '').trim().replace(/\/+$/, '');
+                if (base) await disableCharacterPerspective(base, char.id);
+            } catch { /* 吊销尽力而为，本地开关照关 */ }
+            updateCharacter(char.id, { perspectiveEnabled: false });
+        }
+        try {
+            const { syncAmsgToolConfigAndPrompts } = await import('../utils/amsgStateSync');
+            syncAmsgToolConfigAndPrompts(realtimeConfig, { characters, userProfile, groups });
+        } catch { /* 同步失败不影响本地开关 */ }
+    };
+
     const handleReroll = async () => {
         if (isTyping || messages.length === 0) return;
 
@@ -3891,7 +3926,7 @@ const Chat: React.FC = () => {
                 xhsEnabled={!!char.xhsEnabled}
                 onToggleXhs={() => updateCharacter(char.id, { xhsEnabled: !char.xhsEnabled })}
                 perspectiveEnabled={!!char.perspectiveEnabled}
-                onTogglePerspective={() => updateCharacter(char.id, { perspectiveEnabled: !char.perspectiveEnabled })}
+                onTogglePerspective={() => void handleTogglePerspective()}
                 htmlModeEnabled={!!(char as any).htmlModeEnabled}
                 onToggleHtmlMode={() => updateCharacter(char.id, { htmlModeEnabled: !((char as any).htmlModeEnabled) } as any)}
                 htmlModeCustomPrompt={settingsHtmlModeCustomPrompt}

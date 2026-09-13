@@ -29,6 +29,7 @@
 | **Instant Push SSE↔Push 契约** | [`docs/instant-push-dual-channel.md`](./docs/instant-push-dual-channel.md) | **改 instant push 路径或排查「报错但收到消息」类 bug 前必读**。SSE ≠ 送达判定通道、catch 不能直接判 send-failed |
 | **Instant Push 通道** | [`docs/instant-push-branch-notes.md`](./docs/instant-push-branch-notes.md)、[`worker/instant-push/README.md`](./worker/instant-push/README.md) | LLM-driven Web Push、worker 端 agentic loop / reasoning / 副作用 directive |
 | **蓝牙外设** | [`docs/bluetooth.md`](./docs/bluetooth.md) | 改设置页蓝牙板块、BLE 引擎、角色蓝牙感知/工具前必读 |
+| **透视窗 · 应用活动感知** | [`docs/perspective-window.md`](./docs/perspective-window.md)（用户与配置指南）、[`docs/superpowers/specs/2026-09-13-perspective-multidevice-design.md`](./docs/superpowers/specs/2026-09-13-perspective-multidevice-design.md)（设计） | 改透视窗采集/上传/查询、设置面板、设备配对、逐角色授权、`worker/perspective` 或 `utils/platform` 前必读；三端壳（Capacitor/Tauri）接入同一事件协议 |
 | **二改 / 加 App / 数据流 / 后端 Worker** | [`README.md`](./README.md) 「给想二改的人」一节 | 新增 App、build badge、sfworker 代理替换、开源协议 |
 
 > README 的「给想二改的人」区域信息量很大（数据流、ContextBuilder、Instant Push Phase 2、sfworker 清单），动后端 / 加功能前先扫一遍。

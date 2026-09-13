@@ -583,18 +583,25 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                          </p>
                      </div>
 
-                     {/* 透视窗 Toggle */}
-                     <div className="pt-2 border-t border-slate-100">
-                         <div className="flex justify-between items-center cursor-pointer" onClick={onTogglePerspective}>
-                             <label className="text-xs font-bold text-slate-400 uppercase pointer-events-none">透视窗</label>
-                             <div className={`w-10 h-6 rounded-full p-1 transition-colors flex items-center ${perspectiveEnabled ? 'bg-cyan-500' : 'bg-slate-200'}`}>
-                                 <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${perspectiveEnabled ? 'translate-x-4' : ''}`}></div>
-                             </div>
-                         </div>
-                         <p className="text-[10px] text-slate-400 mt-2 leading-relaxed">
-                             开启后，角色可以在聊天中通过透视窗了解你在 SullyOS 里的真实操作轨迹（打开过哪些 App、发消息等，不含聊天内容）。需要在全局设置中配置 Supabase。
-                         </p>
-                     </div>
+                      {/* 透视窗 Toggle */}
+                      <div className="pt-2 border-t border-slate-100">
+                          <button
+                              type="button"
+                              role="switch"
+                              aria-checked={!!perspectiveEnabled}
+                              aria-label="透视窗"
+                              onClick={onTogglePerspective}
+                              className="w-full flex justify-between items-center min-h-[44px] rounded-xl focus-visible:outline-2 focus-visible:outline-cyan-500"
+                          >
+                              <span className="text-xs font-bold text-slate-400 uppercase">透视窗</span>
+                              <span aria-hidden="true" className={`w-10 h-6 rounded-full p-1 transition-colors flex items-center ${perspectiveEnabled ? 'bg-cyan-500' : 'bg-slate-200'}`}>
+                                  <span className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${perspectiveEnabled ? 'translate-x-4' : ''}`}></span>
+                              </span>
+                          </button>
+                          <p className="text-[10px] text-slate-400 mt-2 leading-relaxed">
+                              开启后，被授权的角色可以查看你的应用使用记录（用了哪些应用、大概用了多久，不含聊天内容）。需要在设置 → 实时感知 → 透视窗中配置自建 Worker 并配对本机。
+                          </p>
+                      </div>
 
                      {/* HTML 模块模式 */}
                      <div className="pt-2 border-t border-slate-100">
