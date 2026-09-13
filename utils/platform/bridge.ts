@@ -1,6 +1,10 @@
 import { getCapabilities } from './detect';
 import { createWebSecureStore } from './secureStore';
+import { createAndroidSecureStore } from './secureStore/android';
+import { createWindowsSecureStore } from './secureStore/windows';
 import { createWebAppActivity } from './appActivity/web';
+import { createAndroidAppActivity } from './appActivity/android';
+import { createWindowsAppActivity } from './appActivity/windows';
 import type { AppActivityProvider } from './appActivity/types';
 import type { SecureStore } from './secureStore/types';
 import type { PlatformCapabilities, SullyRuntime } from './types';
@@ -33,8 +37,7 @@ let cached: SullyPlatformBridge | null = null;
 
 /**
  * 平台桥唯一入口。业务代码只允许调用本函数。
- * Android / Windows 的 provider 在壳任务中按 runtime 替换，
- * 在此之前全部回落到 Web 实现，保证纯 Web 行为不变。
+ * provider 与安全存储按 runtime 选择；Web 回落保证纯 Web 行为不变。
  */
 export function getPlatformBridge(g: typeof globalThis = globalThis): SullyPlatformBridge {
   if (cached) return cached;
@@ -42,8 +45,18 @@ export function getPlatformBridge(g: typeof globalThis = globalThis): SullyPlatf
   cached = {
     runtime: capabilities.runtime,
     capabilities,
-    secureStore: createWebSecureStore(),
-    appActivity: createWebAppActivity(),
+    secureStore:
+      capabilities.runtime === 'android'
+        ? createAndroidSecureStore()
+        : capabilities.runtime === 'windows'
+          ? createWindowsSecureStore()
+          : createWebSecureStore(),
+    appActivity:
+      capabilities.runtime === 'android'
+        ? createAndroidAppActivity()
+        : capabilities.runtime === 'windows'
+          ? createWindowsAppActivity()
+          : createWebAppActivity(),
     notifications: createWebNotifications(),
   };
   return cached;

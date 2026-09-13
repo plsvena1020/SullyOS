@@ -17,5 +17,12 @@ describe('platform bridge', () => {
     } as any);
     expect(b.runtime).toBe('android');
     expect(b.capabilities.push).toBe('fcm');
+    expect(b.appActivity.kind).toBe('usage-stats');
+  });
+
+  it('tauri globals give windows provider', () => {
+    const b = getPlatformBridge({ __TAURI_INTERNALS__: {} } as any);
+    expect(b.runtime).toBe('windows');
+    expect(b.appActivity.kind).toBe('foreground-process');
   });
 });
