@@ -1,5 +1,6 @@
 import type { ShoppingOrder } from './utils/shoppingTypes';
 import type { AirpSettings } from './utils/airp/settings';
+import type { AirpCommittedEvent } from './utils/airp/commit';
 
 export enum AppID {
   Launcher = 'launcher',
@@ -4327,6 +4328,7 @@ export interface FullBackupData {
     vrSettings?: any[];                        // 彼方设置（独立 API + 调用记录）
     worlds?: WorldProfile[];                   // 家园·世界定义
     worldEpisodes?: WorldEpisode[];            // 家园·演绎历史
+    airpEvents?: AirpCommittedEvent[];         // AIRP 世界事件流（角色导演提交的事件）
     vrPostOffice?: Record<string, string>;     // 邮局本机配置：身份 deviceId / 后端地址（存 localStorage）
     vrSignal?: Record<string, string>;         // 信号坠落处本机记录：句子归属「你·角色」+ 反复用清单（存 localStorage）
     worldHomeLocal?: Record<string, string>;   // 家园本机配置：全局 API + 文风收藏（存 localStorage）

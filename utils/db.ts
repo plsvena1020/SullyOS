@@ -12,6 +12,7 @@ import {
     WorldProfile, WorldEpisode, StoryTheaterEntry, StoryTheaterPreset, StoryTheaterMask, PromptPreset
 } from '../types';
 import type { ShoppingOrder } from './shoppingTypes';
+import type { AirpCommittedEvent } from './airp/commit';
 import { exportPostOfficeLocal, importPostOfficeLocal } from './vrWorld/postOffice';
 import { exportSignalLocal, importSignalLocal } from './vrWorld/signal';
 import { exportLuckinLocal, importLuckinLocal } from './luckinMcpClient';
@@ -32,7 +33,8 @@ const DB_NAME = 'AetherOS_Data';
 // v72：提示词段落预设（Preset App）。独立 store，随备份动态枚举自动带走。
 // v73：购物订单（Shopping App）。独立 store，随备份动态枚举自动带走。
 // v74：塔罗占卜记录（Tarot App）。独立 store，随备份动态枚举自动带走。
-const DB_VERSION = 74; // v74: 塔罗占卜记录（Tarot App）
+// v75：AIRP 世界事件流（airp_events）。独立 store，随备份动态枚举自动带走。
+const DB_VERSION = 75; // v75: AIRP 世界事件流（airp_events）
 
 const STORE_CHARACTERS = 'characters';
 const STORE_CHAR_GROUPS = 'character_groups'; // 角色分组定义（角色通过 groupId 指向；与群聊 groups 无关）
@@ -61,6 +63,7 @@ const STORE_BANK_TX = 'bank_transactions';
 const STORE_BANK_DATA = 'bank_data';
 const STORE_SHOPPING_ORDERS = 'shopping_orders'; // v73: 购物订单
 const STORE_TAROT_READINGS = 'tarot_readings'; // v74: 塔罗占卜记录
+const STORE_AIRP_EVENTS = 'airp_events'; // v75: AIRP 世界事件流（角色导演提交的事件）
 const STORE_XHS_STOCK = 'xhs_stock';
 const STORE_XHS_ACTIVITIES = 'xhs_activities';
 const STORE_XHS_OWNED_POSTS = 'xhs_owned_posts';
@@ -370,6 +373,11 @@ export const openDB = (): Promise<IDBDatabase> => {
       createStore(STORE_SHOPPING_ORDERS, { keyPath: 'id' });
       // v74: 塔罗占卜记录（Tarot App）
       createStore(STORE_TAROT_READINGS, { keyPath: 'id' });
+      // v75: AIRP 世界事件流（角色导演提交的事件）
+      if (!db.objectStoreNames.contains(STORE_AIRP_EVENTS)) {
+          const airpEventStore = db.createObjectStore(STORE_AIRP_EVENTS, { keyPath: 'id' });
+          airpEventStore.createIndex('charId', 'charId', { unique: false });
+      }
 
       // ─── Memory Palace (记忆宫殿) stores ───
       if (!db.objectStoreNames.contains('memory_nodes')) {
@@ -2256,6 +2264,49 @@ export const DB = {
       });
   },
 
+  // ─── AIRP 世界事件流（v75）───
+  getAirpEventsByChar: async (charId: string, limit = 50): Promise<AirpCommittedEvent[]> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_AIRP_EVENTS)) return [];
+      return new Promise((resolve, reject) => {
+          const transaction = db.transaction(STORE_AIRP_EVENTS, 'readonly');
+          const store = transaction.objectStore(STORE_AIRP_EVENTS);
+          const request = store.index('charId').getAll(charId);
+          request.onsuccess = () => {
+              const all = (request.result || []) as AirpCommittedEvent[];
+              all.sort((a, b) => b.at - a.at);
+              resolve(all.slice(0, limit));
+          };
+          request.onerror = () => reject(request.error);
+      });
+  },
+
+  saveAirpEvents: async (events: AirpCommittedEvent[]): Promise<void> => {
+      if (events.length === 0) return;
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_AIRP_EVENTS)) return;
+      return new Promise((resolve, reject) => {
+          const transaction = db.transaction(STORE_AIRP_EVENTS, 'readwrite');
+          const store = transaction.objectStore(STORE_AIRP_EVENTS);
+          for (const event of events) store.put(event);
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => reject(transaction.error);
+          transaction.onabort = () => reject(transaction.error || new Error('saveAirpEvents aborted'));
+      });
+  },
+
+  deleteAirpEvent: async (id: string): Promise<void> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_AIRP_EVENTS)) return;
+      return new Promise((resolve, reject) => {
+          const transaction = db.transaction(STORE_AIRP_EVENTS, 'readwrite');
+          transaction.objectStore(STORE_AIRP_EVENTS).delete(id);
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => reject(transaction.error);
+          transaction.onabort = () => reject(transaction.error || new Error('deleteAirpEvent aborted'));
+      });
+  },
+
   getAllGames: async (): Promise<GameSession[]> => {
       const db = await openDB();
       if (!db.objectStoreNames.contains(STORE_GAMES)) return [];
@@ -3248,7 +3299,7 @@ export const DB = {
           });
       };
 
-      const [characters, characterGroups, messages, themes, emojis, emojiCategories, assets, galleryImages, userProfiles, diaries, tasks, anniversaries, roomTodos, roomNotes, groups, journalStickers, socialPosts, courses, games, worldbooks, storyTheaters, storyTheaterPresets, storyTheaterMasks, novels, bankTx, bankData, xhsActivities, xhsOwnedPosts, xhsStockImages, songs, quizzes, tarotReadings, shoppingOrders, guidebookSessions, scheduledMessages, lifeSimStates, handbooks, trackers, trackerEntries, hotNewsSnapshots, vrNovels, vrAnnotations, customCreatorParts, vrMusic, vrGuestbook, vrScripts, vrStagedPlays, vrPresets, vrLetters, vrSettings, worlds, worldEpisodes, lifeRecords, medPlans, lifeRecordSettings, promptPresets] = await Promise.all([
+      const [characters, characterGroups, messages, themes, emojis, emojiCategories, assets, galleryImages, userProfiles, diaries, tasks, anniversaries, roomTodos, roomNotes, groups, journalStickers, socialPosts, courses, games, worldbooks, storyTheaters, storyTheaterPresets, storyTheaterMasks, novels, bankTx, bankData, xhsActivities, xhsOwnedPosts, xhsStockImages, songs, quizzes, tarotReadings, shoppingOrders, guidebookSessions, scheduledMessages, lifeSimStates, handbooks, trackers, trackerEntries, hotNewsSnapshots, vrNovels, vrAnnotations, customCreatorParts, vrMusic, vrGuestbook, vrScripts, vrStagedPlays, vrPresets, vrLetters, vrSettings, worlds, worldEpisodes, lifeRecords, medPlans, lifeRecordSettings, promptPresets, airpEvents] = await Promise.all([
           getAllFromStore(STORE_CHARACTERS),
           getAllFromStore(STORE_CHAR_GROUPS),
           getAllFromStore(STORE_MESSAGES),
@@ -3305,6 +3356,7 @@ export const DB = {
           getAllFromStore(STORE_MED_PLANS),
           getAllFromStore(STORE_LIFE_SETTINGS),
           getAllFromStore(STORE_PROMPT_PRESETS),
+          getAllFromStore(STORE_AIRP_EVENTS),
       ]);
 
       const userProfile = userProfiles.length > 0 ? {
@@ -3353,6 +3405,7 @@ export const DB = {
           vrSignal: exportSignalLocal(),         // 信号坠落处本机记录（句子归属「你·角色」+ 反复用清单，存 localStorage）
           worlds,
           worldEpisodes,
+          airpEvents,
           worldHomeLocal: exportWorldHomeLocal(), // 家园本机配置：全局 API + 文风收藏（存 localStorage）
           luckinLocal: exportLuckinLocal(),       // 瑞幸 token + 启用状态（存 localStorage）
           mcdLocal: exportMcdLocal(),             // 麦当劳 token + 启用状态（存 localStorage）
@@ -3406,6 +3459,7 @@ export const DB = {
           'memory_batches', 'pixel_home_assets', 'pixel_home_layouts',
           STORE_PROMPT_PRESETS, // v72 提示词段落预设（Preset App）—— importFullData 侧白名单
           STORE_SHOPPING_ORDERS, // v73 购物订单（Shopping App）
+          STORE_AIRP_EVENTS, // v75 AIRP 世界事件流 —— importFullData 侧白名单
       ].filter(name => db.objectStoreNames.contains(name));
 
       const hasStore = (storeName: string) => availableStores.includes(storeName);
@@ -3504,6 +3558,7 @@ export const DB = {
           (data as any).vrPostOffice !== undefined,
           data.worlds !== undefined,
           data.worldEpisodes !== undefined,
+          data.airpEvents !== undefined,
           (data as any).worldHomeLocal !== undefined,
           (data as any).luckinLocal !== undefined,
           (data as any).mcdLocal !== undefined,
@@ -3815,6 +3870,10 @@ export const DB = {
           await clearAndAdd(STORE_WORLD_EPISODES, data.worldEpisodes, '家园演绎历史', false);
           data.worldEpisodes = undefined as any;
       }, data.worldEpisodes?.length || 0);
+      await runSection('AIRP 世界事件流', data.airpEvents !== undefined, async () => {
+          await clearAndAdd(STORE_AIRP_EVENTS, data.airpEvents, 'AIRP 世界事件流', false);
+          data.airpEvents = undefined as any;
+      }, data.airpEvents?.length || 0);
       await runSection('家园本机配置', (data as any).worldHomeLocal !== undefined, async () => {
           importWorldHomeLocal((data as any).worldHomeLocal); // 全局 API + 文风收藏
           (data as any).worldHomeLocal = undefined;

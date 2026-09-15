@@ -90,6 +90,7 @@ const KNOWN: Readonly<Record<string, string>> = {
     vr_settings: 'vrSettings',
     worlds: 'worlds',
     world_episodes: 'worldEpisodes',
+    airp_events: 'airpEvents',
     life_records: 'lifeRecords',
     med_plans: 'medPlans',
     life_record_settings: 'lifeRecordSettings',
