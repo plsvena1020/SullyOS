@@ -488,6 +488,51 @@ export const RealtimeContextManager = {
     },
 
     /**
+     * 只读缓存 peek：不触发任何网络请求，沿用 fetch 方法同一套 TTL / 过期口径。
+     * 天气按城市命中内存缓存；新闻只取回落内存缓存（分时段快照在 IndexedDB，不在这里读）。
+     * 命中项的最旧时间戳作为 observedAt；一项都没有则返回 null。
+     * 供 AIRP 快照构建做确定性注入用——过期即缺席，绝不 fetch 补位。
+     */
+    peekRealtimeCache: (
+        config: RealtimeConfig,
+        cityOverride?: string,
+    ): { weatherText?: string; newsItems?: string[]; observedAt?: number } | null => {
+        const now = Date.now();
+        const cacheMs = config.cacheMinutes * 60 * 1000;
+        const city = (cityOverride || config.weatherCity || '').trim();
+
+        let weatherText: string | undefined;
+        let weatherTimestamp: number | undefined;
+        const weatherHit = city ? weatherCacheByCity[city] : undefined;
+        if (weatherHit?.data && (now - weatherHit.timestamp) < cacheMs) {
+            const w = weatherHit.data;
+            weatherText = `${w.city}${w.description}，气温 ${w.temp}°C（体感 ${w.feelsLike}°C）`;
+            weatherTimestamp = weatherHit.timestamp;
+        }
+
+        let newsItems: string[] | undefined;
+        let newsTimestamp: number | undefined;
+        if (newsCache.data.length > 0 && (now - newsCache.timestamp) < cacheMs) {
+            const titles = newsCache.data
+                .slice(0, 3)
+                .map(n => n.title)
+                .filter(t => typeof t === 'string' && t.trim().length > 0);
+            if (titles.length > 0) {
+                newsItems = titles;
+                newsTimestamp = newsCache.timestamp;
+            }
+        }
+
+        if (weatherTimestamp === undefined && newsTimestamp === undefined) return null;
+
+        return {
+            ...(weatherText !== undefined ? { weatherText } : {}),
+            ...(newsItems !== undefined ? { newsItems } : {}),
+            observedAt: Math.min(weatherTimestamp ?? Infinity, newsTimestamp ?? Infinity),
+        };
+    },
+
+    /**
      * 主动搜索 - 让AI角色能够主动搜索任意内容
      * Active Search - Let AI characters actively search for anything
      */
