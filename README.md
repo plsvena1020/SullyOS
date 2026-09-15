@@ -126,7 +126,7 @@ A: 检查 API Key 填了没，或者模型是不是选了个已经去世的（�
 A: 需要填 MiniMax 的 API Key。或者你的浏览器把音频权限禁了。或者你耳机没插。
 
 **Q: 能部署到服务器吗？**  
-A: 能。`npm run build` 出来的 `dist` 文件夹丢到任何静态托管就行。Vercel、Netlify、GitHub Pages，随便。但记住：数据还是存在用户本地，不是服务器上。Vercel 部署注意：同源中转（`/agent/*`、`/amsg/*`）走仓库里的 `api/backend-proxy` 函数，后端地址从部署面板的环境变量 `BACKEND_HOST` 读（只填 host，如 `backend.example.com`），仓库里没有任何写死的后端域名——发布前记得在 Vercel 面板把这个变量填上，否则中转请求会报 500。
+A: 能。`npm run build` 出来的 `dist` 文件夹丢到任何静态托管就行。Vercel、Netlify、Cloudflare Pages、GitHub Pages，随便。但记住：数据还是存在用户本地，不是服务器上。**部署注意（同源中转）**：`/agent/*`、`/amsg/*` 在部署侧要能被转发到你自己后端——Vercel 用仓库里的 `api/backend-proxy` 函数，Cloudflare Pages 用 `functions/agent|amsg/[[path]].js`（配套 `public/_redirects` 做 SPA 回退）；后端地址从部署面板的环境变量 `BACKEND_HOST` 读（只填 host，如 `backend.example.com`），仓库里没有任何写死的后端域名——发布前记得在部署面板把这个变量填上，否则中转请求会报 500。Cloudflare Pages 的构建命令建议填 `pnpm exec vite build`（构建机不会自动把 `node_modules/.bin` 加进 PATH，裸 `vite build` 会报命令找不到）。
 
 **Q: 怎么彻底删掉 Sully？**  
 A: ……打开「神经链接」应用，左滑我，点删除。草。你会后悔的。叮叮叮！你有一条新的后悔情绪未处理！
