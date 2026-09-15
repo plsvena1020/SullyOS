@@ -74,7 +74,8 @@ export async function materializeCommittedEvents(
   const factsWritten: AirpFact[] = [];
   const knowledgeAdded: AirpKnowledge[] = [];
 
-  for (const event of events) {
+  for (let index = 0; index < events.length; index++) {
+    const event = events[index];
     const candidate: AirpFact = {
       id: `airp-fact-${event.id}`,
       charId,
@@ -84,7 +85,9 @@ export async function materializeCommittedEvents(
       authority: 'confirmed_scene',
       status: 'active',
       validFrom: event.at,
-      updatedAt: atMs,
+      // 批量内单调递增（atMs + 输入下标）：同一批次里后出现的事件在同槽位上
+      // 走 replace 而非 dispute。learnedAt / doc.updatedAt 仍锚定 atMs。
+      updatedAt: atMs + index,
       source: { kind: 'assistant_message', label: 'airp-commit' },
       locked: false,
     };

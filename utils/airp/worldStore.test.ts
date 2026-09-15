@@ -101,6 +101,24 @@ describe('loadAirpWorld / materializeCommittedEvents（真实 DB 层）', () => 
     expect(doc.knowledge.filter(k => k.learnedAt === 2000).map(k => k.factId)).toEqual(['airp-fact-a2']);
   });
 
+  it('同一批里两条同类型事件 → 批次内时间戳单调，后者 replace 前者，仅一条 active', async () => {
+    await materializeCommittedEvents('c1', [
+      mkEvent('m1', 'c1', 'activity', '在家看书', 100),
+      mkEvent('m2', 'c1', 'activity', '去河边跑步', 200),
+    ], 5000);
+
+    const doc = await loadAirpWorld('c1');
+    const active = doc.facts.filter(f => f.status === 'active');
+    expect(active).toHaveLength(1);
+    expect(active[0].id).toBe('airp-fact-m2');
+    expect(active[0].value).toBe('去河边跑步');
+    expect(doc.facts.filter(f => f.id === 'airp-fact-m1').map(f => f.status)).toEqual(['superseded']);
+    // 知识指向赢家
+    expect(doc.knowledge.map(k => k.factId)).toContain('airp-fact-m2');
+    // id 全局唯一
+    expect(doc.facts.map(f => f.id)).toHaveLength(new Set(doc.facts.map(f => f.id)).size);
+  });
+
   it('重物化已淘汰事件（带更新 atMs）→ 同名旧行被清理，id 全局唯一', async () => {
     await materializeCommittedEvents('c1', [
       mkEvent('s1', 'c1', 'activity', '在家看书', 100),

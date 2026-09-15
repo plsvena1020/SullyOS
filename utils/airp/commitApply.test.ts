@@ -202,4 +202,39 @@ describe('commitAirpRound（真实 DB 层）', () => {
       result.committed.map(e => e.id).sort(),
     );
   });
+
+  it('锚点已知 → 落库事件的 source.id 回填为锚点消息 id', async () => {
+    const charId = freshCharId();
+    const anchorId = await seedAssistant(charId, AT_MS + 5);
+
+    await commitAirpRound({
+      charId,
+      output: director([proposal(GO_PARK)]),
+      replyText: GO_PARK,
+      atMs: AT_MS,
+      postStartMs: AT_MS,
+    });
+
+    const events = await listAirpEventsByChar(charId);
+    expect(events).toHaveLength(1);
+    expect(events[0].source.id).toBe(String(anchorId));
+  });
+
+  it('锚点缺失 → 事件仍落库但 source.id 不写，不抛异常', async () => {
+    const charId = freshCharId();
+
+    const result = await commitAirpRound({
+      charId,
+      output: director([proposal(GO_PARK)]),
+      replyText: GO_PARK,
+      atMs: AT_MS,
+      postStartMs: AT_MS + 10_000_000,
+    });
+
+    expect(result).toBeDefined();
+    expect(result.anchorMessageId).toBeUndefined();
+    const events = await listAirpEventsByChar(charId);
+    expect(events).toHaveLength(1);
+    expect(events[0].source.id).toBeUndefined();
+  });
 });

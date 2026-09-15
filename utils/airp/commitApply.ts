@@ -66,6 +66,14 @@ export async function commitAirpRound(
     const toSave = extracted.filter((event) => !recorded.has(event.id));
     for (const event of extracted) if (recorded.has(event.id)) skippedIds.push(event.id);
 
+    // 锚点已知时把来源 id 回填到待存事件。事件是每次调用新造的，其 id 派生自
+    // charId/atMs/index，不受此戳影响；重试靠 put 覆盖收敛。锚点缺失则 source 保持无 id。
+    if (anchorMessageId !== undefined) {
+      for (const event of toSave) {
+        event.source = { ...event.source, id: String(anchorMessageId) };
+      }
+    }
+
     if (toSave.length > 0) {
       await saveAirpEvents(toSave);
       committed = toSave;
