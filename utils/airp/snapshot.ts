@@ -14,6 +14,7 @@ import { getDailyScheduleForChar } from '../dailySchedule';
 import { resolveScheduleSlots } from '../scheduleInjection';
 import { checkSpecialDates } from '../realtimeWorldCore';
 import { RealtimeContextManager, defaultRealtimeConfig, resolveCharCity } from '../realtimeContext';
+import { DB } from '../db';
 
 export interface AirpRealtimeDigest {
   weatherText?: string;
@@ -41,6 +42,7 @@ const FALLBACK_TZ = 'Asia/Shanghai';
 const ROOM_PLATE_MAX_LEN = 2000;
 const MAX_NEWS_FACTS = 3;
 const MAX_EPISODES = 5;
+const NEWS_SNAPSHOT_MAX_AGE_MS = 24 * 3600 * 1000;
 
 const REALTIME_SOURCE_LABEL = 'realtime_cache';
 
@@ -88,7 +90,7 @@ async function readActivity(
     if (opts.loadSchedule) {
       label = await opts.loadSchedule();
     } else {
-      const schedule = await getDailyScheduleForChar(char);
+      const schedule = await getDailyScheduleForChar(char, new Date(builtAt));
       label = resolveScheduleSlots(schedule, new Date(builtAt)).current?.activity ?? null;
     }
     return typeof label === 'string' && label.trim().length > 0 ? label.trim() : undefined;
@@ -123,7 +125,8 @@ function readRealtimeConfig(): RealtimeConfig {
 
 /**
  * 运行时的实时摘要（生产默认）：只读 peek 缓存 + 纯函数节日，绝不 fetch。
- * 缓存为空且当天无节日时返回 null。
+ * peek 没有新闻时补一份 IndexedDB 热点快照（同样是纯读取）；缓存为空且当天无节日时返回 null。
+ * 注意：DB 读取放在内层 try/catch，IDB 不可用（worker/无索引环境）时降级为跳过新闻补充。
  */
 async function loadRealtimeFromCache(
   char: CharacterProfile,
@@ -135,12 +138,59 @@ async function loadRealtimeFromCache(
   const peek = RealtimeContextManager.peekRealtimeCache(config, city);
   const holidays = checkSpecialDates(tzId, builtAt);
   const holidayText = holidays.length > 0 ? holidays.join('、') : undefined;
-  if (!peek && !holidayText) return null;
 
-  const digest: AirpRealtimeDigest = { observedAt: peek?.observedAt ?? builtAt };
-  if (peek?.weatherText) digest.weatherText = peek.weatherText;
+  const peekWeather =
+    typeof peek?.weatherText === 'string' && peek.weatherText.trim().length > 0
+      ? peek.weatherText
+      : undefined;
+  const peekNewsItems =
+    peek?.newsItems && peek.newsItems.length > 0 ? peek.newsItems : undefined;
+
+  let newsItems = peekNewsItems;
+  let newsFetchedAt: number | undefined;
+  if (!newsItems) {
+    try {
+      const snap = await DB.getLatestHotNewsSnapshot();
+      if (snap && Number.isFinite(snap.fetchedAt) && snap.fetchedAt <= builtAt) {
+        if (builtAt - snap.fetchedAt <= NEWS_SNAPSHOT_MAX_AGE_MS && Array.isArray(snap.items)) {
+          const titles = snap.items
+            .map((item) => item?.title)
+            .filter(
+              (title): title is string => typeof title === 'string' && title.trim().length > 0,
+            )
+            .slice(0, MAX_NEWS_FACTS);
+          if (titles.length > 0) {
+            newsItems = titles;
+            newsFetchedAt = snap.fetchedAt;
+          }
+        }
+      }
+    } catch {
+      /* IDB 不可用 → 跳过新闻补充，绝不抛 */
+    }
+  }
+
+  if (!peekWeather && !newsItems && !holidayText) return null;
+
+  const observedCandidates: number[] = [];
+  const peekObservedAt = peek?.observedAt;
+  if (
+    (peekWeather || peekNewsItems) &&
+    typeof peekObservedAt === 'number' &&
+    Number.isFinite(peekObservedAt)
+  ) {
+    observedCandidates.push(peekObservedAt);
+  }
+  if (typeof newsFetchedAt === 'number' && Number.isFinite(newsFetchedAt)) {
+    observedCandidates.push(newsFetchedAt);
+  }
+
+  const digest: AirpRealtimeDigest = {
+    observedAt: observedCandidates.length > 0 ? Math.min(...observedCandidates) : builtAt,
+  };
+  if (peekWeather) digest.weatherText = peekWeather;
   if (holidayText) digest.holidayText = holidayText;
-  if (peek?.newsItems && peek.newsItems.length > 0) digest.newsItems = peek.newsItems;
+  if (newsItems) digest.newsItems = newsItems;
   return digest;
 }
 
@@ -153,7 +203,12 @@ function appendRealtimeFacts(
     typeof digest.observedAt === 'number' && Number.isFinite(digest.observedAt)
       ? digest.observedAt
       : builtAt;
-  const source: AirpSourceRef = { kind: 'tool', label: REALTIME_SOURCE_LABEL, observedAt };
+  // 每条 fact 独立构造 source，避免共享引用被下游就地改写时互相污染。
+  const makeSource = (): AirpSourceRef => ({
+    kind: 'tool',
+    label: REALTIME_SOURCE_LABEL,
+    observedAt,
+  });
 
   if (typeof digest.weatherText === 'string' && digest.weatherText.trim().length > 0) {
     drafts.push({
@@ -161,7 +216,7 @@ function appendRealtimeFacts(
       predicate: 'weather_now',
       value: digest.weatherText,
       authority: 'tool_verified',
-      source,
+      source: makeSource(),
     });
   }
   if (typeof digest.holidayText === 'string' && digest.holidayText.trim().length > 0) {
@@ -170,7 +225,7 @@ function appendRealtimeFacts(
       predicate: 'holiday_today',
       value: digest.holidayText,
       authority: 'tool_verified',
-      source,
+      source: makeSource(),
     });
   }
   if (Array.isArray(digest.newsItems)) {
@@ -181,7 +236,7 @@ function appendRealtimeFacts(
           predicate: 'news_hot',
           value: title,
           authority: 'tool_verified',
-          source,
+          source: makeSource(),
         });
       }
     }
@@ -252,8 +307,9 @@ async function assembleSnapshot(
 
   // 基线 C（D1）：无条件记忆召回。注入桩原样透传；生产默认走记忆管线，
   // 在浅拷贝上运行以隔离 injectMemoryPalace 的 mutation。
-  const query = (opts.recentDialogueTail ?? []).slice(-3).join('\n');
   try {
+    const tail = Array.isArray(opts.recentDialogueTail) ? opts.recentDialogueTail : [];
+    const query = tail.slice(-3).join('\n');
     if (opts.recallMemories) {
       const recalled = await opts.recallMemories(query);
       if (Array.isArray(recalled)) {
@@ -344,7 +400,7 @@ export async function buildAirpRuntimeSnapshot(
   } catch (error) {
     console.warn('[airp] runtime snapshot assembly failed; returning minimal snapshot', error);
     const builtAt =
-      typeof opts.now === 'number' && Number.isFinite(opts.now) ? opts.now : Date.now();
+      typeof opts?.now === 'number' && Number.isFinite(opts.now) ? opts.now : Date.now();
     return {
       v: 1,
       charId: typeof char?.id === 'string' ? char.id : '',

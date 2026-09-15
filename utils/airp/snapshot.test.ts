@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildAirpRuntimeSnapshot, type AirpEpisodeSummary } from './snapshot';
+import { buildAirpRuntimeSnapshot, type AirpEpisodeSummary, type BuildSnapshotOpts } from './snapshot';
 import { AIRP_CAPABILITIES } from './capabilityCatalog';
 import type { AirpFact } from './types';
 import type { CharacterProfile } from '../../types';
@@ -310,5 +310,59 @@ describe('buildAirpRuntimeSnapshot', () => {
     expect(holiday?.authority).toBe('tool_verified');
     expect(holiday?.source).toEqual({ kind: 'tool', label: 'realtime_cache', observedAt: builtAt });
     expect(snap.facts.some((f) => f.predicate === 'weather_now' || f.predicate === 'news_hot')).toBe(false);
+  });
+
+  it('survives a non-array dialogue tail and keeps the other sections intact', async () => {
+    const extra = makeFact('extra-2', 'director_note');
+    const snap = await buildAirpRuntimeSnapshot(makeChar(), {
+      now: NOW,
+      recentDialogueTail: 'not-an-array' as unknown as string[],
+      recallMemories: async () => [],
+      loadEpisodes: async () => [{ summary: 'e1' }],
+      loadRealtime: async () => null,
+      additionalFacts: [extra],
+    });
+
+    expect(snap.charId).toBe('char-1');
+    expect(snap.facts).toEqual([extra]);
+    expect(snap.recentEventSummaries).toEqual(['e1']);
+  });
+
+  it('returns a minimal snapshot when opts is null instead of rejecting', async () => {
+    const snap = await buildAirpRuntimeSnapshot(makeChar(), null as unknown as BuildSnapshotOpts);
+
+    expect(snap.v).toBe(1);
+    expect(snap.charId).toBe('char-1');
+    expect(snap.facts).toEqual([]);
+    expect(snap.scene.tzId).toBe('Asia/Shanghai');
+    expect(snap.knowledge).toEqual([]);
+    expect(snap.capabilities).toEqual([...AIRP_CAPABILITIES]);
+    expect(Number.isFinite(snap.builtAt)).toBe(true);
+    expect(Number.isFinite(snap.scene.now)).toBe(true);
+  });
+
+  it('gives each realtime fact its own source object', async () => {
+    const snap = await buildAirpRuntimeSnapshot(makeChar(), {
+      now: NOW,
+      recallMemories: async () => [],
+      loadRealtime: async () => ({
+        weatherText: 'w',
+        holidayText: 'h',
+        newsItems: ['n'],
+        observedAt: 999,
+      }),
+    });
+
+    const weather = snap.facts.find((f) => f.predicate === 'weather_now');
+    const holiday = snap.facts.find((f) => f.predicate === 'holiday_today');
+    const news = snap.facts.find((f) => f.predicate === 'news_hot');
+
+    expect(weather?.source).not.toBe(holiday?.source);
+    expect(holiday?.source).not.toBe(news?.source);
+    expect(weather?.source).toEqual(holiday?.source);
+
+    (weather!.source as { observedAt?: number }).observedAt = 1;
+    expect(holiday?.source.observedAt).toBe(999);
+    expect(news?.source.observedAt).toBe(999);
   });
 });
