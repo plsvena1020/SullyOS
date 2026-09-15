@@ -12,6 +12,7 @@ import ImpressionPanel from '../components/character/ImpressionPanel';
 import RoomPlatePanel from '../components/character/RoomPlatePanel';
 import MemoryArchivist from '../components/character/MemoryArchivist';
 import ChibiStudio, { ChibiShelfPanel } from '../components/character/ChibiStudio';
+import AutonomyPanel from '../components/character/AutonomyPanel';
 import TokenImg from '../components/os/TokenImg';
 import { resolveBlobRefsDeep, migrateDataUrlToRef } from '../utils/blobRef';
 import { characterLaunch } from '../utils/characterLaunch';
@@ -2158,6 +2159,17 @@ ${isInitialGeneration ? `
                        </div>
                    )}
                    
+                   {/* 自主背景生活（AIRP）：模板 + 覆盖 + 工具白名单。改一项随角色自动保存，
+                       落库走 updateCharacter → saveCharacter + markAmsgStateDirty 重传 fire_pack。 */}
+                   {detailTab === 'identity' && (
+                       <div className="mt-6 pt-4 border-t border-slate-100">
+                           <AutonomyPanel
+                               char={formData}
+                               onChange={(next) => handleChange('airp', next)}
+                           />
+                       </div>
+                   )}
+
                    {detailTab === 'memory' && (
                        <div className="space-y-4 animate-fade-in">
                            <div className="flex justify-center gap-2 mb-4">
