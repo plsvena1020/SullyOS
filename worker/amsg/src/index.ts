@@ -3361,7 +3361,7 @@ export default {
           clientToken: env.AMSG_SERVER_TOKEN,
         }),
       });
-      if (result.built.length > 0 || scanned.skipped.length > 0) {
+      if (result.built.length > 0 || result.skipped.length > 0 || scanned.skipped.length > 0) {
         console.log('[amsg:autonomy]', {
           built: result.built,
           skipped: result.skipped,

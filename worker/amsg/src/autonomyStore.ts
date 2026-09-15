@@ -11,7 +11,8 @@
  * scanAutonomyPacks）。
  *
  * 表懒建，照 worker/post-office/src/index.ts 的做法：模块级 ready 短路 + CREATE
- * TABLE/INDEX IF NOT EXISTS，老库缺列靠 ALTER 吞 "duplicate column" 补。
+ * TABLE/INDEX IF NOT EXISTS。ensureAutonomySchema 里没有 ALTER 分支——老库缺列不会
+ * 被补；将来真需要加列时再在 ensureAutonomySchema 里补一条 ALTER。
  */
 
 /**
