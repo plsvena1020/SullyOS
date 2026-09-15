@@ -1,11 +1,12 @@
 # SullyOS 混合式 AIRP Runtime 实施计划
 
-> 状态：v1.4 阶段一执行完毕（2026-09-15；10 Tasks 全绿 + 终审修复波关闭；浏览器 5 轮手验待用户验收）。
+> 状态：v1.6 阶段二执行完毕（2026-09-15；Tasks 11-14 全绿 + 集成终审修复波关闭；浏览器手验待用户验收）。
 > v1.1 修正：基础记忆召回改为**每轮确定性预取**，不进入导演工具面（理由见「设计决策 D1」）。
 > v1.2 修正：确定性注入面扩展（记忆/天气/新闻/日程固定注入；仅第三地天气与地图/web_search 工具化）。
 > v1.3 修正：Task 2 行为 3 两句写反，已纠正为高权威 incoming 胜（见 D2）。
 > v1.4 修正（Task 7 Step-0 发现）：基线3改浅拷贝调用 `injectMemoryPalace`（关 mutation）；基线5改 `realtimeContext.ts` 新增只读 peek + `checkSpecialDates` 纯函数（该文件本无 cache-only 读口）；事件摘要阶段一生产默认空（`world_episodes` 无角色链接）；取消 `factsPartial`（类型冻结）。
 > v1.5 修正（终审修复波）：场景时钟改角色本地 wall-clock（Intl）；能力渲染带工具名与参数 schema；空知识边界整节省略；快照按白名单/writable 过滤能力；导演 apiKey 加 `sk-none` 回退。
+> v1.6 修正（阶段二落定）：DB v75（airp_events）+ v76（airp_world）；同批同类事件用 `atMs+index` 单调戳收敛；keep 输家不落盘；事件 source 回填锚点 id；再生语义=新事实按 Task-2 规则自然 supersede，无特殊逻辑；本地无稳定时间戳的重跑去重为已知局限（amsg 路径有 messageTimestamp 则完备）。
 > 目标读者：弱执行模型。每个 Task 自带文件路径、代码形状、验收命令，按序执行，不需要回看对话历史。
 
 ---
