@@ -1,0 +1,2 @@
+# Cloudflare Pages：SPA 回退（非静态资源、非 Functions 路由的路径一律回 index.html）
+/* /index.html 200
