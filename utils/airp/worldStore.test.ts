@@ -101,6 +101,26 @@ describe('loadAirpWorld / materializeCommittedEvents（真实 DB 层）', () => 
     expect(doc.knowledge.filter(k => k.learnedAt === 2000).map(k => k.factId)).toEqual(['airp-fact-a2']);
   });
 
+  it('重物化已淘汰事件（带更新 atMs）→ 同名旧行被清理，id 全局唯一', async () => {
+    await materializeCommittedEvents('c1', [
+      mkEvent('s1', 'c1', 'activity', '在家看书', 100),
+    ], 1000);
+    await materializeCommittedEvents('c1', [
+      mkEvent('s2', 'c1', 'activity', '去河边跑步', 200),
+    ], 2000);
+    await materializeCommittedEvents('c1', [
+      mkEvent('s1', 'c1', 'activity', '在家看书（重述）', 300),
+    ], 3000);
+
+    const doc = await loadAirpWorld('c1');
+    const slotHolder = doc.facts.find(f => f.status === 'active');
+    expect(slotHolder?.id).toBe('airp-fact-s1');
+    expect(slotHolder?.updatedAt).toBe(3000);
+    expect(doc.facts.filter(f => f.id === 'airp-fact-s1')).toHaveLength(1);
+    expect(doc.facts.filter(f => f.id === 'airp-fact-s2').map(f => f.status)).toEqual(['superseded']);
+    expect(doc.facts.map(f => f.id)).toHaveLength(new Set(doc.facts.map(f => f.id)).size);
+  });
+
   it('重复物化同一批事件 → 事实不重复（确定性 id 收敛）', async () => {
     const events = [
       mkEvent('r1', 'c1', 'activity', '去公园散步', 100),

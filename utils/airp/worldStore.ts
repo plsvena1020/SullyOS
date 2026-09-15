@@ -5,7 +5,7 @@ import { resolveFactConflict } from './facts';
 
 /**
  * AIRP 世界事实/知识的浏览器侧入口。存储落在 utils/db.ts 的 `airp_world` store
- * （v75，keyPath 'charId'），每个角色一份世界文档：facts 是当前世界状态（含被淘汰的
+ * （v76，keyPath 'charId'），每个角色一份世界文档：facts 是当前世界状态（含被淘汰的
  * 留痕事实），knowledge 是该角色对事实的知晓情况。
  *
  * 物化语义：把已提交的世界事件（airp_events）折叠成 predicates 事实槽——
@@ -100,6 +100,12 @@ export async function materializeCommittedEvents(
       winner = resolution.winner;
       // 赢家占位；输家按返回状态留痕（superseded 保留，dispute 双双 active）。
       facts[existingIndex] = resolution.winner;
+      // 清理与 winner 同 id 的其他行（重物化已淘汰事件时，旧的 superseded 同名残留被取代；
+      // 正常路径下不存在其他同名行，此为 no-op）。倒序遍历：existingIndex 之后不再使用下标定位
+      //（loser 处理用 findIndex 重查），前移安全。
+      for (let i = facts.length - 1; i >= 0; i--) {
+        if (i !== existingIndex && facts[i].id === resolution.winner.id) facts.splice(i, 1);
+      }
       if (resolution.loser.id !== resolution.winner.id) {
         const loserIndex = facts.findIndex((f) => f.id === resolution.loser.id);
         if (loserIndex === -1) facts.push(resolution.loser);
