@@ -2155,6 +2155,7 @@ export const useChatAI = ({
                 // Phase 0: 本地 fetch 路径保持原逻辑, 不跳 2nd-pass LLM, 也没有结构化 directives。
                 skipSecondPassLLM: false,
                 directives: [],
+                airpDirectorOutput: airpDirectorOutputRef.current,
             });
 
             // B2 空回复可见化：正文空 + 无工具调用 + 漏斗没产出过可见消息时，

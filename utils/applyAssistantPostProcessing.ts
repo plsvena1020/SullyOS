@@ -62,6 +62,8 @@ import { extractGenImageTags, stripGenImageTags } from './imageGenTags';
 import { runImageGenReply } from './imageGenFlow';
 import { appendDevDebugLog } from './devDebug';
 import { lastUserMessageWantsImage } from './imageRequestIntent';
+import { commitAirpRound } from './airp/commitApply';
+import type { AirpDirectorOutput } from './airp/types';
 
 // ─── 模块内辅助 ──────────────────────────────────────────────────────────────
 
@@ -533,6 +535,12 @@ export interface PostProcessCtx {
      * 避免悄悄烧掉用户的周额度。
      */
     imageGen?: ImageGenRuntime;
+    /**
+     * AIRP 导演本轮产出的完整 output（可选）。仅本地聊天路径（useChatAI 的
+     * airpDirectorOutputRef）传；缺省或角色没开 AIRP（char.airp?.enabled !== true）时
+     * Step 7 整段跳过，行为跟历史完全一致。
+     */
+    airpDirectorOutput?: AirpDirectorOutput;
 }
 
 /**
@@ -620,6 +628,10 @@ export async function applyAssistantPostProcessing(
         commentAuthorNameCache: commentAuthorNameCacheRef,
         commentParentIdCache: commentParentIdCacheRef,
     } = xhsCaches;
+
+    // 本轮后处理开始的时刻：Step 7 的 AIRP 事件提交只认「不早于此刻」的 assistant 气泡
+    // 作为锚点（防止把上一轮的旧气泡当成这一轮的记账面）。入口处捕获一次，全程共用。
+    const postStartMs = Date.now();
 
     // API 调用记录用 meta：二轮重生 / 调阅 / 日记 / 小红书等都归在「消息」App 下，purpose 见各分支。
     const apiLogMeta = { appName: '消息', charId: char.id, charName: char.name };
@@ -2435,6 +2447,27 @@ ${material}
             await renderAndPersist('嗯...', pendingThinkingChain);
         } else {
             setMessages(await DB.getRecentMessagesByCharId(char.id, 200));
+        }
+    }
+
+    // ─── Step 7: AIRP 世界事件提交（阶段二）───
+    // 缺导演输出（非 AIRP 路径/未开启）或角色没开 AIRP → 整段跳过，零影响。
+    // 匹配文本用"[已展示正文 - INNER_STATE]"：INNER_STATE 是没说出口的内心戏，绝不能当成已发生事实提交。
+    if (char.airp?.enabled && ctx.airpDirectorOutput) {
+        try {
+            const commitText = aiContent.replace(/\[\[INNER_STATE:\s*[\s\S]*?\]\]/g, '').trim();
+            if (commitText) {
+                await commitAirpRound({
+                    charId: char.id,
+                    output: ctx.airpDirectorOutput,
+                    replyText: commitText,
+                    atMs: ctx.messageTimestamp ?? Date.now(),
+                    postStartMs,
+                });
+            }
+        } catch (e) {
+            // commitAirpRound 自身已吞掉流水线失败；这层是第二道保险，AIRP 永远不能挡住本轮聊天。
+            console.warn('[airp] commit degraded', e);
         }
     }
 }
