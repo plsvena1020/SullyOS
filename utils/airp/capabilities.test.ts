@@ -1,14 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { decideAirpCapability } from './capabilities';
-import type {
-  AirpAutonomyLevel,
-  AirpCapability,
-  AirpExecutionEnvironment,
-} from './types';
+import type { AirpAutonomyLevel, AirpCapability } from './types';
 
 const LEVELS: AirpAutonomyLevel[] = [0, 1, 2, 3];
-const ENVIRONMENTS: AirpExecutionEnvironment[] = ['browser', 'worker'];
+const ENVIRONMENTS: Array<'browser' | 'worker'> = ['browser', 'worker'];
 
 function makeCapability(overrides: Partial<AirpCapability> = {}): AirpCapability {
   return {
