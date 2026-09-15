@@ -109,13 +109,16 @@ export async function materializeCommittedEvents(
       for (let i = facts.length - 1; i >= 0; i--) {
         if (i !== existingIndex && facts[i].id === resolution.winner.id) facts.splice(i, 1);
       }
-      if (resolution.loser.id !== resolution.winner.id) {
+      // keep：候选被拒绝、从未进入 store，落库会凭空复活一条重复行——只丢不存。
+      if (resolution.action !== 'keep' && resolution.loser.id !== resolution.winner.id) {
         const loserIndex = facts.findIndex((f) => f.id === resolution.loser.id);
         if (loserIndex === -1) facts.push(resolution.loser);
         else facts[loserIndex] = resolution.loser;
       }
       factsWritten.push(resolution.winner);
-      if (resolution.loser.id !== resolution.winner.id) factsWritten.push(resolution.loser);
+      if (resolution.action !== 'keep' && resolution.loser.id !== resolution.winner.id) {
+        factsWritten.push(resolution.loser);
+      }
     }
 
     const entry: AirpKnowledge = {

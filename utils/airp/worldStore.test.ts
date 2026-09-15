@@ -153,6 +153,23 @@ describe('loadAirpWorld / materializeCommittedEvents（真实 DB 层）', () => 
     expect(doc.knowledge).toHaveLength(2);
   });
 
+  it('同槽位批 [a1,a2]（a1 已淘汰）重复物化同一批 → 不复活输家、事实与知识均不变', async () => {
+    const events = [
+      mkEvent('a1', 'c1', 'activity', '在家看书', 100),
+      mkEvent('a2', 'c1', 'activity', '去河边跑步', 200),
+    ];
+    await materializeCommittedEvents('c1', events, 5000);
+    const afterFirst = await loadAirpWorld('c1');
+
+    await materializeCommittedEvents('c1', events, 5000);
+    const afterSecond = await loadAirpWorld('c1');
+
+    expect(afterSecond.facts).toEqual(afterFirst.facts);
+    expect(afterSecond.facts.map(f => f.status).sort()).toEqual(['active', 'superseded']);
+    expect(afterSecond.facts.filter(f => f.status === 'active').map(f => f.id)).toEqual(['airp-fact-a2']);
+    expect(afterSecond.knowledge).toHaveLength(afterFirst.knowledge.length);
+  });
+
   it('knowledge 按 (factId+knowerId) upsert：同键替换不追加', async () => {
     await materializeCommittedEvents('c1', [
       mkEvent('k1', 'c1', 'activity', '在家看书', 100),
