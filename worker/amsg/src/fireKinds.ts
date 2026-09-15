@@ -16,6 +16,7 @@
 
 import { readTaskKind } from '../../../utils/amsgTaskKinds';
 import { PLATE_CONSOLIDATE_KIND } from '../../../utils/amsgPlateJob';
+import { AUTONOMOUS_ROUND_KIND } from '../../../utils/airp/autonomySettings';
 import { plateConsolidateHandler } from './plateFire';
 
 /** client_state 的写入口（value 传 null 即删除该 key）。 */
@@ -85,6 +86,25 @@ export interface FireKindHandler {
 }
 
 /**
+ * 自主背景生活（`autonomous_round`）的占位 handler。
+ *
+ * 调度器（autonomyScheduler）会真的自转发这种任务，而真正「到点干什么」（读 fire_pack、
+ * 调 LLM、写 autonomy_experiences）由 Task 18 落地。在那之前这里必须是一条**安全**的
+ * 死路：beforeFire 直接返回 skip-plan，任务被上游正常走完并跳过——**零 LLM、零副作用、
+ * 零推送**，绝不会以「半成品 handler」的身份跑出一轮驴唇不对马嘴的生成。
+ *
+ * Task 18 只替换这个常量指向的 body，注册表和分派代码一行都不用动。
+ */
+const autonomousRoundPendingHandler: FireKindHandler = {
+  async beforeFire() {
+    return { skip: true, reason: 'handler-pending-task-18' };
+  },
+  async llmOutput() {
+    return { decision: 'skip-push', reason: 'handler-pending-task-18' };
+  },
+};
+
+/**
  * `metadata.amsgKind` → handler。没标 kind 的任务不查这张表，照旧走聊天主干。
  * 表里没有的 kind 是硬失败：客户端建了一种 worker 还不认识的任务，多半是 worker bundle
  * 比前端旧，宁可让这条任务终态失败，也别当聊天任务跑出一条驴唇不对马嘴的消息。
@@ -103,7 +123,10 @@ export interface FireKindHandler {
  */
 export const FIRE_KIND_HANDLERS: Record<string, FireKindHandler> = Object.assign(
   Object.create(null) as Record<string, FireKindHandler>,
-  { [PLATE_CONSOLIDATE_KIND]: plateConsolidateHandler },
+  {
+    [PLATE_CONSOLIDATE_KIND]: plateConsolidateHandler,
+    [AUTONOMOUS_ROUND_KIND]: autonomousRoundPendingHandler,
+  },
 );
 
 /** 挂在 scratch 上跨 hook 传递的键。 */

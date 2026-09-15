@@ -30,6 +30,14 @@ export type {
 /** token 预算的常量兜底：模板与覆盖都没给时用它。 */
 export const AUTONOMY_DAILY_TOKEN_BUDGET = 100_000;
 
+// ─── 自主生活用到的任务种类名（worker 注册表与客户端排任务共用这份字面量） ───
+
+/** 一轮自主生活的任务种类（写在 metadata 的 amsgKind 上，见 utils/amsgTaskKinds.ts）。 */
+export const AUTONOMOUS_ROUND_KIND = 'autonomous_round';
+
+/** 一轮自主生活的结果种类（`emitResult` 的 resultKind，客户端按它分流）。 */
+export const AUTONOMY_RESULT_KIND = 'autonomy_result';
+
 const DEFAULT_AUTONOMY_LEVEL: AirpAutonomyLevel = 2;
 const DEFAULT_CADENCE = { minHours: 2, maxHours: 4 };
 const DEFAULT_MAX_ROUNDS_PER_DAY = 2;

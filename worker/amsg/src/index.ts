@@ -171,6 +171,12 @@ import {
   type FanoutDb,
 } from './pushFanout';
 import { installOpencodeIdentityFetch } from '../../../utils/llmIdentity';
+import {
+  createAutonomyPostTask,
+  runAutonomyTick,
+  scanAutonomyPacks,
+} from './autonomyScheduler';
+import type { AutonomyDb } from './autonomyStore';
 
 // opencode.ai 上游自标识：凭据表里存的是原始供应商地址，worker 直连时必须带
 // User-Agent + x-opencode-session（Go 防滥用要求），否则所有 LLM 调用到点必被拒。
@@ -3328,5 +3334,32 @@ export default {
     // 整轮出错时上游把原因放在返回值里（同一份也会经 onError 记一行）。这里不再重复
     // 打印，但要把它咽掉——CF 不看 scheduled 的返回值，往外抛只会变成一条没上下文的堆栈。
     await upstream.scheduled(event, env);
+
+    // 自主背景生活（见 autonomyScheduler.ts）：扫各角色的 fire_pack，到窗就自转发一条
+    // autonomous_round 任务。排在上游整轮之后，用这次 invocation 的余量；整段包一层
+    // try/catch——cron 没人看返回值，调度器自己挂了也只该是「这一分钟白跑」。
+    try {
+      const db = env.DB as unknown as AutonomyDb;
+      const scanned = await scanAutonomyPacks({ db, masterKey: env.AMSG_MASTER_KEY });
+      const result = await runAutonomyTick({
+        nowMs: Date.now(),
+        db,
+        packs: scanned.packs,
+        postTask: createAutonomyPostTask({
+          forward: (request) => upstream.fetch(request, env),
+          masterKey: env.AMSG_MASTER_KEY,
+          clientToken: env.AMSG_SERVER_TOKEN,
+        }),
+      });
+      if (result.built.length > 0 || scanned.skipped.length > 0) {
+        console.log('[amsg:autonomy]', {
+          built: result.built,
+          skipped: result.skipped,
+          unreadable: scanned.skipped,
+        });
+      }
+    } catch (error) {
+      console.error('[amsg:autonomy] 本轮调度失败（下一分钟重来）', error);
+    }
   },
 };

@@ -6813,6 +6813,7 @@ var readTaskKind = (metadata) => {
   const raw = metadata?.[AMSG_TASK_KIND_KEY];
   return typeof raw === "string" && raw ? raw : null;
 };
+var AMSG_BACKGROUND_JOB_SUBTYPE = "job";
 var AMSG_JOB_NAMESPACE = "amsg:job";
 var AMSG_JOB_TTL_DAYS = 3;
 var AMSG_JOB_ID_KEY = "amsgJobId";
@@ -7070,6 +7071,9 @@ function buildPlateConsolidateResult(args) {
     rooms: args.rooms.map((r) => ({ room: r.room, entryIds: r.entryIds }))
   };
 }
+
+// utils/airp/autonomySettings.ts
+var AUTONOMOUS_ROUND_KIND = "autonomous_round";
 
 // utils/localDate.ts
 function getLocalDateKey(date = /* @__PURE__ */ new Date()) {
@@ -7658,9 +7662,20 @@ var plateConsolidateHandler = {
 };
 
 // worker/amsg/src/fireKinds.ts
+var autonomousRoundPendingHandler = {
+  async beforeFire() {
+    return { skip: true, reason: "handler-pending-task-18" };
+  },
+  async llmOutput() {
+    return { decision: "skip-push", reason: "handler-pending-task-18" };
+  }
+};
 var FIRE_KIND_HANDLERS = Object.assign(
   /* @__PURE__ */ Object.create(null),
-  { [PLATE_CONSOLIDATE_KIND]: plateConsolidateHandler }
+  {
+    [PLATE_CONSOLIDATE_KIND]: plateConsolidateHandler,
+    [AUTONOMOUS_ROUND_KIND]: autonomousRoundPendingHandler
+  }
 );
 var KIND_FIRE_SCRATCH_KEY = "kindFire";
 var putKindFireStash = (scratch, kind, state) => {
@@ -13427,6 +13442,356 @@ function installOpencodeIdentityFetch(ua) {
   g.fetch = patched;
 }
 
+// worker/amsg/src/autonomyStore.ts
+var AUTONOMY_EXPERIENCE_TTL_MS = 7 * 24 * 60 * 60 * 1e3;
+var AUTONOMY_EXPERIENCES_DDL = `CREATE TABLE IF NOT EXISTS autonomy_experiences (
+  id TEXT PRIMARY KEY,
+  char_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  q TEXT,
+  note TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  importance INTEGER NOT NULL DEFAULT 0,
+  pushed INTEGER NOT NULL DEFAULT 0
+)`;
+var AUTONOMY_EXPERIENCES_INDEX_DDL = "CREATE INDEX IF NOT EXISTS idx_autonomy_experiences_char_created ON autonomy_experiences (char_id, created_at)";
+var AUTONOMY_STATE_DDL = `CREATE TABLE IF NOT EXISTS autonomy_state (
+  char_id TEXT PRIMARY KEY,
+  last_round_at INTEGER NOT NULL DEFAULT 0,
+  last_push_at INTEGER NOT NULL DEFAULT 0,
+  fail_streak INTEGER NOT NULL DEFAULT 0,
+  rounds_date TEXT NOT NULL DEFAULT '',
+  rounds_today INTEGER NOT NULL DEFAULT 0,
+  tokens_date TEXT NOT NULL DEFAULT '',
+  tokens_today INTEGER NOT NULL DEFAULT 0,
+  config_hash TEXT NOT NULL DEFAULT ''
+)`;
+var emptyAutonomyState = (charId) => ({
+  charId,
+  lastRoundAt: 0,
+  lastPushAt: 0,
+  failStreak: 0,
+  roundsDate: "",
+  roundsToday: 0,
+  tokensDate: "",
+  tokensToday: 0,
+  configHash: ""
+});
+var schemaReady = false;
+async function ensureAutonomySchema(db) {
+  if (schemaReady) return;
+  await db.prepare(AUTONOMY_EXPERIENCES_DDL).run();
+  await db.prepare(AUTONOMY_EXPERIENCES_INDEX_DDL).run();
+  await db.prepare(AUTONOMY_STATE_DDL).run();
+  schemaReady = true;
+}
+var readNumber = (value) => typeof value === "number" && Number.isFinite(value) ? value : 0;
+var readString = (value) => typeof value === "string" ? value : "";
+async function getAutonomyState(db, charId) {
+  const row = await db.prepare("SELECT char_id, last_round_at, last_push_at, fail_streak, rounds_date, rounds_today, tokens_date, tokens_today, config_hash FROM autonomy_state WHERE char_id = ?").bind(charId).first();
+  if (!row) return emptyAutonomyState(charId);
+  return {
+    charId,
+    lastRoundAt: readNumber(row.last_round_at),
+    lastPushAt: readNumber(row.last_push_at),
+    failStreak: readNumber(row.fail_streak),
+    roundsDate: readString(row.rounds_date),
+    roundsToday: readNumber(row.rounds_today),
+    tokensDate: readString(row.tokens_date),
+    tokensToday: readNumber(row.tokens_today),
+    configHash: readString(row.config_hash)
+  };
+}
+async function setAutonomyState(db, state) {
+  await db.prepare(
+    `INSERT INTO autonomy_state
+        (char_id, last_round_at, last_push_at, fail_streak, rounds_date, rounds_today, tokens_date, tokens_today, config_hash)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(char_id) DO UPDATE SET
+         last_round_at = excluded.last_round_at,
+         last_push_at = excluded.last_push_at,
+         fail_streak = excluded.fail_streak,
+         rounds_date = excluded.rounds_date,
+         rounds_today = excluded.rounds_today,
+         tokens_date = excluded.tokens_date,
+         tokens_today = excluded.tokens_today,
+         config_hash = excluded.config_hash`
+  ).bind(
+    state.charId,
+    state.lastRoundAt,
+    state.lastPushAt,
+    state.failStreak,
+    state.roundsDate,
+    state.roundsToday,
+    state.tokensDate,
+    state.tokensToday,
+    state.configHash
+  ).run();
+}
+async function cleanupAutonomyExperiences(db, beforeMs) {
+  const result = await db.prepare("DELETE FROM autonomy_experiences WHERE created_at < ?").bind(beforeMs).run();
+  const changes = result?.meta?.changes;
+  return typeof changes === "number" && Number.isFinite(changes) ? changes : 0;
+}
+
+// worker/amsg/src/autonomyScheduler.ts
+var AUTONOMY_FAIL_LIMIT = 3;
+var AUTONOMY_SKIP_REASONS = {
+  disabled: "autonomy-disabled",
+  cadenceInvalid: "cadence-invalid",
+  tzInvalid: "tz-invalid",
+  spacingWindow: "spacing-window",
+  dailyLimit: "daily-limit",
+  quietHours: "quiet-hours",
+  pushCooldown: "push-cooldown",
+  tokenBudget: "token-budget",
+  failMuted: "fail-muted",
+  postFailed: "post-failed"
+};
+var SCAN_UNREADABLE = "pack-unreadable";
+var charIdFromNamespace = (namespace) => {
+  if (typeof namespace !== "string") return null;
+  if (!namespace.startsWith(AMSG_STATE_NAMESPACE_PREFIX)) return null;
+  const charId = namespace.slice(AMSG_STATE_NAMESPACE_PREFIX.length);
+  return charId || null;
+};
+async function scanAutonomyPacks(args) {
+  const rows = await args.db.prepare("SELECT user_id, namespace, key, value FROM client_state WHERE key = ? OR key = ?").bind(AMSG_FIRE_PACK_KEY, AMSG_TOOL_PACK_KEY).all();
+  const byNamespace = /* @__PURE__ */ new Map();
+  for (const row of rows.results ?? []) {
+    const charId = charIdFromNamespace(row.namespace);
+    const userId = row.user_id;
+    if (!charId || typeof userId !== "string" || !userId) continue;
+    const bucket = byNamespace.get(charId) ?? { userId, rows: [] };
+    bucket.rows.push(row);
+    byNamespace.set(charId, bucket);
+  }
+  const packs = [];
+  const skipped = [];
+  const decrypt = async (userId, value) => {
+    if (typeof value !== "string" || !value) throw new Error("\u503C\u4E0D\u662F\u5B57\u7B26\u4E32");
+    const userKey = await deriveUserEncryptionKey(userId, args.masterKey);
+    return unpackStateValue(await decryptFromStorage(value, userKey));
+  };
+  for (const charId of [...byNamespace.keys()].sort()) {
+    const bucket = byNamespace.get(charId);
+    const packRow = bucket.rows.find((row) => row.key === AMSG_FIRE_PACK_KEY);
+    if (!packRow) continue;
+    let pack = null;
+    try {
+      pack = parseFirePack(await decrypt(bucket.userId, packRow.value));
+    } catch {
+      pack = null;
+    }
+    if (!pack) {
+      skipped.push({ charId, reason: SCAN_UNREADABLE });
+      continue;
+    }
+    let charName = "";
+    const toolRow = bucket.rows.find((row) => row.key === AMSG_TOOL_PACK_KEY);
+    if (toolRow) {
+      try {
+        charName = parseToolPack(await decrypt(bucket.userId, toolRow.value))?.charName ?? "";
+      } catch {
+        charName = "";
+      }
+    }
+    packs.push({ userId: bucket.userId, charId, charName, pack });
+  }
+  return { packs, skipped };
+}
+var parseHHMM = (value) => {
+  if (typeof value !== "string") return null;
+  const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value);
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+};
+var inQuietHours = (quiet, minutes) => {
+  const start = parseHHMM(quiet.start);
+  const end = parseHHMM(quiet.end);
+  if (start === null || end === null || start === end) return false;
+  return start < end ? minutes >= start && minutes < end : minutes >= start || minutes < end;
+};
+var stableStringify = (value) => {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  const record = value;
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(",")}}`;
+};
+var autonomyConfigHash = (autonomy) => stableStringify(autonomy);
+var HOUR_MS = 60 * 60 * 1e3;
+async function runAutonomyTick(input) {
+  const { db, packs, postTask } = input;
+  const rand = input.rand01 ?? Math.random;
+  const built = [];
+  const skipped = [];
+  await ensureAutonomySchema(db);
+  try {
+    await cleanupAutonomyExperiences(db, input.nowMs - AUTONOMY_EXPERIENCE_TTL_MS);
+  } catch (error) {
+    console.warn("[amsg:autonomy] \u8FC7\u671F\u7ECF\u5386\u6CA1\u6E05\u6389\uFF08\u4E0B\u4E00\u8DF3\u518D\u8BD5\uFF09", error);
+  }
+  for (const entry of packs) {
+    const { charId, userId, charName, pack } = entry;
+    const skip = (reason) => {
+      skipped.push({ charId, reason });
+    };
+    const autonomy = pack.autonomy;
+    if (!autonomy || autonomy.enabled !== true || autonomy.autonomyLevel < 1) {
+      skip(AUTONOMY_SKIP_REASONS.disabled);
+      continue;
+    }
+    const state = await getAutonomyState(db, charId);
+    const configHash = autonomyConfigHash(autonomy);
+    if (state.configHash !== configHash) {
+      state.failStreak = 0;
+      state.configHash = configHash;
+      await setAutonomyState(db, state);
+    }
+    const cadence = autonomy.cadence;
+    if (!cadence || !(cadence.minHours > 0) || !(cadence.maxHours >= cadence.minHours)) {
+      skip(AUTONOMY_SKIP_REASONS.cadenceInvalid);
+      continue;
+    }
+    const windowMs = (cadence.minHours + rand() * (cadence.maxHours - cadence.minHours)) * HOUR_MS;
+    const lastUserMessageAt = pack.lastUserMessageAt;
+    const userJustSpoke = typeof lastUserMessageAt === "number" && input.nowMs - lastUserMessageAt <= windowMs;
+    const roundDue = state.lastRoundAt === 0 || input.nowMs - state.lastRoundAt > windowMs;
+    if (userJustSpoke || !roundDue) {
+      skip(AUTONOMY_SKIP_REASONS.spacingWindow);
+      continue;
+    }
+    let dateKey;
+    let minutes;
+    try {
+      const parts = wallClockPartsInZone(input.nowMs, { tzId: pack.tzId });
+      dateKey = `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+      minutes = parts.hour * 60 + parts.minute;
+    } catch {
+      skip(AUTONOMY_SKIP_REASONS.tzInvalid);
+      continue;
+    }
+    if (state.roundsDate !== dateKey) {
+      state.roundsDate = dateKey;
+      state.roundsToday = 0;
+    }
+    if (state.roundsToday >= autonomy.maxRoundsPerDay) {
+      skip(AUTONOMY_SKIP_REASONS.dailyLimit);
+      continue;
+    }
+    if (autonomy.quietHours && inQuietHours(autonomy.quietHours, minutes)) {
+      skip(AUTONOMY_SKIP_REASONS.quietHours);
+      continue;
+    }
+    const cooldownMinutes = autonomy.push?.cooldownMinutes ?? 0;
+    if (state.lastPushAt > 0 && cooldownMinutes > 0 && input.nowMs - state.lastPushAt <= cooldownMinutes * 6e4) {
+      skip(AUTONOMY_SKIP_REASONS.pushCooldown);
+      continue;
+    }
+    if (state.tokensDate !== dateKey) {
+      state.tokensDate = dateKey;
+      state.tokensToday = 0;
+    }
+    const budget = autonomy.dailyTokenBudget;
+    if (typeof budget === "number" && budget > 0 && state.tokensToday >= budget) {
+      skip(AUTONOMY_SKIP_REASONS.tokenBudget);
+      continue;
+    }
+    if (state.failStreak >= AUTONOMY_FAIL_LIMIT) {
+      skip(AUTONOMY_SKIP_REASONS.failMuted);
+      continue;
+    }
+    state.lastRoundAt = input.nowMs;
+    state.roundsToday += 1;
+    state.roundsDate = dateKey;
+    await setAutonomyState(db, state);
+    try {
+      await postTask({ userId, charId, charName, pack });
+      built.push(charId);
+    } catch (error) {
+      console.warn("[amsg:autonomy] \u5EFA\u4EFB\u52A1\u5931\u8D25\uFF08\u4E0D\u56DE\u6EDA\uFF0C\u4E0B\u4E00\u6B21\u5230\u7A97\u518D\u8BD5\uFF09", charId, error);
+      skip(AUTONOMY_SKIP_REASONS.postFailed);
+    }
+  }
+  return { built, skipped };
+}
+var AUTONOMY_PLACEHOLDER_PROMPT = "AMSG2_PLACEHOLDER_PROMPT\uFF08\u81EA\u4E3B\u751F\u6D3B\u8FD9\u4E00\u8F6E\u7684\u63D0\u793A\u8BCD\u5230\u70B9\u7531 worker \u7684 autonomous_round handler \u4E0B\u53D1\uFF1B\u770B\u5230\u8FD9\u6761\u8BF4\u660E handler \u6CA1\u63A5\u4E0A\uFF09";
+var hexToBytes2 = (hex) => {
+  const out = new Uint8Array(new ArrayBuffer(hex.length / 2));
+  for (let i = 0; i < out.length; i += 1) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return out;
+};
+var bytesToBase642 = (bytes) => {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+};
+var encryptPayloadMirror = async (payload, hexKey) => {
+  const key = await crypto.subtle.importKey("raw", hexToBytes2(hexKey), { name: "AES-GCM" }, false, ["encrypt"]);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const plaintext = typeof payload === "string" ? payload : JSON.stringify(payload);
+  const sealed = new Uint8Array(await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv, tagLength: 128 },
+    key,
+    new TextEncoder().encode(plaintext)
+  ));
+  return {
+    iv: bytesToBase642(iv),
+    authTag: bytesToBase642(sealed.slice(sealed.length - 16)),
+    encryptedData: bytesToBase642(sealed.slice(0, sealed.length - 16))
+  };
+};
+async function buildAutonomyScheduleRequest(args) {
+  const charName = args.charName || args.charId;
+  const payload = {
+    contactName: charName,
+    messageType: "auto",
+    messageSubtype: AMSG_BACKGROUND_JOB_SUBTYPE,
+    // 立刻可跑：到期时间由服务端自己盖（跟客户端那条路同一个理由——客户端算出来的
+    // 时刻在路上就过去了，服务端一律打回「时间必须在未来」）。
+    immediate: true,
+    recurrenceType: "none",
+    metadata: {
+      charId: args.charId,
+      charName,
+      source: "active_msg_2",
+      [AMSG_TASK_KIND_KEY]: AUTONOMOUS_ROUND_KIND,
+      // Task 18 不需要 amsg:job 的一次性输入（只读 fire_pack + autonomy 表），
+      // 这个键照客户端口径带上，handler 不读它。
+      [AMSG_JOB_ID_KEY]: crypto.randomUUID()
+    },
+    credRefs: { chat: `char:${args.charId}/chat` },
+    messages: [{ role: "user", content: AUTONOMY_PLACEHOLDER_PROMPT }]
+  };
+  const envelope = await encryptPayloadMirror(
+    payload,
+    await deriveUserEncryptionKey(args.userId, args.masterKey)
+  );
+  const token = args.clientToken?.trim();
+  return new Request("https://internal/schedule-message", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-User-Id": args.userId,
+      "X-Payload-Encrypted": "true",
+      "X-Encryption-Version": "1",
+      ...token ? { "X-Client-Token": token } : {}
+    },
+    body: JSON.stringify(envelope)
+  });
+}
+var createAutonomyPostTask = (deps) => async ({ userId, charId, charName }) => {
+  const request = await buildAutonomyScheduleRequest({
+    userId,
+    charId,
+    charName,
+    masterKey: deps.masterKey,
+    clientToken: deps.clientToken
+  });
+  const response = await deps.forward(request);
+  if (!response.ok) throw new Error(`schedule-message \u62D2\u7EDD\uFF08HTTP ${response.status}\uFF09`);
+  return { status: response.status };
+};
+
 // worker/amsg/src/index.ts
 installOpencodeIdentityFetch("SullyOS-AmsgWorker/1.0 (+https://github.com/plasma953/SullyOS)");
 var getFireStash = (scratch) => scratch?.fire;
@@ -14752,7 +15117,7 @@ var inspectStorage = async (env, probe) => {
     if (!present.has("scheduled_messages")) {
       return { reachable: true, missingTables, missingColumns, schemaReady: false, schemaError };
     }
-    const schemaReady = schema ? missingTables.length === 0 && missingColumns.length === 0 : null;
+    const schemaReady2 = schema ? missingTables.length === 0 && missingColumns.length === 0 : null;
     const nowIso = (/* @__PURE__ */ new Date()).toISOString();
     const stats = await db.prepare(
       `SELECT COUNT(*) AS pending,
@@ -14763,7 +15128,7 @@ var inspectStorage = async (env, probe) => {
     const pushRow = present.has("push_subscriptions") ? await db.prepare("SELECT COUNT(*) AS n, MAX(updated_at) AS updatedAt FROM push_subscriptions").first() : null;
     return {
       reachable: true,
-      schemaReady,
+      schemaReady: schemaReady2,
       // null = 这次自查跑成了。有值时 schemaReady 必然是 null，界面照它选该说哪句话。
       schemaError,
       missingTables,
@@ -15076,6 +15441,29 @@ var src_default = {
       return;
     }
     await upstream.scheduled(event, env);
+    try {
+      const db = env.DB;
+      const scanned = await scanAutonomyPacks({ db, masterKey: env.AMSG_MASTER_KEY });
+      const result = await runAutonomyTick({
+        nowMs: Date.now(),
+        db,
+        packs: scanned.packs,
+        postTask: createAutonomyPostTask({
+          forward: (request) => upstream.fetch(request, env),
+          masterKey: env.AMSG_MASTER_KEY,
+          clientToken: env.AMSG_SERVER_TOKEN
+        })
+      });
+      if (result.built.length > 0 || scanned.skipped.length > 0) {
+        console.log("[amsg:autonomy]", {
+          built: result.built,
+          skipped: result.skipped,
+          unreadable: scanned.skipped
+        });
+      }
+    } catch (error) {
+      console.error("[amsg:autonomy] \u672C\u8F6E\u8C03\u5EA6\u5931\u8D25\uFF08\u4E0B\u4E00\u5206\u949F\u91CD\u6765\uFF09", error);
+    }
   }
 };
 export {
