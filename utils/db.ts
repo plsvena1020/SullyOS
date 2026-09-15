@@ -13,6 +13,7 @@ import {
 } from '../types';
 import type { ShoppingOrder } from './shoppingTypes';
 import type { AirpCommittedEvent } from './airp/commit';
+import type { AirpWorldDoc } from './airp/worldStore';
 import { exportPostOfficeLocal, importPostOfficeLocal } from './vrWorld/postOffice';
 import { exportSignalLocal, importSignalLocal } from './vrWorld/signal';
 import { exportLuckinLocal, importLuckinLocal } from './luckinMcpClient';
@@ -33,8 +34,8 @@ const DB_NAME = 'AetherOS_Data';
 // v72：提示词段落预设（Preset App）。独立 store，随备份动态枚举自动带走。
 // v73：购物订单（Shopping App）。独立 store，随备份动态枚举自动带走。
 // v74：塔罗占卜记录（Tarot App）。独立 store，随备份动态枚举自动带走。
-// v75：AIRP 世界事件流（airp_events）。独立 store，随备份动态枚举自动带走。
-const DB_VERSION = 75; // v75: AIRP 世界事件流（airp_events）
+// v75：AIRP 世界事件流（airp_events）+ AIRP 世界事实/知识（airp_world）。两个独立 store，随备份动态枚举自动带走。
+const DB_VERSION = 75; // v75: AIRP 世界事件流（airp_events）+ 世界事实（airp_world）
 
 const STORE_CHARACTERS = 'characters';
 const STORE_CHAR_GROUPS = 'character_groups'; // 角色分组定义（角色通过 groupId 指向；与群聊 groups 无关）
@@ -64,6 +65,7 @@ const STORE_BANK_DATA = 'bank_data';
 const STORE_SHOPPING_ORDERS = 'shopping_orders'; // v73: 购物订单
 const STORE_TAROT_READINGS = 'tarot_readings'; // v74: 塔罗占卜记录
 const STORE_AIRP_EVENTS = 'airp_events'; // v75: AIRP 世界事件流（角色导演提交的事件）
+const STORE_AIRP_WORLD = 'airp_world'; // v75: AIRP 世界事实/知识（按角色物化的当前世界状态，keyPath charId）
 const STORE_XHS_STOCK = 'xhs_stock';
 const STORE_XHS_ACTIVITIES = 'xhs_activities';
 const STORE_XHS_OWNED_POSTS = 'xhs_owned_posts';
@@ -373,11 +375,12 @@ export const openDB = (): Promise<IDBDatabase> => {
       createStore(STORE_SHOPPING_ORDERS, { keyPath: 'id' });
       // v74: 塔罗占卜记录（Tarot App）
       createStore(STORE_TAROT_READINGS, { keyPath: 'id' });
-      // v75: AIRP 世界事件流（角色导演提交的事件）
+      // v75: AIRP 世界事件流（角色导演提交的事件）+ 世界事实/知识（按角色物化）
       if (!db.objectStoreNames.contains(STORE_AIRP_EVENTS)) {
           const airpEventStore = db.createObjectStore(STORE_AIRP_EVENTS, { keyPath: 'id' });
           airpEventStore.createIndex('charId', 'charId', { unique: false });
       }
+      createStore(STORE_AIRP_WORLD, { keyPath: 'charId' });
 
       // ─── Memory Palace (记忆宫殿) stores ───
       if (!db.objectStoreNames.contains('memory_nodes')) {
@@ -2264,7 +2267,7 @@ export const DB = {
       });
   },
 
-  // ─── AIRP 世界事件流（v75）───
+  // ─── AIRP 世界事件流 + 世界事实/知识（v75）───
   getAirpEventsByChar: async (charId: string, limit = 50): Promise<AirpCommittedEvent[]> => {
       const db = await openDB();
       if (!db.objectStoreNames.contains(STORE_AIRP_EVENTS)) return [];
@@ -2304,6 +2307,29 @@ export const DB = {
           transaction.oncomplete = () => resolve();
           transaction.onerror = () => reject(transaction.error);
           transaction.onabort = () => reject(transaction.error || new Error('deleteAirpEvent aborted'));
+      });
+  },
+
+  getAirpWorld: async (charId: string): Promise<AirpWorldDoc | undefined> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_AIRP_WORLD)) return undefined;
+      return new Promise((resolve, reject) => {
+          const transaction = db.transaction(STORE_AIRP_WORLD, 'readonly');
+          const request = transaction.objectStore(STORE_AIRP_WORLD).get(charId);
+          request.onsuccess = () => resolve((request.result as AirpWorldDoc | undefined) ?? undefined);
+          request.onerror = () => reject(request.error);
+      });
+  },
+
+  saveAirpWorld: async (doc: AirpWorldDoc): Promise<void> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_AIRP_WORLD)) return;
+      return new Promise((resolve, reject) => {
+          const transaction = db.transaction(STORE_AIRP_WORLD, 'readwrite');
+          transaction.objectStore(STORE_AIRP_WORLD).put(doc);
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => reject(transaction.error);
+          transaction.onabort = () => reject(transaction.error || new Error('saveAirpWorld aborted'));
       });
   },
 
@@ -3299,7 +3325,7 @@ export const DB = {
           });
       };
 
-      const [characters, characterGroups, messages, themes, emojis, emojiCategories, assets, galleryImages, userProfiles, diaries, tasks, anniversaries, roomTodos, roomNotes, groups, journalStickers, socialPosts, courses, games, worldbooks, storyTheaters, storyTheaterPresets, storyTheaterMasks, novels, bankTx, bankData, xhsActivities, xhsOwnedPosts, xhsStockImages, songs, quizzes, tarotReadings, shoppingOrders, guidebookSessions, scheduledMessages, lifeSimStates, handbooks, trackers, trackerEntries, hotNewsSnapshots, vrNovels, vrAnnotations, customCreatorParts, vrMusic, vrGuestbook, vrScripts, vrStagedPlays, vrPresets, vrLetters, vrSettings, worlds, worldEpisodes, lifeRecords, medPlans, lifeRecordSettings, promptPresets, airpEvents] = await Promise.all([
+      const [characters, characterGroups, messages, themes, emojis, emojiCategories, assets, galleryImages, userProfiles, diaries, tasks, anniversaries, roomTodos, roomNotes, groups, journalStickers, socialPosts, courses, games, worldbooks, storyTheaters, storyTheaterPresets, storyTheaterMasks, novels, bankTx, bankData, xhsActivities, xhsOwnedPosts, xhsStockImages, songs, quizzes, tarotReadings, shoppingOrders, guidebookSessions, scheduledMessages, lifeSimStates, handbooks, trackers, trackerEntries, hotNewsSnapshots, vrNovels, vrAnnotations, customCreatorParts, vrMusic, vrGuestbook, vrScripts, vrStagedPlays, vrPresets, vrLetters, vrSettings, worlds, worldEpisodes, lifeRecords, medPlans, lifeRecordSettings, promptPresets, airpEvents, airpWorlds] = await Promise.all([
           getAllFromStore(STORE_CHARACTERS),
           getAllFromStore(STORE_CHAR_GROUPS),
           getAllFromStore(STORE_MESSAGES),
@@ -3357,6 +3383,7 @@ export const DB = {
           getAllFromStore(STORE_LIFE_SETTINGS),
           getAllFromStore(STORE_PROMPT_PRESETS),
           getAllFromStore(STORE_AIRP_EVENTS),
+          getAllFromStore(STORE_AIRP_WORLD),
       ]);
 
       const userProfile = userProfiles.length > 0 ? {
@@ -3406,6 +3433,7 @@ export const DB = {
           worlds,
           worldEpisodes,
           airpEvents,
+          airpWorlds,
           worldHomeLocal: exportWorldHomeLocal(), // 家园本机配置：全局 API + 文风收藏（存 localStorage）
           luckinLocal: exportLuckinLocal(),       // 瑞幸 token + 启用状态（存 localStorage）
           mcdLocal: exportMcdLocal(),             // 麦当劳 token + 启用状态（存 localStorage）
@@ -3460,6 +3488,7 @@ export const DB = {
           STORE_PROMPT_PRESETS, // v72 提示词段落预设（Preset App）—— importFullData 侧白名单
           STORE_SHOPPING_ORDERS, // v73 购物订单（Shopping App）
           STORE_AIRP_EVENTS, // v75 AIRP 世界事件流 —— importFullData 侧白名单
+          STORE_AIRP_WORLD, // v75 AIRP 世界事实/知识（物化缓存）—— importFullData 侧白名单
       ].filter(name => db.objectStoreNames.contains(name));
 
       const hasStore = (storeName: string) => availableStores.includes(storeName);
@@ -3559,6 +3588,7 @@ export const DB = {
           data.worlds !== undefined,
           data.worldEpisodes !== undefined,
           data.airpEvents !== undefined,
+          data.airpWorlds !== undefined,
           (data as any).worldHomeLocal !== undefined,
           (data as any).luckinLocal !== undefined,
           (data as any).mcdLocal !== undefined,
@@ -3874,6 +3904,10 @@ export const DB = {
           await clearAndAdd(STORE_AIRP_EVENTS, data.airpEvents, 'AIRP 世界事件流', false);
           data.airpEvents = undefined as any;
       }, data.airpEvents?.length || 0);
+      await runSection('AIRP 世界事实/知识', data.airpWorlds !== undefined, async () => {
+          await clearAndAdd(STORE_AIRP_WORLD, data.airpWorlds, 'AIRP 世界事实/知识', false);
+          data.airpWorlds = undefined as any;
+      }, data.airpWorlds?.length || 0);
       await runSection('家园本机配置', (data as any).worldHomeLocal !== undefined, async () => {
           importWorldHomeLocal((data as any).worldHomeLocal); // 全局 API + 文风收藏
           (data as any).worldHomeLocal = undefined;
