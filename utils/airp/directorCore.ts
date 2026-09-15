@@ -122,10 +122,26 @@ function extractJsonCandidate(raw: string): JsonCandidate {
   return { found: false };
 }
 
+/**
+ * Reports whether `value` satisfies the director-output shape, tolerating absent
+ * `beats` / `toolIntents` / `proposedEvents` / `allowedDisclosures` /
+ * `forbiddenAssumptions` / `commitCandidates` arrays.
+ *
+ * NOTE: this guard does NOT materialize the `[]` defaults — `AirpDirectorOutput`
+ * declares those arrays as required, but a value that passes this guard may still
+ * be missing them. A passing guard is therefore NOT proof that the array fields
+ * exist, and code like `if (validateAirpDirectorOutput(x)) { x.beats.map(...) }`
+ * can throw at runtime. To obtain an object whose arrays are guaranteed present,
+ * consume the return value of `parseAirpDirectorOutput` instead.
+ */
 export function validateAirpDirectorOutput(value: unknown): value is AirpDirectorOutput {
   return normalizeAirpDirectorOutput(value) !== null;
 }
 
+/**
+ * Returns the normalized `AirpDirectorOutput` (with all six array fields defaulted
+ * to `[]` when absent) or `null` on any failure. Never throws.
+ */
 export function parseAirpDirectorOutput(raw: unknown): AirpDirectorOutput | null {
   if (isPlainObject(raw)) return normalizeAirpDirectorOutput(raw);
   if (typeof raw !== 'string') return null;
