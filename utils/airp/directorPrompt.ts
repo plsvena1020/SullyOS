@@ -50,6 +50,7 @@ function renderFactDiscipline(): string[] {
 function renderScene(snapshot: AirpRuntimeSnapshot): string[] {
   const { scene } = snapshot;
   const lines: string[] = ['当前场景：'];
+  lines.push(`- 时间：${new Date(scene.now).toISOString()}（${scene.tzId}）`);
   if (isPresentText(scene.locationLabel)) lines.push(`- 地点：${scene.locationLabel}`);
   if (isPresentText(scene.activity)) lines.push(`- 活动：${scene.activity}`);
   if (isPresentNumber(scene.energy)) lines.push(`- 精力：${scene.energy}`);

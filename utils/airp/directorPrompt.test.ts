@@ -114,6 +114,16 @@ describe('buildDirectorSystemPrompt — section order (behavior 1)', () => {
     }
   });
 
+  it('renders the scene time line with ISO time and tzId', () => {
+    const now = Date.UTC(2026, 0, 2, 3, 4, 5);
+    const output = buildDirectorSystemPrompt(
+      makeSnapshot({ scene: { now, tzId: 'Asia/Shanghai' } }),
+    );
+
+    expect(output).toContain('- 时间：2026-01-02T03:04:05.000Z（Asia/Shanghai）');
+    expect(output).not.toContain('undefined');
+  });
+
   it('renders scene fields, fact lines, thread lines and capabilities', () => {
     const output = buildDirectorSystemPrompt(snapshot);
 
