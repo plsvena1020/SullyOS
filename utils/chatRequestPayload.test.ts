@@ -237,6 +237,38 @@ describe('timelyByWorker —— 时效段交给 worker，前端这份不重复�
     });
 });
 
+describe('airpInstruction —— AIRP 导演《演出指令》插在钢印之前', () => {
+    it('有指令时进 volatileTail，且排在钢印「回到你自己」之前', async () => {
+        const payload = await buildChatRequestPayload({
+            ...baseInput(),
+            airpInstruction: '[System: 演出指令]\n场景目标：保持克制',
+        });
+        const tail = String(payload.fullMessages[payload.volatileTailIndex]?.content ?? '');
+        expect(tail).toContain('[System: 演出指令]');
+        // 钢印仍是最后一眼：指令必须排在它前面。
+        expect(tail.indexOf('[System: 演出指令]')).toBeLessThan(tail.indexOf('回到你自己'));
+    });
+
+    it('空串与不传字段的构建结果一致（fullMessages + systemPrompt）', async () => {
+        const input = baseInput();
+        const withoutField = await buildChatRequestPayload({ ...input });
+        const withEmpty = await buildChatRequestPayload({ ...input, airpInstruction: '' });
+        expect(withEmpty.systemPrompt).toEqual(withoutField.systemPrompt);
+        expect(withEmpty.fullMessages).toEqual(withoutField.fullMessages);
+    });
+
+    it('字段缺省时输出与历史行为一致', async () => {
+        const input = baseInput();
+        const absent = await buildChatRequestPayload({ ...input });
+        const explicitUndefined = await buildChatRequestPayload({ ...input, airpInstruction: undefined });
+        expect(explicitUndefined.systemPrompt).toEqual(absent.systemPrompt);
+        expect(explicitUndefined.fullMessages).toEqual(absent.fullMessages);
+        expect(absent.fullMessages.some(
+            (m) => typeof m.content === 'string' && m.content.includes('[System: 演出指令]'),
+        )).toBe(false);
+    });
+});
+
 describe('volatileTailIndex —— 想插在钢印之前的块按它定位', () => {
     it('指向易变尾段那条 system，「回到你自己」在它末尾', async () => {
         const payload = await buildChatRequestPayload({ ...baseInput() });

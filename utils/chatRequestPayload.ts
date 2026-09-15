@@ -110,6 +110,12 @@ export interface BuildChatPayloadInput {
      * 出现两个钟、两份热搜、两套工具名。
      */
     timelyByWorker?: boolean;
+    /**
+     * AIRP 导演本轮的《演出指令》块（utils/airp/directorPrompt renderDirectorInstruction）。
+     * 拼在易变尾段的钢印之前：导演要控场，但「回到你自己」仍必须是模型开口前最后一眼。
+     * 空串 / 缺省 = 与历史输出逐字一致（AIRP 关闭角色的零影响保证）。
+     */
+    airpInstruction?: string;
 }
 
 export interface BuildChatPayloadResult {
@@ -487,6 +493,12 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
                 userProfile?.name || '用户',
             );
         }
+    }
+
+    // AIRP《演出指令》由导演产出，插在钢印之前：既拿到 recency 注意力，又不改「回到你自己」
+    // 永远最后一句的约定。空串 / undefined 一律不拼，保证 AIRP 关闭时输出与历史逐字一致。
+    if (typeof input.airpInstruction === 'string' && input.airpInstruction.length > 0) {
+        volatileTail += '\n\n' + input.airpInstruction;
     }
 
     // 「关于对方的表达」+「回到你自己」必须是易变尾段的最后内容：修复旧版把双语/HTML/

@@ -68,6 +68,11 @@ export interface DevDebugFlags {
      * 纯观察不改行为，所以不计进浮球的「生效开关数」红点——它自己就有个可见的角标。
      */
     amsg2Panel: boolean;
+    /**
+     * AIRP 导演诊断日志（AIRP 测试期排障用）。开启后记录导演输出摘要与快照 facts 条数；
+     * 只影响日志，不改任何生成行为，且绝不含 apiKey。
+     */
+    airpDirectorTrace: boolean;
 }
 
 export interface DevDebugLogEntry {
@@ -102,6 +107,7 @@ export const DEFAULT_DEV_DEBUG_FLAGS: DevDebugFlags = {
     captureLogs: [],
     exposeLogDetail: false,
     amsg2Panel: false,
+    airpDirectorTrace: false,
 };
 
 const MAX_LOG_ENTRIES = 100;
@@ -156,6 +162,7 @@ function normalizeFlags(value: unknown): DevDebugFlags {
         captureLogs,
         exposeLogDetail: source.exposeLogDetail === true,
         amsg2Panel: source.amsg2Panel === true,
+        airpDirectorTrace: source.airpDirectorTrace === true,
     };
 }
 
@@ -275,6 +282,10 @@ export function isEmotionEvalSkipped(): boolean {
 
 export function isSystemMessageMergeEnabled(): boolean {
     return readDevDebugFlags().mergeSystemMessages;
+}
+
+export function isAirpDirectorTraceEnabled(): boolean {
+    return readDevDebugFlags().airpDirectorTrace;
 }
 
 export function isCaptureEnabled(category: DevDebugCaptureCategory): boolean {

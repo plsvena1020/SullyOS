@@ -54,12 +54,18 @@ import { AMSG2_TOOLS, AMSG2_TOOL_NAMES, createAmsg2ToolSession, executeAmsg2Tool
 import { bleEngine } from '../utils/bleEngine';
 import { BT_TOOL_NAMES, BT_TOOLS, executeBleSendCommand } from '../utils/bleToolBridge';
 import { shouldSendThinkingParams } from '../utils/thinkingGate';
+import { dispatchAgenticTool } from '../utils/agenticTools';
+import { buildAirpRuntimeSnapshot } from '../utils/airp/snapshot';
+import { runAirpDirector } from '../utils/airp/directorClient';
+import { renderDirectorInstruction } from '../utils/airp/directorPrompt';
+import { createChatToolExecutor } from '../utils/airp/toolExecutor';
+import type { AirpDirectorOutput } from '../utils/airp/types';
 import { buildClaudeProxyCompatibilityBody, shouldRetryClaudeProxyCompatibility } from '../utils/claudeProxyCompat';
 import { routeMiniAppToolCall } from '../utils/miniAppToolRoute';
 import { applyEmotionEvalRaw, extractAssistantText } from '../utils/emotionApply';
 import { announceChatGen, CHAT_GEN_EVENTS } from '../utils/chatGenEvents';
 import { shouldRequestAmbient, buildAmbientEvalSection } from '../utils/roomAmbient';
-import { isEmotionEvalSkipped } from '../utils/devDebug';
+import { isEmotionEvalSkipped, isAirpDirectorTraceEnabled } from '../utils/devDebug';
 import {
     computeContextRangeSnapshot,
     getMemoryPalaceHighWaterMarkForContext,
@@ -537,6 +543,10 @@ export const useChatAI = ({
     const commentAuthorNameCacheRef = useRef<Map<string, string>>(new Map());
     // commentId→parentCommentId 缓存，供 reply_comment 传递 parent_comment_id（xiaohongshu-mcp PR#440+）
     const commentParentIdCacheRef = useRef<Map<string, string>>(new Map());
+    // AIRP 导演本轮产出的完整 output。阶段一只存不读（后续阶段消费它做事件/状态提交）；
+    // 放 hook 顶层是硬要求——useRef 只能在渲染期调用，塞进 triggerAI 会变成非法 hook 调用。
+    // 每轮 triggerAI 开头清空，AIRP 未开启时永远保持 undefined。
+    const airpDirectorOutputRef = useRef<AirpDirectorOutput | undefined>(undefined);
 
     const updateTokenUsage = (data: any, msgCount: number, pass: string) => {
         if (data.usage?.total_tokens) {
@@ -792,12 +802,70 @@ export const useChatAI = ({
                 reason: instantChatRoute ? null : (instantChatReadiness.reason ?? null),
             });
 
+            // ─── AIRP 导演（阶段一）────────────────────────────────────────────
+            // 仅对开启 AIRP 的角色多跑一次导演 LLM：产出《演出指令》插进本轮 prompt。
+            // 关闭（char.airp?.enabled 假）= 整段跳过，零额外调用，payload 与历史逐字一致。
+            // 任何失败都只降级、绝不打断主聊天；工具执行只在 runAirpDirector 内部发生。
+            let airpInstruction: string | undefined;
+            airpDirectorOutputRef.current = undefined;
+            if (char.airp?.enabled) {
+                const extractMsgText = (content: any): string => {
+                    if (typeof content === 'string') return content;
+                    if (Array.isArray(content)) {
+                        return content.map((part: any) => {
+                            if (part?.type === 'text') return part.text || '';
+                            if (part?.type === 'image_url') return '[图片]';
+                            return '';
+                        }).filter(Boolean).join(' ');
+                    }
+                    try { return JSON.stringify(content) ?? ''; } catch { return ''; }
+                };
+                try {
+                    const airpTail = contextMsgs.slice(-8).map((m) => extractMsgText(m.content).slice(0, 500));
+                    const latestUser = [...contextMsgs].reverse().find((m) => m.role === 'user');
+                    const latestUserMessage = latestUser ? extractMsgText(latestUser.content) : '';
+                    const snapshot = await buildAirpRuntimeSnapshot(char, { recentDialogueTail: airpTail });
+                    const run = await runAirpDirector(
+                        char,
+                        { baseUrl, apiKey: effectiveApi.apiKey, model: char.airp?.directorModel || effectiveApi.model },
+                        snapshot,
+                        latestUserMessage,
+                        airpTail,
+                        {
+                            // 阶段一 ctx 刻意最小：接线的 recall/web_search/read_note 都不读 XHS 系列字段，
+                            // 也就不把 XHS 缓存跟后处理共享（等 XHS 家族能力接线时再议）。
+                            executor: createChatToolExecutor(dispatchAgenticTool, { char: charForGen, userProfile, realtimeConfig }),
+                        },
+                    );
+                    if (run.ok && run.output) {
+                        const block = renderDirectorInstruction(run.output);
+                        if (block) airpInstruction = block;
+                        airpDirectorOutputRef.current = run.output;
+                        if (isAirpDirectorTraceEnabled()) {
+                            console.log('[airp] director ok', {
+                                facts: snapshot.facts.length,
+                                sceneGoal: run.output.sceneGoal,
+                                replyIntent: run.output.replyIntent,
+                                beats: run.output.beats.length,
+                                toolIntents: run.output.toolIntents.length,
+                                hasInstruction: !!block,
+                            });
+                        }
+                    } else if (isAirpDirectorTraceEnabled()) {
+                        console.warn('[airp] director degraded:', run.error);
+                    }
+                } catch (e) {
+                    console.warn('[airp] snapshot/director degraded', e);
+                }
+            }
+
             const payload = await stageT('payload', buildChatRequestPayload({
                 char: charForGen, userProfile, groups, emojis, categories,
                 historyMsgs: contextMsgs,
                 recentMsgsHint: currentMsgs,
                 contextLimit: limit,
                 realtimeConfig,
+                airpInstruction,
                 innerState: skipEmotionInjection ? undefined : (evolvedNarrative || undefined),
                 userListeningContext: (() => {
                     if (music.current && music.playing && music.lyric.length > 0) {
