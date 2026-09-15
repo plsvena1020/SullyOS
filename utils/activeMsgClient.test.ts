@@ -1053,6 +1053,34 @@ describe('buildFirePack 的时区参照系与模板（①）', () => {
     expect((await pack(baseChar())).template).not.toContain('你身处');
   });
 
+  // Task 15：自主设置随包上云。worker 侧调度器只读 pack.autonomy，不回读 char.airp，
+  // 所以「有效开关 + 运行时面（level/mcpAllow/writable）+ 终值」都得在这份包里。
+  it('开了自主的角色：包带终值 + 反归一化的 level/mcpAllow/writable', async () => {
+    const out = await pack(baseChar({
+      airp: {
+        enabled: true, autonomyLevel: 3, capabilities: [], mcpAllow: ['fs'],
+        writable: true, version: 1,
+        autonomy: { enabled: true, templateId: 'night_player', overrides: {}, version: 1 },
+      },
+    }));
+    expect(out.autonomy?.enabled).toBe(true);
+    expect(out.autonomy?.autonomyLevel).toBe(3);
+    expect(out.autonomy?.mcpAllow).toEqual(['fs']);
+    expect(out.autonomy?.writable).toBe(true);
+    // 模板终值也一并烤进包（战斗向转述 + 口语 note）。
+    expect(out.autonomy?.retell.style).toBe('battle');
+    expect(out.autonomy?.noteStyleHint).toContain('深夜');
+  });
+
+  // 关键取舍：字段「总是写」，不是「开着才写」。省略的语义是「未知/旧包」，
+  // 而 enabled=false 才是「用户明确关掉了自主」——两者在云端必须分得开。
+  it('没配自主的角色也照写 autonomy（enabled=false），而不是省略', async () => {
+    const out = await pack(baseChar());
+    expect(out.autonomy).toBeDefined();
+    expect(out.autonomy?.enabled).toBe(false);
+    expect(out.autonomy?.cadence).toEqual({ minHours: 2, maxHours: 4 });
+  });
+
   // 回归守卫：1.0 提示块里「生活在继续」和「别查岗」两行。少了它们，连发几条的
   // 主动消息容易退化成催回复和喝水早睡式说教刷屏。
   it('1.0 提示块带「日子也在往前过」与「关心别变成查岗」', async () => {

@@ -178,6 +178,65 @@ describe('markAmsgStateDirty 同步门', () => {
     expect(ActiveMsgClient.syncCharFirePacks).not.toHaveBeenCalled();
   });
 
+  // Task 15 / A3b：门被拓宽。开了自主背景生活的角色即便一条任务都没排，聊完一轮也要
+  // 重传 fire_pack——自主调度器要的人格尾巴与设置都活在包里，不新鲜就不会醒。
+  const charWithAutonomy = (id: string, over: Record<string, unknown> = {}): CharacterProfile => ({
+    id, name: id,
+    activeMsg2Config: { enabled: true, tasks: [] },
+    airp: {
+      enabled: true, autonomyLevel: 2, capabilities: [], mcpAllow: [],
+      writable: false, version: 1,
+      autonomy: { enabled: true, templateId: 'custom', overrides: {}, version: 1 },
+    },
+    ...over,
+  } as unknown as CharacterProfile);
+
+  it('开了自主但没排任务的角色，聊完一轮也重传（拓宽后的门）', async () => {
+    markAmsgStateDirty(snapshotOf(charWithAutonomy(nextCharId())));
+    await vi.advanceTimersByTimeAsync(FLUSH_DEBOUNCE_MS);
+    expect(ActiveMsgClient.syncCharFirePacks).toHaveBeenCalledTimes(1);
+  });
+
+  // 旧用例（fixed 任务、没开自主）断言「忽略」不受影响；这里钉住拓宽后的新语义：
+  // fixed 任务照旧不需要 fire_pack，但同角色开了自主就得传。
+  it('只有 fixed 任务 + 开了自主 → 现在也重传', async () => {
+    const id = nextCharId();
+    const char = charWithAutonomy(id, {
+      activeMsg2Config: {
+        enabled: true,
+        tasks: [{
+          taskUuid: `${id}-uuid`, mode: 'fixed',
+          firstSendTime: new Date(Date.now() + H).toISOString(),
+          recurrenceType: 'none', source: 'user', status: 'scheduled', createdAt: Date.now(),
+        }],
+      },
+    });
+    markAmsgStateDirty(snapshotOf(char));
+    await vi.advanceTimersByTimeAsync(FLUSH_DEBOUNCE_MS);
+    expect(ActiveMsgClient.syncCharFirePacks).toHaveBeenCalledTimes(1);
+  });
+
+  it('自主未生效（功能开关关 / L0 静默 / AIRP 总闸关）且没任务 → 照旧忽略', async () => {
+    const variants: Array<Record<string, unknown>> = [
+      { autonomy: { enabled: false, templateId: 'custom', overrides: {}, version: 1 } },
+      { autonomyLevel: 0 },
+      { enabled: false },
+    ];
+    for (const airpOver of variants) {
+      const char = charWithAutonomy(nextCharId(), {
+        airp: {
+          enabled: true, autonomyLevel: 2, capabilities: [], mcpAllow: [],
+          writable: false, version: 1,
+          autonomy: { enabled: true, templateId: 'custom', overrides: {}, version: 1 },
+          ...airpOver,
+        },
+      });
+      markAmsgStateDirty(snapshotOf(char));
+      await vi.advanceTimersByTimeAsync(IDLE_WINDOW_MS);
+      expect(ActiveMsgClient.syncCharFirePacks).not.toHaveBeenCalled();
+    }
+  });
+
   it('没配 workerUrl → 清空脏标记且不发请求', async () => {
     (ActiveMsgStore.getGlobalConfig as any).mockResolvedValue({ workerUrl: '' });
     const char = charWithAiTask(nextCharId());

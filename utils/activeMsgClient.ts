@@ -23,6 +23,7 @@ import {
   resolveExpirePolicy, toDatetimeLocalValue,
 } from './amsg2Tasks';
 import { AMSG_CHAT_PRESENCE_KEY, AmsgChatPresence } from './amsgChatPresence';
+import { mergeAutonomySettings } from './airp/autonomySettings';
 import {
   AmsgDiagnosticsProbe, AmsgFailKind, describeAmsgFetchFailure, parseAmsgDebugReport,
 } from './amsgDiagnostics';
@@ -826,6 +827,11 @@ export const buildFirePack = async (
     // 「此刻在做什么」也带原始素材：整天的作息表 + 歌单抽样池，worker 到点按 tzId
     // 挑当前时段。烤成文字的话，凌晨三点触发时角色会说「我在健身房呢」。
     scene,
+    // 自主背景生活的设置终值 + 运行时面（见 AmsgFirePack.autonomy 注释）。
+    // 无条件写：worker 侧调度器靠包内 enabled 自判，缺字段的语义是「未知/旧包」而不是
+    // 「用户关了自主」——省略会让「设置没变过」和「设置被关掉」在云端长得一样。
+    // mergeAutonomySettings 本地纯函数、无 IO，打包路径不受影响。
+    autonomy: mergeAutonomySettings(char),
   };
 };
 

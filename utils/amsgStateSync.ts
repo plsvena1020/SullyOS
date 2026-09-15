@@ -7,7 +7,7 @@
  * client_state；切后台（visibilitychange→hidden）也冲刷一次——iOS 只给几秒存活窗口，
  * 必须一次请求写完。
  *
- * 只对「已排程 AI 模式 amsg2 任务」的角色生效，其余 markDirty 直接忽略。
+ * 只对「已排程 AI 模式 amsg2 任务」或「开了自主背景生活」的角色生效，其余 markDirty 直接忽略。
  *
  * 脏标记有一份极轻量的 localStorage 底账（只存 charId 数组，不存快照本体）：打脏时写入、
  * 上传成功后移除。请求还没落地（在飞、或躺在退避重排里）就被杀进程的话，下次启动 OSContext 调 resumePendingAmsgStateSync
@@ -32,6 +32,7 @@ import { APIConfig, CharacterProfile, GroupProfile, RealtimeConfig, UserProfile 
 import { ActiveMsgClient, isLlmCredentialsReady, owesInstantChatReply } from './activeMsgClient';
 import { ActiveMsgStore } from './activeMsgStore';
 import { hasActiveAiTask } from './amsg2Tasks';
+import { isAutonomyActive } from './airp/autonomySettings';
 import { AmsgChatPresence, CHAT_PRESENCE_HEARTBEAT_MS } from './amsgChatPresence';
 import {
   buildCharChatCredRow,
@@ -143,7 +144,10 @@ const bindLifecycleListener = () => {
 /** 一轮聊完（或角色资料变更后）打脏标记；非 amsg2 AI 任务角色直接忽略。 */
 export const markAmsgStateDirty = (snapshot: AmsgSyncSnapshot) => {
   const config = snapshot.char.activeMsg2Config;
-  if (!config?.enabled || !hasActiveAiTask(config)) return;
+  // 打开自主背景生活的角色即便没排任务也要重传：人格尾巴与设置都靠 fire_pack 保持新鲜。
+  if (!config?.enabled || (!hasActiveAiTask(config) && !isAutonomyActive(snapshot.char))) {
+    return;
+  }
 
   dirty.set(snapshot.char.id, snapshot);
   persistDirtyMark(snapshot.char.id);

@@ -16,6 +16,7 @@
  */
 
 import type { ActiveMsg2TaskRecord } from '../types';
+import type { ResolvedAirpAutonomy } from './airp/autonomySettings';
 import { renderFireSceneBlock, type AmsgFireScene } from './amsgFireScene';
 
 export const AMSG_STATE_NAMESPACE_PREFIX = 'amsg:char:';
@@ -419,6 +420,15 @@ export interface AmsgFirePack {
    * 的容错方向是 fail-open（字段一丢开关就被静默重新打开），宁可整包打回。
    */
   selfScheduleEnabled: boolean;
+  /**
+   * 自主背景生活的运行时面（终值），由 buildFirePack 在打包时反归一化写入。
+   *
+   * 可选 = 「不带即合法」：旧 worker 读不到这个字段就当自主关闭，整包照样能 fire
+   * （所以 FIRE_PACK_VERSION 不 bump）。worker 侧调度器只看 pack.autonomy，绝不回读
+   * char.airp——设置终值（enabled / cadence / quietHours / retell / push / budget）与
+   * 运行时面（autonomyLevel / mcpAllow / writable）都在这里。
+   */
+  autonomy?: ResolvedAirpAutonomy;
 }
 
 // ─── 按角色参照系渲染时间（②：worker 给角色看的一切时间只此一份） ───
