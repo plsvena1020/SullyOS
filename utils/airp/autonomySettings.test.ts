@@ -100,6 +100,24 @@ describe('单项覆盖：覆盖 > 模板 > 常量', () => {
     const out = withTemplate('morning_brief', { quietHours: { start: '01:00', end: '07:30' } });
     expect(out.quietHours).toEqual({ start: '01:00', end: '07:30' });
   });
+
+  it('quietHours 显式 null = 清掉模板预填（跳过模板兜底）', () => {
+    const out = withTemplate('morning_brief', { quietHours: null });
+    expect(out.quietHours).toBeUndefined();
+    // 只清静默段，其余字段照旧跟随模板
+    expect(out.retell.style).toBe('brief');
+    expect(out.cadence).toEqual({ minHours: 2, maxHours: 4 });
+  });
+
+  it('quietHours 缺省（undefined / 不写）仍跟随模板', () => {
+    expect(withTemplate('morning_brief', { quietHours: undefined }).quietHours)
+      .toEqual({ start: '23:00', end: '06:00' });
+    expect(withTemplate('morning_brief').quietHours).toEqual({ start: '23:00', end: '06:00' });
+  });
+
+  it('quietHours null 且模板本来就没有 → 依旧缺省', () => {
+    expect(withTemplate('custom', { quietHours: null }).quietHours).toBeUndefined();
+  });
 });
 
 describe('非法值回落', () => {

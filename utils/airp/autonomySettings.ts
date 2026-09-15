@@ -211,7 +211,10 @@ export function mergeAutonomySettings(
   const level = toAutonomyLevel(airp.autonomyLevel);
 
   const cadence = toCadence(overrides.cadence) ?? toCadence(template.cadence) ?? DEFAULT_CADENCE;
-  const quietHours = toQuietHours(overrides.quietHours) ?? toQuietHours(template.quietHours);
+  // 显式 null = 「不要静默段」的哨兵：跳过模板兜底（undefined / 缺省才跟随模板）。
+  const quietHours = overrides.quietHours === null
+    ? undefined
+    : toQuietHours(overrides.quietHours) ?? toQuietHours(template.quietHours);
   const maxRoundsPerDay = toPositiveInt(overrides.maxRoundsPerDay)
     ?? toPositiveInt(template.maxRoundsPerDay) ?? DEFAULT_MAX_ROUNDS_PER_DAY;
   // 显式给了数组（哪怕是空数组）就认它——空数组是「清掉模板预填」的合法表达。

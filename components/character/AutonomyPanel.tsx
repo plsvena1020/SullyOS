@@ -434,7 +434,8 @@ const AutonomyPanel: React.FC<AutonomyPanelProps> = ({ char, onChange }) => {
   };
   const clearQuiet = () => {
     setQuietDraft({ start: '', end: '' });
-    emitOverrides({ quietHours: undefined });
+    // null 是显式哨兵：连模板预填的静默段一起清掉（undefined 会被 merge 当成「跟随模板」）。
+    emitOverrides({ quietHours: null });
   };
 
   // 兴趣词 / 避开词
@@ -523,6 +524,17 @@ const AutonomyPanel: React.FC<AutonomyPanelProps> = ({ char, onChange }) => {
         <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-full border border-violet-200 bg-violet-50 text-violet-600 font-bold">
           {title}
         </span>
+      </div>
+
+      {/* AIRP 总闸：导演与自主背景生活都归它管 */}
+      <div className="flex items-center justify-between gap-3 bg-violet-50 border border-violet-100 rounded-2xl px-3 py-2.5">
+        <div className="min-w-0">
+          <p className="text-xs font-bold text-slate-700">开启 AIRP 运行时</p>
+          <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">
+            总闸：后台导演和下面的自主背景生活都归它管，关掉后这个角色整体停用。
+          </p>
+        </div>
+        <Switch checked={airp?.enabled === true} onChange={(next) => emit({ enabled: next })} />
       </div>
 
       {!gateOpen && (

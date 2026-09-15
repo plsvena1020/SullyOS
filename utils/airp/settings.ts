@@ -17,8 +17,11 @@ export type RetellStyle =
 export interface AirpAutonomyOverrides {
   /** 随机窗口（小时）：距用户最后一条消息多久可以醒一次。 */
   cadence?: { minHours: number; maxHours: number };
-  /** 静默段，"HH:mm"、按角色时区解释，落在段内不打扰。 */
-  quietHours?: { start: string; end: string };
+  /**
+   * 静默段，"HH:mm"、按角色时区解释，落在段内不打扰。
+   * null 是显式哨兵：明确「不要静默段」（连模板预填也一起清掉）；缺省才是跟随模板。
+   */
+  quietHours?: { start: string; end: string } | null;
   /** 每日最多醒几轮。 */
   maxRoundsPerDay?: number;
   /** 兴趣词：没有对话尾巴时的兜底选题来源。 */
