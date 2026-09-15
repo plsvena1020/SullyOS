@@ -32,15 +32,15 @@ export function resolveFactConflict(current: AirpFact, incoming: AirpFact): Airp
   const cmp = compareFactAuthority(current.authority, incoming.authority);
 
   if (cmp > 0) {
-    return { winner: current, loser: incoming, action: 'keep' };
-  }
-
-  if (cmp < 0) {
     return {
       winner: { ...incoming },
       loser: { ...current, status: 'superseded' },
       action: 'replace',
     };
+  }
+
+  if (cmp < 0) {
+    return { winner: current, loser: incoming, action: 'keep' };
   }
 
   if (incoming.updatedAt > current.updatedAt) {

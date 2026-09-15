@@ -95,19 +95,9 @@ describe('resolveFactConflict locked guard (behavior 2)', () => {
 });
 
 describe('resolveFactConflict authority precedence (behavior 3)', () => {
-  it('keeps the current fact when the incoming fact has higher authority', () => {
-    const current = makeFact({ authority: 'memory_summary', updatedAt: 1 });
-    const incoming = makeFact({ id: 'fact-2', authority: 'user_canon', updatedAt: 9999 });
-
-    const res = resolveFactConflict(current, incoming);
-
-    expect(res.action).toBe('keep');
-    expect(res.winner).toBe(current);
-  });
-
-  it('replaces the current fact when the incoming fact has lower authority', () => {
-    const current = makeFact({ authority: 'confirmed_scene', updatedAt: 9999 });
-    const incoming = makeFact({ id: 'fact-2', authority: 'memory_summary', updatedAt: 1 });
+  it('replaces the current fact when the incoming fact has higher authority', () => {
+    const current = makeFact({ authority: 'memory_summary', updatedAt: 9999 });
+    const incoming = makeFact({ id: 'fact-2', authority: 'user_canon', updatedAt: 1 });
 
     const res = resolveFactConflict(current, incoming);
 
@@ -116,6 +106,16 @@ describe('resolveFactConflict authority precedence (behavior 3)', () => {
     expect(res.winner.id).toBe('fact-2');
     expect(res.loser.id).toBe(current.id);
     expect(res.loser.status).toBe('superseded');
+  });
+
+  it('keeps the current fact when the incoming fact has lower authority', () => {
+    const current = makeFact({ authority: 'confirmed_scene', updatedAt: 1 });
+    const incoming = makeFact({ id: 'fact-2', authority: 'memory_summary', updatedAt: 9999 });
+
+    const res = resolveFactConflict(current, incoming);
+
+    expect(res.action).toBe('keep');
+    expect(res.winner).toBe(current);
   });
 });
 
@@ -168,7 +168,7 @@ describe('resolveFactConflict same authority (behavior 4)', () => {
 describe('resolveFactConflict purity (behavior 5)', () => {
   it('returns new objects and does not mutate inputs on replace', () => {
     const current = makeFact({ authority: 'confirmed_scene', updatedAt: 100 });
-    const incoming = makeFact({ id: 'fact-2', authority: 'memory_summary', updatedAt: 200 });
+    const incoming = makeFact({ id: 'fact-2', authority: 'user_canon', updatedAt: 200 });
     const currentBefore = structuredClone(current);
     const incomingBefore = structuredClone(incoming);
 
