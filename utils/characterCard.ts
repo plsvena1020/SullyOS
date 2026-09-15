@@ -47,6 +47,7 @@ export const CARD_STRIPPED_FIELDS = [
   'chatVoiceAutoPlay',
   'dateVoiceEnabled',
   'memoryPalaceWaterline', // 发卡人的使用节奏；接收方按自己的聊天习惯选择
+  'airp',                  // AIRP 运行时设置（自主度 / 能力 / MCP 白名单）：发卡人的本机配置，接收方自己重开
 
   // 4) 运行时状态残留
   'activeBuffs',

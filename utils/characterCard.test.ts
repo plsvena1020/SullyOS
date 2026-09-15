@@ -65,6 +65,30 @@ describe('stripSensitiveCardFields', () => {
     }
   });
 
+  it('剥离 AIRP 运行时设置（自主度 / 能力 / MCP 白名单不随卡走）', () => {
+    const card = {
+      name: '小蓝',
+      systemPrompt: 'sp',
+      airp: {
+        enabled: true,
+        autonomyLevel: 3,
+        capabilities: ['memory.read'],
+        mcpAllow: ['fs-server'],
+        writable: true,
+        version: 1,
+      },
+    };
+
+    const out = stripSensitiveCardFields(card);
+
+    // 角色本身保留
+    expect(out.name).toBe('小蓝');
+    expect(out.systemPrompt).toBe('sp');
+    // AIRP 设置整体剥离
+    expect(out).not.toHaveProperty('airp');
+    expect(JSON.stringify(out)).not.toContain('mcpAllow');
+  });
+
   it('不修改原对象（返回浅拷贝）', () => {
     const card = { name: 'x', emotionConfig: { enabled: true, api: { apiKey: 'sk' } } };
     stripSensitiveCardFields(card);
@@ -77,7 +101,7 @@ describe('stripSensitiveCardFields', () => {
   });
 
   it('清单覆盖四类敏感字段', () => {
-    for (const k of ['emotionConfig', 'embeddingConfig', 'bubbleStyle', 'chatVoiceLang', 'memoryPalaceWaterline', 'activeBuffs', 'phoneState']) {
+    for (const k of ['emotionConfig', 'embeddingConfig', 'bubbleStyle', 'chatVoiceLang', 'memoryPalaceWaterline', 'airp', 'activeBuffs', 'phoneState']) {
       expect(CARD_STRIPPED_FIELDS).toContain(k);
     }
   });

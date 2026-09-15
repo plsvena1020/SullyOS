@@ -1,4 +1,5 @@
 import type { ShoppingOrder } from './utils/shoppingTypes';
+import type { AirpSettings } from './utils/airp/settings';
 
 export enum AppID {
   Launcher = 'launcher',
@@ -3325,6 +3326,12 @@ export interface CharacterProfile {
    * 作为 CharacterProfile 一部分随 IndexedDB 与完整备份持久化。
    */
   memoryPalaceWaterline?: MemoryPalaceWaterlineConfig;
+  /**
+   * AIRP 运行时设置（自主度 / 能力白名单 / MCP 白名单 / 导演模型覆盖）。
+   * 缺省（undefined）代表该角色没开 AIRP，一切维持历史行为。作为
+   * CharacterProfile 一部分随 IndexedDB 与完整备份持久化；分享角色卡时整体剥离。
+   */
+  airp?: AirpSettings;
   embeddingConfig?: {
     baseUrl: string;
     apiKey: string;
