@@ -8,7 +8,8 @@ export async function loadCapacitorCore(): Promise<any> {
   if (typeof globalThis === 'undefined' || (globalThis as any).Capacitor == null) {
     throw new Error('capacitor unavailable: not running inside a Capacitor shell');
   }
-  return import('@capacitor/core');
+  // @vite-ignore：原生壳依赖不进 Web 构建；只在壳内运行时求值，上方守卫保证 Web 侧永不执行到这里。
+  return import(/* @vite-ignore */ '@capacitor/core');
 }
 
 export async function loadCapacitorPlugin<T>(name: string): Promise<T> {
@@ -22,7 +23,7 @@ export async function invokeTauri<T>(cmd: string, args?: Record<string, unknown>
   if (typeof globalThis === 'undefined' || (globalThis as any).__TAURI_INTERNALS__ == null) {
     throw new Error(`tauri unavailable (cmd=${cmd}): not running inside a Tauri shell`);
   }
-  const core = (await import('@tauri-apps/api/core')) as any;
+  const core = (await import(/* @vite-ignore */ '@tauri-apps/api/core')) as any;
   return core.invoke(cmd, args) as Promise<T>;
 }
 
@@ -30,6 +31,6 @@ export async function listenTauri<T>(event: string, cb: (payload: T) => void): P
   if (typeof globalThis === 'undefined' || (globalThis as any).__TAURI_INTERNALS__ == null) {
     throw new Error(`tauri unavailable (event=${event}): not running inside a Tauri shell`);
   }
-  const core = (await import('@tauri-apps/api/event')) as any;
+  const core = (await import(/* @vite-ignore */ '@tauri-apps/api/event')) as any;
   return core.listen(event, (e: { payload: T }) => cb(e.payload)) as Promise<() => void>;
 }

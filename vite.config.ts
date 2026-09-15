@@ -152,9 +152,14 @@ export default defineConfig({
         if (warning.message?.includes('dynamic import will not move module into another chunk')) return;
         defaultHandler(warning);
       },
-      output: {
+        output: {
         manualChunks(id) {
           if (id.includes('node_modules')) {
+            // 原生壳运行时（Capacitor / Tauri）：只经 utils/platform/native.ts
+            // 动态加载，Web 侧守卫永不执行。独立成懒 chunk，不进首屏 vendor。
+            if (id.includes('@capacitor/') || id.includes('@tauri-apps/')) {
+              return 'vendor-native';
+            }
             // Local camera emotion calibration is opt-in. Keep MediaPipe out of
             // the preloaded common vendor so its JS is fetched only after the
             // user explicitly enables their camera.

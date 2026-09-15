@@ -12,6 +12,7 @@
     "test:run": "vitest run"
   },
   "dependencies": {
+    "@capacitor/core": "^8.5.2",
     "@mediapipe/tasks-vision": "1.0.1",
     "@neondatabase/serverless": "^1.0.2",
     "@netlify/blobs": "^10.7.4",
@@ -24,6 +25,7 @@
     "@rei-standard/amsg-shared": "0.4.0-next.8",
     "@rei-standard/amsg-sw": "2.4.0-next.6",
     "@rei-standard/blob-store": "0.1.0-next.2",
+    "@tauri-apps/api": "^2.11.1",
     "@zip.js/zip.js": "^2.8.43",
     "ag-psd": "^31.0.2",
     "jszip": "^3.10.1",
