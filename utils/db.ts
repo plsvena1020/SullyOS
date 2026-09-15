@@ -34,8 +34,9 @@ const DB_NAME = 'AetherOS_Data';
 // v72：提示词段落预设（Preset App）。独立 store，随备份动态枚举自动带走。
 // v73：购物订单（Shopping App）。独立 store，随备份动态枚举自动带走。
 // v74：塔罗占卜记录（Tarot App）。独立 store，随备份动态枚举自动带走。
-// v75：AIRP 世界事件流（airp_events）+ AIRP 世界事实/知识（airp_world）。两个独立 store，随备份动态枚举自动带走。
-const DB_VERSION = 75; // v75: AIRP 世界事件流（airp_events）+ 世界事实（airp_world）
+// v75：AIRP 世界事件流（airp_events）。独立 store，随备份动态枚举自动带走。
+// v76：AIRP 世界事实/知识（airp_world）。独立 store，随备份动态枚举自动带走。
+const DB_VERSION = 76; // v76: AIRP 世界事实/知识（airp_world）
 
 const STORE_CHARACTERS = 'characters';
 const STORE_CHAR_GROUPS = 'character_groups'; // 角色分组定义（角色通过 groupId 指向；与群聊 groups 无关）
@@ -65,7 +66,7 @@ const STORE_BANK_DATA = 'bank_data';
 const STORE_SHOPPING_ORDERS = 'shopping_orders'; // v73: 购物订单
 const STORE_TAROT_READINGS = 'tarot_readings'; // v74: 塔罗占卜记录
 const STORE_AIRP_EVENTS = 'airp_events'; // v75: AIRP 世界事件流（角色导演提交的事件）
-const STORE_AIRP_WORLD = 'airp_world'; // v75: AIRP 世界事实/知识（按角色物化的当前世界状态，keyPath charId）
+const STORE_AIRP_WORLD = 'airp_world'; // v76: AIRP 世界事实/知识（按角色物化的当前世界状态，keyPath charId）
 const STORE_XHS_STOCK = 'xhs_stock';
 const STORE_XHS_ACTIVITIES = 'xhs_activities';
 const STORE_XHS_OWNED_POSTS = 'xhs_owned_posts';
@@ -375,11 +376,12 @@ export const openDB = (): Promise<IDBDatabase> => {
       createStore(STORE_SHOPPING_ORDERS, { keyPath: 'id' });
       // v74: 塔罗占卜记录（Tarot App）
       createStore(STORE_TAROT_READINGS, { keyPath: 'id' });
-      // v75: AIRP 世界事件流（角色导演提交的事件）+ 世界事实/知识（按角色物化）
+      // v75: AIRP 世界事件流（角色导演提交的事件）
       if (!db.objectStoreNames.contains(STORE_AIRP_EVENTS)) {
           const airpEventStore = db.createObjectStore(STORE_AIRP_EVENTS, { keyPath: 'id' });
           airpEventStore.createIndex('charId', 'charId', { unique: false });
       }
+      // v76: AIRP 世界事实/知识（按角色物化）
       createStore(STORE_AIRP_WORLD, { keyPath: 'charId' });
 
       // ─── Memory Palace (记忆宫殿) stores ───
@@ -2267,7 +2269,7 @@ export const DB = {
       });
   },
 
-  // ─── AIRP 世界事件流 + 世界事实/知识（v75）───
+  // ─── AIRP 世界事件流（v75）+ 世界事实/知识（v76）───
   getAirpEventsByChar: async (charId: string, limit = 50): Promise<AirpCommittedEvent[]> => {
       const db = await openDB();
       if (!db.objectStoreNames.contains(STORE_AIRP_EVENTS)) return [];
@@ -3488,7 +3490,7 @@ export const DB = {
           STORE_PROMPT_PRESETS, // v72 提示词段落预设（Preset App）—— importFullData 侧白名单
           STORE_SHOPPING_ORDERS, // v73 购物订单（Shopping App）
           STORE_AIRP_EVENTS, // v75 AIRP 世界事件流 —— importFullData 侧白名单
-          STORE_AIRP_WORLD, // v75 AIRP 世界事实/知识（物化缓存）—— importFullData 侧白名单
+          STORE_AIRP_WORLD, // v76 AIRP 世界事实/知识（物化缓存）—— importFullData 侧白名单
       ].filter(name => db.objectStoreNames.contains(name));
 
       const hasStore = (storeName: string) => availableStores.includes(storeName);
