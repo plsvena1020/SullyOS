@@ -261,6 +261,32 @@ describe('runAirpDirector — tool round', () => {
     expect(followUp).toContain('- weather_elsewhere: 该能力暂不可用');
   });
 
+  it('marks an intent whose capabilityId is absent as unavailable without executing it', async () => {
+    const snapshot = makeSnapshot({ capabilities: [RECALL_CAP] });
+    const round1 = makeDirectorJson({
+      toolIntents: [
+        {
+          capabilityId: 'cap-does-not-exist',
+          toolName: 'recall_deep',
+          reason: '想回忆',
+          arguments: { query: '去年夏天' },
+        },
+      ],
+    });
+    const { fetcher, calls } = makeFetcher(
+      chatResponse(JSON.stringify(round1)),
+      chatResponse(JSON.stringify(makeDirectorJson({ sceneGoal: '缺失能力后' }))),
+    );
+    const { executor, calls: execCalls } = makeExecutor();
+
+    const result = await runAirpDirector(char, makeApi(), snapshot, 'hi', [], { fetcher, executor });
+
+    expect(result.ok).toBe(true);
+    expect(execCalls).toHaveLength(0);
+    expect(calls).toHaveLength(2);
+    expect(messagesOf(calls[1])[1].content).toContain('- recall_deep: 该能力暂不可用');
+  });
+
   it('skips confirmation-risk intents without executing them but still runs round 2', async () => {
     const snapshot = makeSnapshot({ capabilities: [CONFIRM_CAP] });
     const round1 = makeDirectorJson({
