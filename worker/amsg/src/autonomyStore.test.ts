@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   AUTONOMY_EXPERIENCE_TTL_MS,
   addAutonomyExperience,
+  claimAutonomyTick,
   cleanupAutonomyExperiences,
   emptyAutonomyState,
   ensureAutonomySchema,
@@ -62,11 +63,11 @@ beforeEach(() => {
 });
 
 describe('ensureAutonomySchema', () => {
-  it('建经历表 + 索引 + 记账表', async () => {
+  it('建经历表 + 索引 + 记账表 + tick 认领表', async () => {
     const { db, statements } = createFakeDb();
     await ensureAutonomySchema(db);
 
-    expect(statements).toHaveLength(3);
+    expect(statements).toHaveLength(5);
     expect(statements[0].sql).toContain('CREATE TABLE IF NOT EXISTS autonomy_experiences');
     expect(statements[0].sql).toContain('char_id TEXT NOT NULL');
     expect(statements[0].sql).toContain('importance INTEGER NOT NULL DEFAULT 0');
@@ -78,6 +79,10 @@ describe('ensureAutonomySchema', () => {
     ]) {
       expect(statements[2].sql).toContain(column);
     }
+    expect(statements[3].sql).toContain('CREATE TABLE IF NOT EXISTS autonomy_tick');
+    expect(statements[3].sql).toContain('id INTEGER PRIMARY KEY CHECK (id = 1)');
+    expect(statements[3].sql).toContain('minute INTEGER NOT NULL DEFAULT 0');
+    expect(statements[4].sql).toBe('INSERT OR IGNORE INTO autonomy_tick (id, minute) VALUES (1, 0)');
   });
 
   it('第二次调用走模块级短路，不再打 DDL', async () => {
@@ -86,6 +91,31 @@ describe('ensureAutonomySchema', () => {
     statements.length = 0;
     await ensureAutonomySchema(db);
     expect(statements).toEqual([]);
+  });
+});
+
+describe('claimAutonomyTick', () => {
+  it('同一分钟第二次认领 → false；下一分钟 → true', async () => {
+    const { db, statements } = createFakeDb();
+    const minute = 29_700_000;
+
+    // 只有第一句 UPDATE 真的改了行（changes=1），第二句同分钟 changes=0。
+    const { db: dbSeq, statements: seqStatements } = createFakeDb({ changes: [1, 0, 1] });
+    expect(await claimAutonomyTick(dbSeq, minute)).toBe(true);
+    expect(await claimAutonomyTick(dbSeq, minute)).toBe(false);
+    expect(await claimAutonomyTick(dbSeq, minute + 1)).toBe(true);
+
+    expect(seqStatements).toHaveLength(3);
+    for (const s of seqStatements) {
+      expect(s.sql).toBe('UPDATE autonomy_tick SET minute = ? WHERE id = 1 AND minute < ?');
+      expect(s.args).toHaveLength(2);
+    }
+    expect(seqStatements[0].args).toEqual([minute, minute]);
+    expect(seqStatements[2].args).toEqual([minute + 1, minute + 1]);
+
+    // 没有 meta.changes 的形态按「没抢到」处理（宁可少跑一跳，不冒双跑风险）。
+    expect(await claimAutonomyTick(db, minute)).toBe(false);
+    expect(statements).toHaveLength(1);
   });
 });
 

@@ -176,7 +176,7 @@ import {
   runAutonomyTick,
   scanAutonomyPacks,
 } from './autonomyScheduler';
-import type { AutonomyDb } from './autonomyStore';
+import { claimAutonomyTick, ensureAutonomySchema, type AutonomyDb } from './autonomyStore';
 
 // opencode.ai 上游自标识：凭据表里存的是原始供应商地址，worker 直连时必须带
 // User-Agent + x-opencode-session（Go 防滥用要求），否则所有 LLM 调用到点必被拒。
@@ -3340,9 +3340,19 @@ export default {
     // try/catch——cron 没人看返回值，调度器自己挂了也只该是「这一分钟白跑」。
     try {
       const db = env.DB as unknown as AutonomyDb;
+      // 这一跳用同一个 nowMs 既算分钟号又喂判定，别让两次取钟跨过分钟边界。
+      const nowMs = Date.now();
+      const minuteKey = Math.floor(nowMs / 60_000);
+      // CF Cron 与 VPS node-cron 同分钟会双喂：先原子认领，认领不到就整跳放弃。
+      // 这道闸必须在扫描之前——扫描本身要好几秒，只靠「先读后写」的两个 tick 会双建。
+      await ensureAutonomySchema(db);
+      if (!(await claimAutonomyTick(db, minuteKey))) {
+        console.log('[amsg:autonomy] 这一分钟已被另一个 cron tick 认领，跳过');
+        return;
+      }
       const scanned = await scanAutonomyPacks({ db, masterKey: env.AMSG_MASTER_KEY });
       const result = await runAutonomyTick({
-        nowMs: Date.now(),
+        nowMs,
         db,
         packs: scanned.packs,
         postTask: createAutonomyPostTask({

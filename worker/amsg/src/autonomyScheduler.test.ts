@@ -22,7 +22,10 @@ import {
   type AutonomyTickPack,
 } from './autonomyScheduler';
 import {
+  claimAutonomyTick,
   emptyAutonomyState,
+  ensureAutonomySchema,
+  resetAutonomySchemaCacheForTesting,
   type AutonomyStateRow,
 } from './autonomyStore';
 
@@ -490,13 +493,101 @@ describe('接线', () => {
     expect(decision).toEqual({ decision: 'skip-push', reason: 'handler-pending-task-18' });
   });
 
-  it('cron 的 scheduled() 里调了 runAutonomyTick', async () => {
+  it('cron 的 scheduled() 里先认领再扫描/跑 tick', async () => {
     const source = await readFile(new URL('./index.ts', import.meta.url), 'utf-8');
     const start = source.indexOf('async scheduled(');
     expect(start).toBeGreaterThan(-1);
-    const body = source.slice(start, start + 2000);
+    const body = source.slice(start, start + 2400);
     expect(body).toContain('runAutonomyTick');
     expect(body).toContain('scanAutonomyPacks');
     expect(body).toContain('createAutonomyPostTask');
+    // 同一句 nowMs 既算分钟号又喂判定；认领闸在扫描之前，认领失败即 return。
+    expect(body).toContain('const nowMs = Date.now()');
+    expect(body).toContain('const minuteKey = Math.floor(nowMs / 60_000)');
+    expect(body).toContain('claimAutonomyTick(db, minuteKey)');
+    const claimAt = body.indexOf('claimAutonomyTick(db, minuteKey)');
+    const scanAt = body.indexOf('scanAutonomyPacks');
+    const tickAt = body.indexOf('runAutonomyTick');
+    expect(claimAt).toBeLessThan(scanAt);
+    expect(scanAt).toBeLessThan(tickAt);
+  });
+});
+
+describe('每分钟认领闸（双 cron 防护）', () => {
+  /** 带一张真内存 tick 行的记录型 D1 替身：把「谁先到」的原子性照实现搬进 fake。 */
+  const createTickDb = () => {
+    const statements: Array<{ sql: string; args: unknown[] }> = [];
+    let minute = 0;
+    const db = {
+      prepare(sql: string) {
+        const stmt = {
+          _args: [] as unknown[],
+          bind(...args: unknown[]) {
+            stmt._args = args;
+            return stmt;
+          },
+          async run() {
+            statements.push({ sql, args: stmt._args });
+            if (sql.startsWith('UPDATE autonomy_tick SET minute')) {
+              const next = Number(stmt._args[0]);
+              if (minute < next) {
+                minute = next;
+                return { success: true, meta: { changes: 1 } };
+              }
+              return { success: true, meta: { changes: 0 } };
+            }
+            return { success: true, meta: { changes: 0 } };
+          },
+          async first() {
+            statements.push({ sql, args: stmt._args });
+            return null;
+          },
+          async all() {
+            statements.push({ sql, args: stmt._args });
+            return { results: [] };
+          },
+        };
+        return stmt;
+      },
+    };
+    return { db, statements, minute: () => minute };
+  };
+
+  it('认领失败的那一跳不再产生任何 D1 写（认领行之外零写）', async () => {
+    resetAutonomySchemaCacheForTesting();
+    const { db, statements, minute } = createTickDb();
+    const key = 29_700_000;
+
+    await ensureAutonomySchema(db);
+    statements.length = 0;
+
+    expect(await claimAutonomyTick(db, key)).toBe(true);
+    expect(minute()).toBe(key);
+    expect(await claimAutonomyTick(db, key)).toBe(false);
+
+    expect(statements.map((s) => s.sql)).toEqual([
+      'UPDATE autonomy_tick SET minute = ? WHERE id = 1 AND minute < ?',
+      'UPDATE autonomy_tick SET minute = ? WHERE id = 1 AND minute < ?',
+    ]);
+    for (const { sql } of statements) {
+      expect(sql).not.toContain('autonomy_state');
+      expect(sql).not.toContain('autonomy_experiences');
+    }
+  });
+
+  it('认领与建任务是两套独立机制：post 失败不影响下一分钟再认领', async () => {
+    resetAutonomySchemaCacheForTesting();
+    const { db } = createTickDb();
+    const key = 29_700_000;
+
+    await ensureAutonomySchema(db);
+    expect(await claimAutonomyTick(db, key)).toBe(true);
+    // 这一分钟里 tick 的 post 失败（claim-first：账照扣，见上面的 claim-first 用例）。
+    const result = await tick(db, tickPack(baseAutonomy()), {
+      postTask: async () => { throw new Error('schedule-message 拒绝（HTTP 500）'); },
+    });
+    expect(result.skipped).toEqual([{ charId: CHAR_ID, reason: AUTONOMY_SKIP_REASONS.postFailed }]);
+    // 下一分钟照常认领：gate 只看 minute，与 post 成败无关。
+    expect(await claimAutonomyTick(db, key + 1)).toBe(true);
   });
 });

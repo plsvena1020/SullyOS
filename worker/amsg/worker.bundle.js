@@ -13466,6 +13466,11 @@ var AUTONOMY_STATE_DDL = `CREATE TABLE IF NOT EXISTS autonomy_state (
   tokens_today INTEGER NOT NULL DEFAULT 0,
   config_hash TEXT NOT NULL DEFAULT ''
 )`;
+var AUTONOMY_TICK_DDL = `CREATE TABLE IF NOT EXISTS autonomy_tick (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  minute INTEGER NOT NULL DEFAULT 0
+)`;
+var AUTONOMY_TICK_SEED = "INSERT OR IGNORE INTO autonomy_tick (id, minute) VALUES (1, 0)";
 var emptyAutonomyState = (charId) => ({
   charId,
   lastRoundAt: 0,
@@ -13483,7 +13488,14 @@ async function ensureAutonomySchema(db) {
   await db.prepare(AUTONOMY_EXPERIENCES_DDL).run();
   await db.prepare(AUTONOMY_EXPERIENCES_INDEX_DDL).run();
   await db.prepare(AUTONOMY_STATE_DDL).run();
+  await db.prepare(AUTONOMY_TICK_DDL).run();
+  await db.prepare(AUTONOMY_TICK_SEED).run();
   schemaReady = true;
+}
+async function claimAutonomyTick(db, minuteKey) {
+  const result = await db.prepare("UPDATE autonomy_tick SET minute = ? WHERE id = 1 AND minute < ?").bind(minuteKey, minuteKey).run();
+  const changes = result?.meta?.changes;
+  return changes === 1;
 }
 var readNumber = (value) => typeof value === "number" && Number.isFinite(value) ? value : 0;
 var readString = (value) => typeof value === "string" ? value : "";
@@ -15443,9 +15455,16 @@ var src_default = {
     await upstream.scheduled(event, env);
     try {
       const db = env.DB;
+      const nowMs = Date.now();
+      const minuteKey = Math.floor(nowMs / 6e4);
+      await ensureAutonomySchema(db);
+      if (!await claimAutonomyTick(db, minuteKey)) {
+        console.log("[amsg:autonomy] \u8FD9\u4E00\u5206\u949F\u5DF2\u88AB\u53E6\u4E00\u4E2A cron tick \u8BA4\u9886\uFF0C\u8DF3\u8FC7");
+        return;
+      }
       const scanned = await scanAutonomyPacks({ db, masterKey: env.AMSG_MASTER_KEY });
       const result = await runAutonomyTick({
-        nowMs: Date.now(),
+        nowMs,
         db,
         packs: scanned.packs,
         postTask: createAutonomyPostTask({

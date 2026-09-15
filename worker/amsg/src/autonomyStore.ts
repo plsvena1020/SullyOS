@@ -60,6 +60,19 @@ export const AUTONOMY_STATE_DDL = `CREATE TABLE IF NOT EXISTS autonomy_state (
   config_hash TEXT NOT NULL DEFAULT ''
 )`;
 
+/**
+ * 每分钟一跳的「谁先到」闸。CF Cron 与 VPS node-cron 会同时喂同一个分钟，两边都跑到
+ * 扫描（毫秒级、还要解密整包）就会双建任务、一天配额瞬间烧光。行只有一行（id=1 的
+ * CHECK 钉死），minute 记最后一次被认领的分钟号；条件 UPDATE 是原子的，同一分钟只有
+ * 一个 tick 能把 changes 拿到 1。
+ */
+export const AUTONOMY_TICK_DDL = `CREATE TABLE IF NOT EXISTS autonomy_tick (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  minute INTEGER NOT NULL DEFAULT 0
+)`;
+
+export const AUTONOMY_TICK_SEED = 'INSERT OR IGNORE INTO autonomy_tick (id, minute) VALUES (1, 0)';
+
 export interface AutonomyStateRow {
   charId: string;
   lastRoundAt: number;
@@ -113,7 +126,22 @@ export async function ensureAutonomySchema(db: AutonomyDb): Promise<void> {
   await db.prepare(AUTONOMY_EXPERIENCES_DDL).run();
   await db.prepare(AUTONOMY_EXPERIENCES_INDEX_DDL).run();
   await db.prepare(AUTONOMY_STATE_DDL).run();
+  await db.prepare(AUTONOMY_TICK_DDL).run();
+  await db.prepare(AUTONOMY_TICK_SEED).run();
   schemaReady = true;
+}
+
+/**
+ * 认领这一分钟。`minute < ?` 是严格的：同一个分钟号第二次来 changes 就是 0（认领失败）。
+ * 调用方拿到 false 就必须整跳放弃——扫描、判定、清理一个都不许跑。
+ */
+export async function claimAutonomyTick(db: AutonomyDb, minuteKey: number): Promise<boolean> {
+  const result = await db
+    .prepare('UPDATE autonomy_tick SET minute = ? WHERE id = 1 AND minute < ?')
+    .bind(minuteKey, minuteKey)
+    .run();
+  const changes = (result as { meta?: { changes?: unknown } } | null)?.meta?.changes;
+  return changes === 1;
 }
 
 const readNumber = (value: unknown): number =>
