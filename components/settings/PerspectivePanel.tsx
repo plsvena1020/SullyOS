@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import type { CharacterProfile, RealtimeConfig } from '../../types';
+import { HIDDEN_APP_NAMES, INSTALLED_APPS } from '../../constants';
 import { getPlatformBridge } from '../../utils/platform/bridge';
 import { outboxCount } from '../../utils/platform/appActivity/queue';
 import {
@@ -43,6 +44,10 @@ export default function PerspectivePanel({
   const [draftInterval, setDraftInterval] = useState(String(realtimeConfig.perspectiveMinIntervalSec ?? 60));
   const [draftSummary, setDraftSummary] = useState(!!realtimeConfig.perspectiveSummaryEnabled);
   const [draftThreshold, setDraftThreshold] = useState(String(realtimeConfig.perspectiveSummaryThreshold ?? 500));
+  const [excludedApps, setExcludedApps] = useState<string[]>(() =>
+    Array.isArray(realtimeConfig.perspectiveExcludedApps) ? [...realtimeConfig.perspectiveExcludedApps] : [],
+  );
+  const [extraExclude, setExtraExclude] = useState('');
   const [pairingCode, setPairingCode] = useState('');
   const [pairing, setPairing] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -86,6 +91,7 @@ export default function PerspectivePanel({
       perspectiveMinIntervalSec: Math.max(parseInt(draftInterval, 10) || 0, 0),
       perspectiveSummaryEnabled: draftSummary,
       perspectiveSummaryThreshold: Math.max(parseInt(draftThreshold, 10) || 500, 10),
+      perspectiveExcludedApps: [...excludedApps],
     };
     updateRealtimeConfig(patch);
     onPersist({ ...realtimeConfig, ...patch });
@@ -436,6 +442,91 @@ export default function PerspectivePanel({
           >
             保存透视窗配置
           </button>
+
+          <div className="bg-white/60 rounded-xl p-3 space-y-2">
+            <p className="text-[11px] font-bold text-slate-500">
+              不记录的 App（{excludedApps.length}）— 勾选后这些应用的使用不会进入本地队列，也不会上传
+            </p>
+            <div className="max-h-44 overflow-y-auto space-y-1 pr-1">
+              {INSTALLED_APPS.map((app) => {
+                const checked = excludedApps.includes(app.id);
+                return (
+                  <label key={app.id} className="flex items-center gap-2 min-h-[44px] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) => {
+                        setExcludedApps((prev) =>
+                          e.target.checked ? [...prev, app.id] : prev.filter((x) => x !== app.id),
+                        );
+                      }}
+                      className="w-5 h-5 accent-cyan-500 shrink-0"
+                    />
+                    <span className="text-xs text-slate-600">{app.name}</span>
+                  </label>
+                );
+              })}
+              {Object.entries(HIDDEN_APP_NAMES).map(([id, name]) => {
+                if (INSTALLED_APPS.some((a) => a.id === id)) return null;
+                const checked = excludedApps.includes(id);
+                return (
+                  <label key={id} className="flex items-center gap-2 min-h-[44px] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) => {
+                        setExcludedApps((prev) =>
+                          e.target.checked ? [...prev, id] : prev.filter((x) => x !== id),
+                        );
+                      }}
+                      className="w-5 h-5 accent-cyan-500 shrink-0"
+                    />
+                    <span className="text-xs text-slate-600">{name}</span>
+                  </label>
+                );
+              })}
+            </div>
+            <div className="flex gap-2">
+              <input
+                value={extraExclude}
+                onChange={(e) => setExtraExclude(e.target.value)}
+                className="flex-1 bg-white/80 border border-cyan-200 rounded-xl px-3 py-2 min-h-[44px] text-sm font-mono"
+                placeholder="其他：包名/进程名/显示名，如 com.tencent.mm"
+              />
+              <button
+                onClick={() => {
+                  const key = extraExclude.trim();
+                  if (!key || excludedApps.includes(key)) return;
+                  setExcludedApps((prev) => [...prev, key]);
+                  setExtraExclude('');
+                }}
+                className="px-4 min-h-[44px] bg-slate-100 text-slate-600 text-xs font-bold rounded-xl active:scale-95 transition-transform"
+              >
+                添加
+              </button>
+            </div>
+            {excludedApps.filter(
+              (x) => !INSTALLED_APPS.some((a) => a.id === x) && !(x in HIDDEN_APP_NAMES),
+            ).length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {excludedApps
+                  .filter((x) => !INSTALLED_APPS.some((a) => a.id === x) && !(x in HIDDEN_APP_NAMES))
+                  .map((x) => (
+                    <button
+                      key={x}
+                      onClick={() => setExcludedApps((prev) => prev.filter((y) => y !== x))}
+                      title="点击移除"
+                      className="px-2 py-1.5 min-h-[36px] bg-slate-100 text-slate-600 text-[11px] font-mono rounded-lg active:scale-95 transition-transform"
+                    >
+                      {x} ✕
+                    </button>
+                  ))}
+              </div>
+            )}
+            <p className="text-[10px] text-slate-400 leading-relaxed">
+              排除在采集端执行：被排除的应用不创建会话。记得点「保存透视窗配置」。
+            </p>
+          </div>
           <p className="text-[10px] text-cyan-700/70 leading-relaxed">
             记录保留 30 天（Worker 每日清理）。总结走主聊天 API，产出缓存后角色查总结秒回。
           </p>

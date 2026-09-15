@@ -803,6 +803,7 @@ export interface RealtimeConfig {
   perspectiveSummaryEnabled: boolean;  // 副 API 总结开关（开 = 数据量大时给总结而非原始记录）
   perspectiveSummaryThreshold: number; // 触发总结的条数阈值
   perspectiveRetentionDays: number;    // 服务端保留天数（默认 30，由 Worker cron 执行）
+  perspectiveExcludedApps: string[];   // 不记录的 App（SullyOS App ID 或设备侧包名/进程名/显示名，精确匹配）
 
   // 蓝牙配置（缺省视为开启；只有真有已连接设备时才实际注入 prompt）
   bluetoothEnabled?: boolean;
@@ -819,6 +820,7 @@ export const PERSPECTIVE_DEFAULTS = {
   perspectiveSummaryEnabled: false,
   perspectiveSummaryThreshold: 500,
   perspectiveRetentionDays: 30,
+  perspectiveExcludedApps: [] as string[],
 } as const;
 
 // 热点单条（与 realtimeContext 的 NewsItem 结构一致，单独放在 types 里避免循环依赖）

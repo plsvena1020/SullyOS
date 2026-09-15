@@ -39,10 +39,22 @@ function uploadable(): { workerUrl: string; token: string; deviceId: string } | 
   return { workerUrl, token: auth.token, deviceId };
 }
 
-/** 会话入库（OS 层 / 平台 provider 的唯一入口）。未配置、未配对或暂停时直接丢弃。 */
+/** 会话是否命中应用排除名单（appKey 或 appLabel 精确匹配，任一命中即丢弃）。 */
+export function isSessionExcluded(
+  session: Pick<AppActivitySession, 'appKey' | 'appLabel'>,
+  excluded: unknown,
+): boolean {
+  if (!Array.isArray(excluded) || excluded.length === 0) return false;
+  const keys = new Set(excluded.filter((x): x is string => typeof x === 'string' && x.length > 0));
+  if (keys.size === 0) return false;
+  return keys.has(session.appKey) || keys.has(session.appLabel);
+}
+
+/** 会话入库（OS 层 / 平台 provider 的唯一入口）。未配置、未配对、暂停或命中排除名单时直接丢弃。 */
 export async function notePerspectiveSession(session: AppActivitySession): Promise<void> {
   const cfg = runtime?.getConfig();
   if (!cfg?.perspectiveEnabled) return;
+  if (isSessionExcluded(session, cfg.perspectiveExcludedApps)) return;
   try {
     const { isPerspectivePaused } = await import('./perspectiveTokens');
     if (isPerspectivePaused()) return;

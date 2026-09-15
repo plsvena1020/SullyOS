@@ -3,6 +3,7 @@ import 'fake-indexeddb/auto';
 import {
   flushPerspectiveQueue,
   installPerspectiveSync,
+  isSessionExcluded,
   notePerspectiveSession,
   setPerspectiveTelemetryRuntime,
   uninstallPerspectiveSync,
@@ -81,5 +82,18 @@ describe('perspective telemetry', () => {
     installPerspectiveSync();
     uninstallPerspectiveSync();
     expect(true).toBe(true);
+  });
+
+  it('excluded apps never enter the queue', async () => {
+    setPerspectiveTelemetryRuntime({
+      getConfig: () => ({ perspectiveEnabled: true, perspectiveExcludedApps: ['chat'] }) as any,
+      getAuth: () => ({}),
+      getDeviceId: () => 'dev-1',
+    });
+    expect(isSessionExcluded(session('x'), ['chat'])).toBe(true);
+    expect(isSessionExcluded(session('x'), [])).toBe(false);
+    expect(isSessionExcluded(session('x'), undefined)).toBe(false);
+    await notePerspectiveSession(session('t-excluded'));
+    expect(await outboxCount()).toBe(0);
   });
 });
