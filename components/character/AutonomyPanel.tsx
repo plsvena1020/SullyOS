@@ -616,7 +616,7 @@ const AutonomyPanel: React.FC<AutonomyPanelProps> = ({ char, onChange }) => {
           </div>
         </Group>
 
-        <Group label="静默段" hint="落在这一段里不主动打扰（按角色时区）。两头都填好才生效；清除后跟随模板。">
+        <Group label="静默段" hint="落在这一段里不主动打扰（按角色时区）。两头都填好才生效；清除后不再设静默段。">
           <div className="flex items-center gap-2">
             <input
               type="time"
