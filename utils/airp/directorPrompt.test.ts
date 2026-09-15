@@ -114,13 +114,26 @@ describe('buildDirectorSystemPrompt — section order (behavior 1)', () => {
     }
   });
 
-  it('renders the scene time line with ISO time and tzId', () => {
+  it('renders the scene time line as wall-clock time in the tzId', () => {
     const now = Date.UTC(2026, 0, 2, 3, 4, 5);
     const output = buildDirectorSystemPrompt(
       makeSnapshot({ scene: { now, tzId: 'Asia/Shanghai' } }),
     );
 
-    expect(output).toContain('- 时间：2026-01-02T03:04:05.000Z（Asia/Shanghai）');
+    expect(output).toContain('- 时间：2026-01-02 11:04（Asia/Shanghai）');
+    expect(output).not.toContain('undefined');
+  });
+
+  it('falls back to a UTC label without throwing for an invalid tzId', () => {
+    const now = Date.UTC(2026, 0, 2, 3, 4, 5);
+    let output = '';
+    expect(() => {
+      output = buildDirectorSystemPrompt(
+        makeSnapshot({ scene: { now, tzId: 'Not/AZone' } }),
+      );
+    }).not.toThrow();
+
+    expect(output).toContain('（UTC）');
     expect(output).not.toContain('undefined');
   });
 
@@ -147,7 +160,8 @@ describe('buildDirectorSystemPrompt — minimal snapshot (behavior 2)', () => {
     expect(output).not.toContain('活动：');
     expect(output).not.toContain('精力：');
     expect(output).not.toContain('情绪：');
-    expect(output).toContain('相关事实：\n角色知识边界：');
+    expect(output).not.toContain('角色知识边界：');
+    expect(output).toContain('相关事实：\n未解决线索：');
     expect(output).toContain('未解决线索：\n可用能力：');
     expect(output).toContain('可用能力：\n输出契约：');
   });
@@ -197,7 +211,7 @@ describe('buildDirectorSystemPrompt — knowledge boundary (behavior 4)', () => 
     expect(output).toContain('secretValue');
   });
 
-  it('excludes suspected facts from the known section', () => {
+  it('omits the knowledge section when the character only suspects', () => {
     const facts = [makeFact({ id: 'suspect-1', predicate: 'maybe', value: 'suspectValue' })];
     const output = buildDirectorSystemPrompt(
       makeSnapshot({
@@ -206,8 +220,67 @@ describe('buildDirectorSystemPrompt — knowledge boundary (behavior 4)', () => 
       }),
     );
 
-    const knownSection = output.split('角色知识边界：')[1].split('未解决线索：')[0];
-    expect(knownSection).not.toContain('suspectValue');
+    expect(output).not.toContain('角色知识边界：');
+    expect(output).toContain('suspectValue');
+  });
+
+  it('omits the knowledge section entirely when nothing is known', () => {
+    const output = buildDirectorSystemPrompt(
+      makeSnapshot({ facts: [makeFact({ id: 'f1', predicate: 'unknownThing', value: 'x' })] }),
+    );
+
+    expect(output).not.toContain('角色知识边界：');
+    expect(output).toContain('相关事实：');
+    expect(output).toContain('未解决线索：');
+  });
+});
+
+describe('buildDirectorSystemPrompt — capability tool schemas (behavior 7)', () => {
+  it('renders wired tool names with their argument schemas', () => {
+    const output = buildDirectorSystemPrompt(
+      makeSnapshot({
+        capabilities: [
+          makeCapability({
+            id: 'memory_deep_dive',
+            title: '定向深挖记忆',
+            risk: 'read',
+            toolNames: ['recall_deep'],
+          }),
+        ],
+      }),
+    );
+
+    expect(output).toContain('- memory_deep_dive(read) - 定向深挖记忆 [工具: recall_deep]');
+    expect(output).toContain('  recall_deep 参数 {"year":"YYYY","month":"M"}');
+    expect(output).toContain('没有query参数');
+    expect(output).not.toContain('undefined');
+  });
+
+  it('marks unwired tools as not yet wired', () => {
+    const output = buildDirectorSystemPrompt(
+      makeSnapshot({
+        capabilities: [
+          makeCapability({
+            id: 'amap_nearby',
+            title: '查周边地点',
+            risk: 'read',
+            toolNames: ['amap_search_places'],
+          }),
+        ],
+      }),
+    );
+
+    expect(output).toContain('- amap_nearby(read) - 查周边地点 [工具: amap_search_places]');
+    expect(output).toContain('  amap_search_places（尚未接线：不要请求）');
+    expect(output).not.toContain('undefined');
+  });
+
+  it('names the toolIntent fields in the output contract', () => {
+    const output = buildDirectorSystemPrompt(makeSnapshot());
+
+    expect(output).toContain('capabilityId');
+    expect(output).toContain('toolName');
+    expect(output).toContain('arguments');
   });
 });
 

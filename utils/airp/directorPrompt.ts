@@ -8,6 +8,12 @@ import { filterKnownBy } from './facts';
 
 const MAX_FACTS = 20;
 
+const WIRED_TOOL_SCHEMAS: Record<string, string> = {
+  recall_deep: '参数 {"year":"YYYY","month":"M"}，例 {"year":"2026","month":"9"}（注意：没有query参数，按年月查）',
+  web_search: '参数 {"query":"搜索词"}',
+  read_note: '参数 {"keyword":"关键词"}',
+};
+
 function safeText(value: unknown): string {
   if (typeof value === 'string') return value;
   if (value === undefined || value === null) return '';
@@ -47,10 +53,22 @@ function renderFactDiscipline(): string[] {
   ];
 }
 
+function wallClockText(tzId: string, now: number): string | null {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tzId, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false, hourCycle: 'h23',
+    }).formatToParts(new Date(now));
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
+    return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}`;
+  } catch { return null; }
+}
+
 function renderScene(snapshot: AirpRuntimeSnapshot): string[] {
   const { scene } = snapshot;
   const lines: string[] = ['当前场景：'];
-  lines.push(`- 时间：${new Date(scene.now).toISOString()}（${scene.tzId}）`);
+  const wall = wallClockText(scene.tzId, scene.now);
+  lines.push(wall ? `- 时间：${wall}（${scene.tzId}）` : `- 时间：${new Date(scene.now).toISOString()}（UTC）`);
   if (isPresentText(scene.locationLabel)) lines.push(`- 地点：${scene.locationLabel}`);
   if (isPresentText(scene.activity)) lines.push(`- 活动：${scene.activity}`);
   if (isPresentNumber(scene.energy)) lines.push(`- 精力：${scene.energy}`);
@@ -67,14 +85,14 @@ function renderFacts(snapshot: AirpRuntimeSnapshot): string[] {
 }
 
 function renderKnowledgeBoundary(snapshot: AirpRuntimeSnapshot): string[] {
+  const knownIds = new Set(filterKnownBy(snapshot.knowledge, snapshot.charId));
+  const knownFacts = snapshot.facts.filter((fact) => knownIds.has(fact.id));
+  if (knownFacts.length === 0) return [];
   const lines: string[] = [
     '角色知识边界：',
     '（仅以下事实对该角色成立；未列出的一律视为未知，不得当作既成事实。）',
   ];
-  const knownIds = new Set(filterKnownBy(snapshot.knowledge, snapshot.charId));
-  for (const fact of snapshot.facts) {
-    if (knownIds.has(fact.id)) lines.push(`- ${factText(fact)}`);
-  }
+  for (const fact of knownFacts) lines.push(`- ${factText(fact)}`);
   return lines;
 }
 
@@ -89,7 +107,14 @@ function renderUnresolvedThreads(snapshot: AirpRuntimeSnapshot): string[] {
 function renderCapabilities(snapshot: AirpRuntimeSnapshot): string[] {
   const lines: string[] = ['可用能力：'];
   for (const capability of snapshot.capabilities) {
-    lines.push(`- ${safeText(capability.id)}(${safeText(capability.risk)}) - ${safeText(capability.title)}`);
+    const toolNames = Array.isArray(capability.toolNames) ? capability.toolNames : [];
+    let line = `- ${safeText(capability.id)}(${safeText(capability.risk)}) - ${safeText(capability.title)}`;
+    if (toolNames.length) line += ` [工具: ${toolNames.join(', ')}]`;
+    lines.push(line);
+    for (const toolName of toolNames) {
+      const schema = WIRED_TOOL_SCHEMAS[toolName];
+      lines.push(schema ? `  ${toolName} ${schema}` : `  ${toolName}（尚未接线：不要请求）`);
+    }
   }
   return lines;
 }
@@ -103,7 +128,7 @@ function renderOutputContract(): string[] {
     '- beats：角色行动列表，每条含 actorId 与 intent，可选 visibleEmotion / hiddenEmotion。',
     '- allowedDisclosures：本轮可以透露给用户的信息。',
     '- forbiddenAssumptions：本轮必须列为禁止假设、不得假定成立的事项。',
-    '- toolIntents：需要调用的能力与工具及理由。',
+    '- toolIntents：需要调用的能力与工具及理由，每条含 capabilityId（能力id）+ toolName（该能力【工具:】中的名字）+ arguments（按该工具的参数格式）。',
     '- proposedEvents：本轮可能发生的世界事件。',
     '- commitCandidates：值得写入长期事实的候选内容。',
   ];

@@ -827,7 +827,7 @@ export const useChatAI = ({
                     const snapshot = await buildAirpRuntimeSnapshot(char, { recentDialogueTail: airpTail });
                     const run = await runAirpDirector(
                         char,
-                        { baseUrl, apiKey: effectiveApi.apiKey, model: char.airp?.directorModel || effectiveApi.model },
+                        { baseUrl, apiKey: effectiveApi.apiKey || 'sk-none', model: char.airp?.directorModel || effectiveApi.model },
                         snapshot,
                         latestUserMessage,
                         airpTail,

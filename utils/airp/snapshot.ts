@@ -1,6 +1,7 @@
 import type { CharacterProfile, RealtimeConfig } from '../../types';
 import type {
   AirpAutonomyLevel,
+  AirpCapability,
   AirpFact,
   AirpFactAuthority,
   AirpRuntimeSnapshot,
@@ -105,6 +106,28 @@ function readAutonomyLevel(char: CharacterProfile): AirpAutonomyLevel {
   } catch {
     return 2;
   }
+}
+
+/**
+ * 能力清单闸门：默认只给只读/确认类能力；白名单非空时再按 id 收窄；
+ * 未显式允许写入（writable=false）时剔除全部 low_write 项。
+ */
+function resolveCapabilities(char: CharacterProfile): AirpCapability[] {
+  let caps = [...AIRP_CAPABILITIES];
+  try {
+    const settings = mergeAirpSettings(char?.airp);
+    if (settings.capabilities.length > 0) {
+      const allowed = new Set(settings.capabilities);
+      caps = caps.filter((cap) => allowed.has(cap.id));
+    }
+    if (!settings.writable) {
+      caps = caps.filter((cap) => cap.risk !== 'low_write');
+    }
+  } catch {
+    /* 设置读坏 → 保守回落：只给非写入能力 */
+    caps = caps.filter((cap) => cap.risk !== 'low_write');
+  }
+  return caps;
 }
 
 /** 浏览器侧实时配置：沿用 os_realtime_config 口径，读不到/读坏就用内置默认。 */
@@ -383,7 +406,7 @@ async function assembleSnapshot(
     knowledge: [],
     recentEventSummaries,
     unresolvedThreads,
-    capabilities: [...AIRP_CAPABILITIES],
+    capabilities: resolveCapabilities(char),
   };
 }
 
@@ -411,7 +434,7 @@ export async function buildAirpRuntimeSnapshot(
       knowledge: [],
       recentEventSummaries: [],
       unresolvedThreads: [],
-      capabilities: [...AIRP_CAPABILITIES],
+      capabilities: resolveCapabilities(char),
     };
   }
 }

@@ -37,6 +37,9 @@ function stubOpts() {
 
 const RECALLED = [makeFact('given-1', 'given_one'), makeFact('given-2', 'given_two')];
 
+// 默认全新 opt-in：白名单为空 + writable=false → 只发非写入能力（9 − 2 low_write = 7）。
+const DEFAULT_CAPS = AIRP_CAPABILITIES.filter((cap) => cap.risk !== 'low_write');
+
 describe('buildAirpRuntimeSnapshot', () => {
   it('renders every section for a fully-populated character', async () => {
     const char = makeChar({
@@ -76,7 +79,7 @@ describe('buildAirpRuntimeSnapshot', () => {
     expect(snap.scene.activity).toBe('赶一份稿子');
     expect(snap.autonomyLevel).toBe(3);
     expect(snap.knowledge).toEqual([]);
-    expect(snap.capabilities).toEqual([...AIRP_CAPABILITIES]);
+    expect(snap.capabilities).toEqual([...DEFAULT_CAPS]);
     expect(snap.facts.map((f) => f.predicate)).toEqual([
       'room_plate_digest',
       'current_location',
@@ -152,6 +155,42 @@ describe('buildAirpRuntimeSnapshot', () => {
     expect(snap.autonomyLevel).toBe(2);
     expect(snap.knowledge).toEqual([]);
     expect(snap.capabilities).not.toBe(AIRP_CAPABILITIES);
+    expect(snap.capabilities).toEqual([...DEFAULT_CAPS]);
+    expect(snap.capabilities).toHaveLength(7);
+  });
+
+  it('narrows capabilities to the settings whitelist when non-empty', async () => {
+    const snap = await buildAirpRuntimeSnapshot(
+      makeChar({
+        airp: { enabled: true, autonomyLevel: 2, capabilities: ['read_note', 'web_search'], mcpAllow: [], writable: false, version: 1 },
+      }),
+      stubOpts(),
+    );
+
+    expect(snap.capabilities.map((cap) => cap.id)).toEqual(['web_search', 'read_note']);
+  });
+
+  it('drops every low_write capability when writable is false', async () => {
+    const snap = await buildAirpRuntimeSnapshot(
+      makeChar({
+        airp: { enabled: true, autonomyLevel: 2, capabilities: [], mcpAllow: [], writable: false, version: 1 },
+      }),
+      stubOpts(),
+    );
+
+    expect(snap.capabilities.some((cap) => cap.risk === 'low_write')).toBe(false);
+    expect(snap.capabilities).toHaveLength(AIRP_CAPABILITIES.length - 2);
+  });
+
+  it('keeps the low_write capabilities when writable is true', async () => {
+    const snap = await buildAirpRuntimeSnapshot(
+      makeChar({
+        airp: { enabled: true, autonomyLevel: 2, capabilities: [], mcpAllow: [], writable: true, version: 1 },
+      }),
+      stubOpts(),
+    );
+
+    expect(snap.capabilities.some((cap) => cap.risk === 'low_write')).toBe(true);
     expect(snap.capabilities).toEqual([...AIRP_CAPABILITIES]);
     expect(snap.capabilities).toHaveLength(AIRP_CAPABILITIES.length);
   });
@@ -336,7 +375,7 @@ describe('buildAirpRuntimeSnapshot', () => {
     expect(snap.facts).toEqual([]);
     expect(snap.scene.tzId).toBe('Asia/Shanghai');
     expect(snap.knowledge).toEqual([]);
-    expect(snap.capabilities).toEqual([...AIRP_CAPABILITIES]);
+    expect(snap.capabilities).toEqual([...DEFAULT_CAPS]);
     expect(Number.isFinite(snap.builtAt)).toBe(true);
     expect(Number.isFinite(snap.scene.now)).toBe(true);
   });
