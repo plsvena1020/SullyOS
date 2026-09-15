@@ -12,7 +12,7 @@ enabled = true
 [[d1_databases]]
 binding = "DB"
 database_name = "sullyos-perspective"
-database_id = "REPLACE_WITH_YOUR_D1_ID"
+database_id = "b337ddb9-8e4d-4901-a2f1-3d96cc628cca"
 
 [triggers]
 crons = ["17 4 * * *"]
