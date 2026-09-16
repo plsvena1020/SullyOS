@@ -255,6 +255,84 @@ describe('applyAutonomyResult — 坏载荷与存储契约', () => {
   });
 });
 
+describe('applyAutonomyResult — 同批同槽物化（批量单调时间戳）', () => {
+  it('同一轮两条同 type 提案：最终只剩一条 active 事实（后者 replace 前者），知识指向赢家', async () => {
+    const payload = roundPayload({
+      experiences: [{ id: 'exp-1', q: '', note: 'a', kind: 'surf', importance: 'small', pushed: false }],
+      proposedEvents: [
+        { type: 'activity', summary: '去河边跑步', impact: 'minor' },
+        { type: 'activity', summary: '改成去爬山', impact: 'minor' },
+      ],
+    });
+
+    await expect(applyAutonomyResult(payload)).resolves.toBe(true);
+
+    const world = await loadAirpWorld('c1');
+    // 同槽两条事实：赢家 active、输家留痕 superseded（逐条物化会让两条都 active → dispute）
+    expect(world.facts).toHaveLength(2);
+    const active = world.facts.filter((f) => f.status === 'active');
+    expect(active).toHaveLength(1);
+    // 批内下标靠后的提案胜出
+    expect(active[0].id).toBe('airp-fact-airp-c1-exp-1-1');
+    expect(active[0].value).toBe('改成去爬山');
+    expect(world.facts.find((f) => f.id === 'airp-fact-airp-c1-exp-1-0')!.status).toBe('superseded');
+    // 知识指向赢家
+    expect(world.knowledge.some((k) => k.factId === active[0].id && k.state === 'known' && k.knowerId === 'c1')).toBe(true);
+  });
+});
+
+describe('applyAutonomyResult — 孤儿轮与缺角色', () => {
+  it('零经历的孤儿轮：事件 disclosed=false 且物化，outbox 无对应行，心跳照写', async () => {
+    const payload = roundPayload({
+      experiences: [],
+      proposedEvents: [
+        { type: 'activity', summary: '独自去河边跑步', impact: 'minor' },
+        { type: 'discovery', summary: '翻到一本旧相册', impact: 'trace' },
+      ],
+    });
+
+    await expect(applyAutonomyResult(payload)).resolves.toBe(true);
+
+    // 没有经历行 → 没有任何 outbox 行能转述这些事件，不能谎报已交代
+    expect(await DB.getOutboxByChar('c1')).toHaveLength(0);
+
+    const events = await listAirpEventsByChar('c1');
+    expect(events).toHaveLength(2);
+    expect(events.every((e) => e.disclosedToUser === false)).toBe(true);
+
+    const facts = (await loadAirpWorld('c1')).facts;
+    expect(facts).toHaveLength(2);
+    expect(facts.every((f) => f.status === 'active')).toBe(true);
+
+    const [hb] = await DB.getHeartbeatsByChar('c1');
+    expect(hb.outboxed).toBe(0);
+    expect(hb.id.startsWith('airp-hb-c1-ts')).toBe(true);
+  });
+
+  it('角色不在库（零 seed）：major 默认档位 0 → 改道，不抛，outbox 有【待定】行，不物化', async () => {
+    const payload = roundPayload({
+      charId: 'ghost',
+      experiences: [{ id: 'exp-1', q: '念头', note: '想搬走。', kind: 'rest', importance: 'small', pushed: false }],
+      proposedEvents: [{ type: 'movement', summary: '决定搬去另一个城市', impact: 'major' }],
+    });
+
+    await expect(applyAutonomyResult(payload)).resolves.toBe(true);
+
+    const outbox = await DB.getOutboxByChar('ghost');
+    expect(outbox.map((e) => e.id).sort()).toEqual(['airp-ghost-exp-1-susp-0', 'exp-1']);
+    expect(outbox.find((e) => e.id === 'airp-ghost-exp-1-susp-0')).toMatchObject({
+      q: '决定搬去另一个城市', note: '【待定】决定搬去另一个城市', told: 0, pushed: 0,
+    });
+
+    const events = await listAirpEventsByChar('ghost');
+    expect(events).toHaveLength(1);
+    expect(events[0].disclosedToUser).toBe(false);
+
+    expect((await loadAirpWorld('ghost')).facts).toHaveLength(0);
+    expect(await DB.getHeartbeatsByChar('ghost')).toHaveLength(1);
+  });
+});
+
 describe('markEventsDisclosed', () => {
   it('按 id 翻 disclosedToUser，空输入 no-op', async () => {
     await saveAirpEvents([mkEvent('e1', false), mkEvent('e2', false), mkEvent('e3', true)]);

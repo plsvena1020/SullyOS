@@ -16,8 +16,9 @@
  *
  * 降级改道（deviation 2）：`impact==='major' && autonomyLevel < 3` 的事件不物化世界
  * 事实，改落一条 importance=big、told=0 的 outbox 待定行（等用户 engage 再交代），
- * 事件行仍按历史落库但 disclosedToUser=false；其余事件落库即 disclosed=true，
- * 由 outbox 的 told 标记单独追踪是否被转述（refined disclosed-rule）。
+ * 事件行仍按历史落库但 disclosedToUser=false；其余事件仅在本轮有经历行（即确有 outbox
+ * 转述账同期落库）时 disclosed=true，零经历的孤儿轮记 false，由 outbox 的 told 标记
+ * 单独追踪是否被转述（refined disclosed-rule）。
  */
 
 import { DB } from './db';
@@ -226,9 +227,10 @@ async function landAutonomyResult(input: LandInput): Promise<void> {
       at: atMs,
       // 自主事件没人目击：按 deviation-3 记 runtime_state（authority 已放宽为 AirpFactAuthority）。
       authority: 'runtime_state',
-      // 落地即有 outbox/转述账追踪的事件视为已交代（told 标记才是真正的追踪面）；
-      // 改道的大事件没人知道，等 told-flip 翻。
-      disclosedToUser: !rerouted,
+      // 落地即有经历 outbox 行（同轮同批落库）的事件视为已交代，told 标记才是真正的追踪面；
+      // 改道的大事件没人知道，等 told-flip 翻；孤儿轮（零经历 → 永无 outbox 行转述）也按没人知道记，
+      // 否则会谎报「已交代」。
+      disclosedToUser: !rerouted && input.experiences.length > 0,
       source: { kind: 'runtime', label: 'airp-autonomy' },
     };
     events.push(event);
@@ -269,8 +271,10 @@ async function landAutonomyResult(input: LandInput): Promise<void> {
 
   // 3. 世界事件 + 物化（改道的事件不物化）
   await saveAirpEvents(events);
-  for (const event of materializeQueue) {
-    await materializeCommittedEvents(charId, [event], atMs, 'runtime_state');
+  // 整批一次物化：批量内 updatedAt 按输入下标单调递增（worldStore），同槽同位事件才能收敛
+  // （后到的 replace 前者）；逐条调用会让每条都停在 index 0，同批同槽互相 dispute。
+  if (materializeQueue.length > 0) {
+    await materializeCommittedEvents(charId, materializeQueue, atMs, 'runtime_state');
   }
 
   // 4. 心跳（字段与面板只读行逐一对齐）
