@@ -46,7 +46,7 @@ function stripRealtimeConfig(hit: { hit: boolean }, cfg: any): void {
   ]) blankField(hit, cfg, f);
   const xhs = cfg.xhsMcpConfig;
   if (xhs && typeof xhs === 'object') {
-    for (const f of ['cookie', 'rnoteApiKey', 'userXsecToken']) blankField(hit, xhs, f);
+    for (const f of ['cookie', 'rnoteApiKey', 'userXsecToken', 'bridgeToken']) blankField(hit, xhs, f);
   }
 }
 

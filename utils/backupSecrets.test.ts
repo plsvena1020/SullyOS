@@ -180,4 +180,11 @@ describe('backup secrets redaction', () => {
     expect(data).toEqual({ theme: { id: 't' }, notes: 'hello' });
     expect(hasBackupSecrets(data)).toBe(false);
   });
+
+  it('redacts the xhs bridge token', () => {
+    const data: any = { realtimeConfig: { xhsMcpConfig: { bridgeToken: 'bridge-tok', cookie: '', rnoteApiKey: '', userXsecToken: '' } } };
+    expect(stripBackupSecrets(data)).toBe(true);
+    expect(data.realtimeConfig.xhsMcpConfig.bridgeToken).toBe('');
+    expect(hasBackupSecrets(data)).toBe(false);
+  });
 });

@@ -1,6 +1,6 @@
 import type { XhsMcpConfig } from '../types';
 
-export type XhsDeploymentMode = 'local' | 'lite';
+export type XhsDeploymentMode = 'local' | 'lite' | 'vps';
 
 const normalizeUrl = (value: string): string => value.trim().replace(/\/+$/, '').toLowerCase();
 
@@ -17,7 +17,7 @@ export const resolveXhsDeploymentMode = (
     config: Pick<XhsMcpConfig, 'mode' | 'serverUrl' | 'cookie'> | undefined,
     currentLiteUrl: string,
 ): XhsDeploymentMode => {
-    if (config?.mode === 'local' || config?.mode === 'lite') return config.mode;
+    if (config?.mode === 'local' || config?.mode === 'lite' || config?.mode === 'vps') return config.mode;
 
     const serverUrl = normalizeUrl(config?.serverUrl || '');
     if (!serverUrl) return 'lite';

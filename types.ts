@@ -2555,13 +2555,15 @@ export interface ChibiStudioData {
 // --- BANK / SHOP GAME TYPES (NEW) ---
 export interface BankTransaction {
     id: string;
-    amount: number;
-    category: string; 
+    amount: number; // <0 支出，>0 收入 —— 符号是唯一真相（BankApp dataVersion 3 迁移后）
+    category: string; // 分类 key，见 utils/bankCategories.ts；旧值 'general'/'购物'/'income' 由解析层兼容
     note: string;
     timestamp: number;
     dateStr: string; // YYYY-MM-DD
     ownerId?: string; // char 账本流水归属（不进 user 预算）
     linkedPurchaseId?: string; // 查手机购买记录关联（PhoneEvidence id、可空）
+    cardId?: string; // 归属银行卡 id；缺省=未关联
+    ownsBalance?: boolean; // true=余额由本笔记账联动（删除时回滚）；订单类流水缺省 false（余额归下单流程）
 }
 
 export interface SavingsGoal {
@@ -4657,7 +4659,7 @@ export interface XhsFreeRoamSession {
 
 export interface XhsMcpConfig {
     enabled: boolean;
-    mode?: 'local' | 'lite'; // 部署模式；不要再用 /api 路径推断（本地 Skills 与 Lite 都使用 /api）
+    mode?: 'local' | 'lite' | 'vps'; // 部署模式；不要再用 /api 路径推断（本地 Skills 与 Lite 都使用 /api）
     serverUrl: string;  // MCP: "http://localhost:18060/mcp" | Skills: "http://localhost:18061/api" | Lite Worker: "https://xhs-lite.<acct>.workers.dev/api"
     cookie?: string;    // Lite 模式：登录后的小红书完整 cookie（含 a1 / web_session）。仅 lite Worker 用。
     platform?: 'xhs' | 'rednote'; // Lite 自动识别出的国内小红书 / 全球 RedNote 后端
@@ -4665,6 +4667,7 @@ export interface XhsMcpConfig {
     loggedInUserId?: string;   // 登录用户的 user_id，连接测试成功后自动获取
     loggedInNickname?: string; // 登录用户的昵称
     userXsecToken?: string;    // 连接测试时从首页推荐自动提取的 xsec_token
+    bridgeToken?: string;  // vps 模式：VPS session bridge 鉴权 token（随机值而非 cookie；随 tool_config 加密上云）
 }
 
 // ============================================================

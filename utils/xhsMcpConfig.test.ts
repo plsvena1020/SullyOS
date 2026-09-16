@@ -24,4 +24,8 @@ describe('resolveXhsDeploymentMode', () => {
     it('keeps old Lite configs recognizable when they contain a cookie', () => {
         expect(resolveXhsDeploymentMode({ serverUrl: 'https://old-worker.example/api', cookie: 'a1=abc' }, LITE_URL)).toBe('lite');
     });
+
+    it('returns the explicit vps mode', () => {
+        expect(resolveXhsDeploymentMode({ mode: 'vps', serverUrl: 'https://ethernet-vps.bot.cd/xhs-api/api' }, LITE_URL)).toBe('vps');
+    });
 });
