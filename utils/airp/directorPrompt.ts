@@ -12,6 +12,8 @@ const WIRED_TOOL_SCHEMAS: Record<string, string> = {
   recall_deep: '参数 {"year":"YYYY","month":"M"}，例 {"year":"2026","month":"9"}（注意：没有query参数，按年月查）',
   web_search: '参数 {"query":"搜索词"}',
   read_note: '参数 {"keyword":"关键词"}',
+  weather_lookup_place: '参数 {"city":"城市名，如 杭州"}（查的是指定地点，不是角色当前地）',
+  amap_search_places: '参数 {"keywords":"搜什么，如 咖啡馆", "city":"城市（必填，不确定就用角色所在城市）"}',
 };
 
 function safeText(value: unknown): string {

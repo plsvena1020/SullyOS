@@ -256,22 +256,50 @@ describe('buildDirectorSystemPrompt — capability tool schemas (behavior 7)', (
     expect(output).not.toContain('undefined');
   });
 
-  it('marks unwired tools as not yet wired', () => {
+  it('renders argument schemas for the wired weather / amap search tools', () => {
     const output = buildDirectorSystemPrompt(
       makeSnapshot({
         capabilities: [
           makeCapability({
+            id: 'weather_elsewhere',
+            title: '查第三地天气',
+            toolNames: ['weather_lookup_place'],
+          }),
+          makeCapability({
             id: 'amap_nearby',
             title: '查周边地点',
-            risk: 'read',
             toolNames: ['amap_search_places'],
           }),
         ],
       }),
     );
 
-    expect(output).toContain('- amap_nearby(read) - 查周边地点 [工具: amap_search_places]');
-    expect(output).toContain('  amap_search_places（尚未接线：不要请求）');
+    expect(output).toContain(
+      '  weather_lookup_place 参数 {"city":"城市名，如 杭州"}（查的是指定地点，不是角色当前地）',
+    );
+    expect(output).toContain(
+      '  amap_search_places 参数 {"keywords":"搜什么，如 咖啡馆", "city":"城市（必填，不确定就用角色所在城市）"}',
+    );
+    expect(output).not.toContain('weather_lookup_place（尚未接线');
+    expect(output).not.toContain('amap_search_places（尚未接线');
+    expect(output).not.toContain('undefined');
+  });
+
+  it('marks amap_route as still unwired', () => {
+    const output = buildDirectorSystemPrompt(
+      makeSnapshot({
+        capabilities: [
+          makeCapability({
+            id: 'amap_route',
+            title: '查路线耗时',
+            toolNames: ['amap_route'],
+          }),
+        ],
+      }),
+    );
+
+    expect(output).toContain('- amap_route(read) - 查路线耗时 [工具: amap_route]');
+    expect(output).toContain('  amap_route（尚未接线：不要请求）');
     expect(output).not.toContain('undefined');
   });
 

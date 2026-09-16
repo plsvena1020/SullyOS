@@ -51,8 +51,14 @@ interface ToolExecutionRecord {
   text: string;
 }
 
-/** 阶段一实际接线的仓库已有 read 工具；其余能力只注册不接线。 */
-const STAGE1_WIRED_TOOLS: readonly string[] = ['recall_deep', 'web_search', 'read_note'];
+/** AIRP 实际接线的只读工具（其余能力只注册不接线；amap_route 仍不在其中）。 */
+const AIRP_WIRED_TOOLS: readonly string[] = [
+  'recall_deep',
+  'web_search',
+  'read_note',
+  'weather_lookup_place',
+  'amap_search_places',
+];
 
 const RESPONSE_FORMAT_MODEL = /gpt|deepseek/i;
 
@@ -211,7 +217,7 @@ async function resolveToolIntentText(
   const decision = decideAirpCapability(capability, snapshot.autonomyLevel, 'browser');
   if (!decision.allowed) return TEXT_CAPABILITY_NOT_ALLOWED;
   if (decision.requiresConfirmation) return TEXT_CAPABILITY_NEEDS_CONFIRMATION;
-  if (!STAGE1_WIRED_TOOLS.includes(intent.toolName)) return TEXT_CAPABILITY_UNAVAILABLE;
+  if (!AIRP_WIRED_TOOLS.includes(intent.toolName)) return TEXT_CAPABILITY_UNAVAILABLE;
   if (executor === undefined) return TEXT_CAPABILITY_UNAVAILABLE;
 
   try {
