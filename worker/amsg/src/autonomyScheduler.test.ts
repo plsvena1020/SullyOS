@@ -85,7 +85,12 @@ const toSnake = (state: AutonomyStateRow | undefined): Record<string, unknown> |
  * 记录型 D1 替身：autonomy_state 走一份真的内存表（读-改-写、claim 之后能查），
  * 其余语句只记下来供断言。经历表和 DDL 的细节由 autonomyStore.test.ts 管。
  */
-const createStateDb = (initial: AutonomyStateRow[] = []) => {
+const createStateDb = (
+  initial: AutonomyStateRow[] = [],
+  preflight: { credentials?: boolean; pushSubscription?: boolean } = {},
+) => {
+  const credentialsPresent = preflight.credentials ?? true;
+  const pushPresent = preflight.pushSubscription ?? true;
   const states = new Map<string, AutonomyStateRow>(initial.map((state) => [state.charId, state]));
   const statements: Array<{ sql: string; args: unknown[] }> = [];
   const db = {
@@ -117,6 +122,9 @@ const createStateDb = (initial: AutonomyStateRow[] = []) => {
         async first() {
           statements.push({ sql, args: stmt._args });
           if (sql.includes('FROM autonomy_state')) return toSnake(states.get(String(stmt._args[0])));
+          // 到点硬前置：默认两样都在（老用例照常走判定层），专门用例再关掉。
+          if (sql.includes('FROM llm_credentials')) return credentialsPresent ? { ok: 1 } : null;
+          if (sql.includes('FROM push_subscriptions')) return pushPresent ? { ok: 1 } : null;
           return null;
         },
         async all() {
@@ -318,6 +326,73 @@ describe('自动化轮次 —— 闸的判定', () => {
     await tick(db, tickPack(baseAutonomy()));
     const cleanup = statements.find((s) => s.sql.includes('DELETE FROM autonomy_experiences'));
     expect(cleanup?.args).toEqual([NOW - 7 * 24 * 60 * 60 * 1000]);
+  });
+});
+
+// 上游 POST /schedule-message 建任务前就会查这两样（chunk-3JEWYDM4.mjs:2544-2596），
+// 缺了任务到点必被 409 拒。所以调度器要在扣任何账之前先跳过——不建、不计轮、不烧预算。
+describe('到点硬前置（缺凭据 / 缺推送订阅）', () => {
+  const stateWrites = (statements: Array<{ sql: string }>) =>
+    statements.filter((s) => s.sql.includes('INSERT INTO autonomy_state') || s.sql.includes('UPDATE autonomy_state'));
+
+  it('缺 chat 凭据行 → missing-credentials，且零 state 写（不清熔断、不扣账）', async () => {
+    const { db, states, statements } = createStateDb(
+      [{ ...emptyAutonomyState(CHAR_ID), configHash: 'stale', failStreak: 2 }],
+      { credentials: false },
+    );
+    const result = await tick(db, tickPack(baseAutonomy()));
+    expect(result.built).toEqual([]);
+    expect(result.skipped).toEqual([{ charId: CHAR_ID, reason: AUTONOMY_SKIP_REASONS.missingCredentials }]);
+    // 前置闸在 configHash 写之前：配置指纹变了也不许落库，账一分没动。
+    expect(stateWrites(statements)).toEqual([]);
+    expect(states.get(CHAR_ID)).toMatchObject({
+      lastRoundAt: 0, roundsToday: 0, configHash: 'stale', failStreak: 2,
+    });
+  });
+
+  it('缺推送订阅 → missing-push-subscription，同样零 state 写', async () => {
+    const { db, states, statements } = createStateDb([], { pushSubscription: false });
+    const result = await tick(db, tickPack(baseAutonomy()));
+    expect(result.skipped).toEqual([{ charId: CHAR_ID, reason: AUTONOMY_SKIP_REASONS.missingPushSubscription }]);
+    expect(stateWrites(statements)).toEqual([]);
+    expect(states.has(CHAR_ID)).toBe(false);
+  });
+
+  it('两样都缺时先报凭据；关着自主的角色仍报 disabled（disabled 闸在前）', async () => {
+    const both = createStateDb([], { credentials: false, pushSubscription: false });
+    expect((await tick(both.db, tickPack(baseAutonomy()))).skipped[0].reason)
+      .toBe(AUTONOMY_SKIP_REASONS.missingCredentials);
+
+    const off = createStateDb([], { credentials: false, pushSubscription: false });
+    expect((await tick(off.db, tickPack(baseAutonomy({ enabled: false })))).skipped[0].reason)
+      .toBe(AUTONOMY_SKIP_REASONS.disabled);
+  });
+
+  it('前置闸在 claim-first 之前：到窗也不建任务、不扣账', async () => {
+    let posted = 0;
+    const { db, states } = createStateDb([], { credentials: false });
+    const result = await tick(db, tickPack(baseAutonomy()), {
+      postTask: async () => { posted += 1; return { status: 200 }; },
+    });
+    expect(posted).toBe(0);
+    expect(result.built).toEqual([]);
+    expect(states.get(CHAR_ID)?.lastRoundAt ?? 0).toBe(0);
+    expect(states.get(CHAR_ID)?.roundsToday ?? 0).toBe(0);
+  });
+
+  it('两样齐 → 照常建任务（前置不该误伤）', async () => {
+    const { db } = createStateDb();
+    expect((await tick(db, tickPack(baseAutonomy()))).built).toEqual([CHAR_ID]);
+  });
+
+  it('前置查询按上游表形状（user_id + cred_id / push_subscriptions）', async () => {
+    const { db, statements } = createStateDb();
+    await tick(db, tickPack(baseAutonomy()));
+    const cred = statements.find((s) => s.sql.includes('FROM llm_credentials'));
+    expect(cred?.sql).toContain('user_id = ? AND cred_id = ?');
+    expect(cred?.args).toEqual([USER_ID, `char:${CHAR_ID}/chat`]);
+    const push = statements.find((s) => s.sql.includes('FROM push_subscriptions'));
+    expect(push?.sql).toContain('user_id = ?');
   });
 });
 
@@ -555,6 +630,10 @@ describe('每分钟认领闸（双 cron 防护）', () => {
           },
           async first() {
             statements.push({ sql, args: stmt._args });
+            // 到点前置的两张上游表在这里一律当「存在」：本 describe 只测认领闸。
+            if (sql.includes('FROM llm_credentials') || sql.includes('FROM push_subscriptions')) {
+              return { ok: 1 };
+            }
             return null;
           },
           async all() {

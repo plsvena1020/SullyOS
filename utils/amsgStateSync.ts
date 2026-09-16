@@ -489,12 +489,24 @@ export const buildCredentialRowsToResync = async (
     .map(parseCharCredId)
     .filter((parsed): parsed is { charId: string; purpose: 'chat' | 'emotion' } =>
       !!parsed && (parsed.purpose === 'chat' || parsed.purpose === 'emotion'));
-  if (wanted.length === 0) return [];
 
   const all = characters ?? await DB.getAllCharacters();
   const byId = new Map(all.map((char) => [char.id, char]));
+
+  // (charId, purpose) 去重：底账里记着的那些 + 开了自主背景生活角色的 chat 行。
+  // 后者不吃「底账里记着才算」这条门——一个从没排过任务的角色云端根本没有它的 chat
+  // 凭据行，而自主调度到点前的 missing-credentials 前置会查它（见 worker
+  // autonomyScheduler），所以这里主动纳进来补一行。值仍按同一个 buildCharChatCredRow
+  // 现算，指纹口径与排程那条路一致。
+  const targets = new Map<string, { charId: string; purpose: 'chat' | 'emotion' }>();
+  for (const pair of wanted) targets.set(`${pair.charId}/${pair.purpose}`, pair);
+  for (const char of all) {
+    if (isAutonomyActive(char)) targets.set(`${char.id}/chat`, { charId: char.id, purpose: 'chat' });
+  }
+  if (targets.size === 0) return [];
+
   const rows: LlmCredentialRow[] = [];
-  for (const { charId, purpose } of wanted) {
+  for (const { charId, purpose } of targets.values()) {
     const char = byId.get(charId);
     if (!char) continue;
     const row = purpose === 'chat'

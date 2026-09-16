@@ -65,6 +65,13 @@ describe('LLM 凭据行的重传接线', () => {
     expect(read('../components/chat/ActiveMsg2SettingsModal.tsx')).toContain('syncAmsgLlmCredentials(');
   });
 
+  it('角色保存路径：开了自主的角色落库后补一次凭据（从没排过任务也得有行）', () => {
+    const src = read('../context/OSContext.tsx');
+    const fn = sliceBetween(src, 'const updateCharacter = async', 'const deleteCharacter');
+    expect(fn).toContain('isAutonomyActive(target)');
+    expect(fn).toContain('syncAmsgLlmCredentials(');
+  });
+
   it('启动补传把 apiConfig 也递进去（缺了它凭据那一项永远补不上）', () => {
     const src = read('../context/OSContext.tsx');
     const call = sliceBetween(src, 'resumePendingAmsgStateSync({', '});');

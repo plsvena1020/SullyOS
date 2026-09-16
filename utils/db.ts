@@ -3667,6 +3667,8 @@ export const DB = {
           data.worldEpisodes !== undefined,
           data.airpEvents !== undefined,
           data.airpWorlds !== undefined,
+          data.autonomousOutbox !== undefined,
+          data.autonomousHeartbeats !== undefined,
           (data as any).worldHomeLocal !== undefined,
           (data as any).luckinLocal !== undefined,
           (data as any).mcdLocal !== undefined,

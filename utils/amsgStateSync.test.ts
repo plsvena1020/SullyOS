@@ -846,6 +846,33 @@ describe('LLM 凭据行的后台重传', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(ActiveMsgClient.putLlmCredentials).toHaveBeenCalledTimes(1);
   });
+
+  // 从没排过任务的角色底账里没有它的 credId，旧实现就永远不补——而自主调度到点前
+  // 恰好会查这一行（缺了 skip missing-credentials），于是「开了自主却永远不醒」。
+  it('开了自主背景生活的角色（没排过任务）也会补上它那一行 chat 凭据', async () => {
+    (isLlmCredentialsReady as any).mockResolvedValue(true);
+    const autoOnly = {
+      id: 'char-autonomy-only',
+      name: '小夜',
+      activeMsg2Config: { enabled: true, tasks: [] },
+      airp: { enabled: true, autonomyLevel: 2, autonomy: { enabled: true } },
+    } as any as CharacterProfile;
+    (DB.getAllCharacters as any).mockResolvedValue([autoOnly]);
+
+    syncAmsgLlmCredentials(API);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(ActiveMsgClient.putLlmCredentials).toHaveBeenCalledTimes(1);
+    expect((ActiveMsgClient.putLlmCredentials as any).mock.calls[0][0]).toEqual([{
+      credId: 'char:char-autonomy-only/chat',
+      value: {
+        apiUrl: 'https://api.example.dev/v1/chat/completions',
+        apiKey: 'sk-new',
+        primaryModel: 'gpt-x',
+      },
+    }]);
+    expect(localStorage.getItem(AMSG2_PENDING_CRED_SYNC_LS_KEY), '传上去了就该销账').toBeNull();
+  });
 });
 
 describe('活跃会话租约', () => {

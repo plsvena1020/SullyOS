@@ -55,6 +55,8 @@ export const AUTONOMY_FAIL_LIMIT = 3;
 /** 跳过原因只用这一组字面量：日志、测试和（之后的）面板都按它对齐。 */
 export const AUTONOMY_SKIP_REASONS = {
   disabled: 'autonomy-disabled',
+  missingCredentials: 'missing-credentials',
+  missingPushSubscription: 'missing-push-subscription',
   cadenceInvalid: 'cadence-invalid',
   tzInvalid: 'tz-invalid',
   spacingWindow: 'spacing-window',
@@ -198,6 +200,60 @@ export function autonomyDateKey(nowMs: number, tzId: string): string {
   return `${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
 }
 
+// ─── 到点硬前置：上游 /schedule-message 在**建任务时**就会查这两样 ────────────
+//
+// 核实自 @rei-standard/amsg-server dist/chunk-3JEWYDM4.mjs 的 POST /schedule-message 分支：
+//   :2544 supportsPushSubscriptionStore → :2549 db.getPushSubscription(userId) →
+//   :2562 没有订阅行 / 不是非空字符串 → 409 PUSH_SUBSCRIPTION_MISSING（**无条件**，
+//         与 messageSubtype / push 档位无关）；
+//   :2574 `if (payload.credRefs)` → :2580 findMissingCredIds → :2584 缺行
+//         → 409 CREDENTIAL_NOT_FOUND。
+// 表形状同为上游 schema（adapters/schema.sqlite.d.ts:34-35）：
+//   llm_credentials (user_id, cred_id, ...)  PK (user_id, cred_id)
+//   push_subscriptions (user_id PRIMARY KEY, subscription, updated_at)
+// 缺任何一样，任务即使建出来也必然被拒——所以调度器要在**扣账之前**先查，
+// 缺了就跳过但不动 state（不算一轮、不烧预算），等用户补上后自然恢复。
+
+/** 与 buildAutonomyScheduleRequest 的 credRefs 同一口径：角色 chat 用途的凭据行名。 */
+export const autonomyChatCredId = (charId: string): string => `char:${charId}/chat`;
+
+/**
+ * 云端有没有这个角色 chat 用途的凭据行。查不到 / 查出错（表还没建、D1 抖动）都按
+ * 「没有」处理：跳过比建一条到点必被 409 拒的任务更安全。
+ */
+export async function hasAutonomyChatCredential(
+  db: AutonomyDb,
+  userId: string,
+  charId: string,
+): Promise<boolean> {
+  try {
+    const row = await db
+      .prepare('SELECT 1 AS ok FROM llm_credentials WHERE user_id = ? AND cred_id = ?')
+      .bind(userId, autonomyChatCredId(charId))
+      .first();
+    return row != null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 这个用户有没有登记的推送订阅。上游建任何任务前都会无条件查它（见上方核实），
+ * 所以推送档位为 off 的角色也得过这一关。订阅是按 user_id 存的一行（每设备），
+ * 没有 per-char 概念——自主生活直接继承它。
+ */
+export async function hasAutonomyPushSubscription(db: AutonomyDb, userId: string): Promise<boolean> {
+  try {
+    const row = await db
+      .prepare("SELECT 1 AS ok FROM push_subscriptions WHERE user_id = ? AND subscription <> ''")
+      .bind(userId)
+      .first();
+    return row != null;
+  } catch {
+    return false;
+  }
+}
+
 /** 'HH:MM' → 当日起始的分钟数；形状不对回 null。 */
 const parseHHMM = (value: unknown): number | null => {
   if (typeof value !== 'string') return null;
@@ -261,6 +317,18 @@ export async function runAutonomyTick(input: AutonomyTickInput): Promise<Autonom
     // 闸 1：开关与档位（L0 静默）。老 pack 没有 autonomy 段 = 自主功能没开过。
     if (!autonomy || autonomy.enabled !== true || autonomy.autonomyLevel < 1) {
       skip(AUTONOMY_SKIP_REASONS.disabled);
+      continue;
+    }
+
+    // 闸 1.5：到点硬前置（见上方核实段）。**必须在任何 state 写之前**：缺凭据行 /
+    // 推送订阅时这条任务到点必被上游 409 拒掉，正确做法是这一跳整个跳过、一分账都不扣，
+    // 而不是先清熔断 / 扣账再失败。查不到就是跳过，不写、不建、不烧预算。
+    if (!(await hasAutonomyChatCredential(db, userId, charId))) {
+      skip(AUTONOMY_SKIP_REASONS.missingCredentials);
+      continue;
+    }
+    if (!(await hasAutonomyPushSubscription(db, userId))) {
+      skip(AUTONOMY_SKIP_REASONS.missingPushSubscription);
       continue;
     }
 
@@ -486,7 +554,7 @@ export async function buildAutonomyScheduleRequest(args: {
       // 这个键照客户端口径带上，handler 不读它。
       [AMSG_JOB_ID_KEY]: crypto.randomUUID(),
     },
-    credRefs: { chat: `char:${args.charId}/chat` },
+    credRefs: { chat: autonomyChatCredId(args.charId) },
     messages: [{ role: 'user', content: AUTONOMY_PLACEHOLDER_PROMPT }],
   };
   const envelope = await encryptPayloadMirror(

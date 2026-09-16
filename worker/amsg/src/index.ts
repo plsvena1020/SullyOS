@@ -172,6 +172,7 @@ import {
 } from './pushFanout';
 import { installOpencodeIdentityFetch } from '../../../utils/llmIdentity';
 import {
+  AUTONOMY_SKIP_REASONS,
   createAutonomyPostTask,
   runAutonomyTick,
   scanAutonomyPacks,
@@ -3364,7 +3365,12 @@ export default {
           clientToken: env.AMSG_SERVER_TOKEN,
         }),
       });
-      if (result.built.length > 0 || result.skipped.length > 0 || scanned.skipped.length > 0) {
+      // 「全是没开自主的角色」是最常态的每分钟一跳，不该每次都留一行日志；只有真建了
+      // 任务、有非 disabled 的跳过、或有读不出的包时才打印，其余一律哑跑。
+      const notableSkips = result.skipped.filter(
+        (entry) => entry.reason !== AUTONOMY_SKIP_REASONS.disabled,
+      );
+      if (result.built.length > 0 || notableSkips.length > 0 || scanned.skipped.length > 0) {
         console.log('[amsg:autonomy]', {
           built: result.built,
           skipped: result.skipped,

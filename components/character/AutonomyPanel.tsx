@@ -747,7 +747,7 @@ const AutonomyPanel: React.FC<AutonomyPanelProps> = ({ char, onChange }) => {
           </div>
         </Group>
 
-        <Group label="工具" hint="自主回合里能用哪些 MCP 工具。只列已启用、已取到工具的服务器。">
+        <Group label="工具" hint="自主回合里能用哪些 MCP 工具。工具调用还没接进自主回合——这一版先保存你的勾选，等接上后按它生效；只列已启用、已取到工具的服务器。">
           {enabledServers.length === 0 ? (
             <div className="text-center py-3 bg-white rounded-2xl border border-dashed border-slate-200 text-[10px] text-slate-400">
               还没有可用的 MCP 服务器（设置 → MCP 里添加并启用）
@@ -782,7 +782,7 @@ const AutonomyPanel: React.FC<AutonomyPanelProps> = ({ char, onChange }) => {
                 <div className="min-w-0">
                   <div className="text-xs font-bold text-slate-700">自主可写</div>
                   <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">
-                    默认关。开启后 TA 在自主回合里真的会改数据（记一笔、发帖、存东西），不只是看。不确定就别开。
+                    默认关。开启后 TA 在自主回合里才允许真的改数据（记一笔、发帖、存东西），不只是看。写入能力还没接进自主回合——这一版先保存你的选择。
                   </p>
                 </div>
               </div>
@@ -792,7 +792,7 @@ const AutonomyPanel: React.FC<AutonomyPanelProps> = ({ char, onChange }) => {
               <div className="flex gap-2 bg-amber-50 border border-amber-200 rounded-2xl px-3 py-2">
                 <WarningCircle size={14} weight="bold" className="text-amber-500 shrink-0 mt-0.5" />
                 <p className="text-[10px] text-amber-700 leading-relaxed">
-                  可写已开启：只勾了工具的服务器才可调用；写入权限档位仍受 AIRP 自主度限制。
+                  可写已开启：只勾了工具的服务器才可调用；写入权限档位仍受 AIRP 自主度限制。写入能力将在后续版本接入自主回合。
                 </p>
               </div>
             )}

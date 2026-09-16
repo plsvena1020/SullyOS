@@ -69,7 +69,8 @@ import { ActiveMsgClient } from '../utils/activeMsgClient';
 import { resolveCharTimeZone } from '../utils/timezone';
 import { ActiveMsgStore, exportAmsg2GlobalConfig } from '../utils/activeMsgStore';
 import { charMayHaveCloudState, purgeCharCloudState } from '../utils/amsg2CharCleanup';
-import { markAmsgStateDirty, markAmsgStateDirtyForAll, resumePendingAmsgStateSync, syncAmsgToolConfigAndPrompts } from '../utils/amsgStateSync';
+import { markAmsgStateDirty, markAmsgStateDirtyForAll, resumePendingAmsgStateSync, syncAmsgLlmCredentials, syncAmsgToolConfigAndPrompts } from '../utils/amsgStateSync';
+import { isAutonomyActive } from '../utils/airp/autonomySettings';
 import { loadMusicPlaybackSnapshot } from './MusicContext';
 import { setCharNameRegistry } from '../utils/charNameRegistry';
 import { setMinimaxRegion } from '../utils/minimaxEndpoint';
@@ -3156,6 +3157,10 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
         // markDirty 内部自带「没开 2.0 / 没挂 AI 任务就 return」的门，普通角色零成本。
         DB.saveCharacter(target).then(() => {
           markAmsgStateDirty({ char: target, userProfile, groups, realtimeConfig });
+          // 开了自主背景生活的角色即便从没排过任务，也要有一行 chat 凭据：worker 调度器
+          // 到点前会查它（缺了就直接 skip missing-credentials，见 autonomyScheduler）。
+          // 值没变时指纹底账会拦掉请求，所以这里可以无脑打一次。
+          if (isAutonomyActive(target)) syncAmsgLlmCredentials(apiConfigRef.current);
           // 时区和名字是另一条路：它们冻在远端任务行里，fire_pack 刷新盖不到。
           // 上游按任务行的 tzId 推进循环任务的下次触发时刻；fixed 模式的推送标题也直接
           // 读任务行的 contactName。只刷真的变了的那几项，别搭别的操作的便车。

@@ -7908,6 +7908,8 @@ async function cleanupAutonomyExperiences(db, beforeMs) {
 var AUTONOMY_FAIL_LIMIT = 3;
 var AUTONOMY_SKIP_REASONS = {
   disabled: "autonomy-disabled",
+  missingCredentials: "missing-credentials",
+  missingPushSubscription: "missing-push-subscription",
   cadenceInvalid: "cadence-invalid",
   tzInvalid: "tz-invalid",
   spacingWindow: "spacing-window",
@@ -7974,6 +7976,23 @@ function autonomyDateKey(nowMs, tzId) {
   const p = wallClockPartsInZone(nowMs, { tzId });
   return `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
 }
+var autonomyChatCredId = (charId) => `char:${charId}/chat`;
+async function hasAutonomyChatCredential(db, userId, charId) {
+  try {
+    const row = await db.prepare("SELECT 1 AS ok FROM llm_credentials WHERE user_id = ? AND cred_id = ?").bind(userId, autonomyChatCredId(charId)).first();
+    return row != null;
+  } catch {
+    return false;
+  }
+}
+async function hasAutonomyPushSubscription(db, userId) {
+  try {
+    const row = await db.prepare("SELECT 1 AS ok FROM push_subscriptions WHERE user_id = ? AND subscription <> ''").bind(userId).first();
+    return row != null;
+  } catch {
+    return false;
+  }
+}
 var parseHHMM = (value) => {
   if (typeof value !== "string") return null;
   const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value);
@@ -8012,6 +8031,14 @@ async function runAutonomyTick(input) {
     const autonomy = pack.autonomy;
     if (!autonomy || autonomy.enabled !== true || autonomy.autonomyLevel < 1) {
       skip(AUTONOMY_SKIP_REASONS.disabled);
+      continue;
+    }
+    if (!await hasAutonomyChatCredential(db, userId, charId)) {
+      skip(AUTONOMY_SKIP_REASONS.missingCredentials);
+      continue;
+    }
+    if (!await hasAutonomyPushSubscription(db, userId)) {
+      skip(AUTONOMY_SKIP_REASONS.missingPushSubscription);
       continue;
     }
     const state = await getAutonomyState(db, charId);
@@ -8154,7 +8181,7 @@ async function buildAutonomyScheduleRequest(args) {
       // 这个键照客户端口径带上，handler 不读它。
       [AMSG_JOB_ID_KEY]: crypto.randomUUID()
     },
-    credRefs: { chat: `char:${args.charId}/chat` },
+    credRefs: { chat: autonomyChatCredId(args.charId) },
     messages: [{ role: "user", content: AUTONOMY_PLACEHOLDER_PROMPT }]
   };
   const envelope = await encryptPayloadMirror(
@@ -16024,7 +16051,10 @@ var src_default = {
           clientToken: env.AMSG_SERVER_TOKEN
         })
       });
-      if (result.built.length > 0 || result.skipped.length > 0 || scanned.skipped.length > 0) {
+      const notableSkips = result.skipped.filter(
+        (entry) => entry.reason !== AUTONOMY_SKIP_REASONS.disabled
+      );
+      if (result.built.length > 0 || notableSkips.length > 0 || scanned.skipped.length > 0) {
         console.log("[amsg:autonomy]", {
           built: result.built,
           skipped: result.skipped,
