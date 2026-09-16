@@ -9,7 +9,8 @@ import {
     LifeSimState, HandbookEntry, Tracker, TrackerEntry, HotNewsSnapshot,
     LifeRecord, MedPlan, LifeRecordSettings, CharacterGroup,
     VRWorldNovel, VRNovelAnnotation, CustomCreatorPart, VRMusicRoomState, VRGuestbookState, VRScript, VRStagedPlay, VRLetter,
-    WorldProfile, WorldEpisode, StoryTheaterEntry, StoryTheaterPreset, StoryTheaterMask, PromptPreset
+    WorldProfile, WorldEpisode, StoryTheaterEntry, StoryTheaterPreset, StoryTheaterMask, PromptPreset,
+    AutonomousOutboxEntry, AutonomyHeartbeat
 } from '../types';
 import type { ShoppingOrder } from './shoppingTypes';
 import type { AirpCommittedEvent } from './airp/commit';
@@ -36,7 +37,8 @@ const DB_NAME = 'AetherOS_Data';
 // v74：塔罗占卜记录（Tarot App）。独立 store，随备份动态枚举自动带走。
 // v75：AIRP 世界事件流（airp_events）。独立 store，随备份动态枚举自动带走。
 // v76：AIRP 世界事实/知识（airp_world）。独立 store，随备份动态枚举自动带走。
-const DB_VERSION = 76; // v76: AIRP 世界事实/知识（airp_world）
+// v77：AIRP 自主生活转述账本 + 心跳（autonomous_outbox / autonomous_heartbeats）。独立 store，随备份动态枚举自动带走。
+const DB_VERSION = 77; // v77: AIRP 自主生活 outbox + 心跳
 
 const STORE_CHARACTERS = 'characters';
 const STORE_CHAR_GROUPS = 'character_groups'; // 角色分组定义（角色通过 groupId 指向；与群聊 groups 无关）
@@ -67,6 +69,8 @@ const STORE_SHOPPING_ORDERS = 'shopping_orders'; // v73: 购物订单
 const STORE_TAROT_READINGS = 'tarot_readings'; // v74: 塔罗占卜记录
 const STORE_AIRP_EVENTS = 'airp_events'; // v75: AIRP 世界事件流（角色导演提交的事件）
 const STORE_AIRP_WORLD = 'airp_world'; // v76: AIRP 世界事实/知识（按角色物化的当前世界状态，keyPath charId）
+const STORE_AUTONOMOUS_OUTBOX = 'autonomous_outbox'; // v77: AIRP 自主生活转述账本（told/pushed 记账，keyPath id）
+const STORE_AUTONOMOUS_HEARTBEATS = 'autonomous_heartbeats'; // v77: AIRP 自主生活心跳（面板只读，keyPath id）
 const STORE_XHS_STOCK = 'xhs_stock';
 const STORE_XHS_ACTIVITIES = 'xhs_activities';
 const STORE_XHS_OWNED_POSTS = 'xhs_owned_posts';
@@ -383,6 +387,15 @@ export const openDB = (): Promise<IDBDatabase> => {
       }
       // v76: AIRP 世界事实/知识（按角色物化）
       createStore(STORE_AIRP_WORLD, { keyPath: 'charId' });
+      // v77: AIRP 自主生活转述账本 + 心跳
+      if (!db.objectStoreNames.contains(STORE_AUTONOMOUS_OUTBOX)) {
+          const outboxStore = db.createObjectStore(STORE_AUTONOMOUS_OUTBOX, { keyPath: 'id' });
+          outboxStore.createIndex('charId', 'charId', { unique: false });
+      }
+      if (!db.objectStoreNames.contains(STORE_AUTONOMOUS_HEARTBEATS)) {
+          const heartbeatStore = db.createObjectStore(STORE_AUTONOMOUS_HEARTBEATS, { keyPath: 'id' });
+          heartbeatStore.createIndex('charId', 'charId', { unique: false });
+      }
 
       // ─── Memory Palace (记忆宫殿) stores ───
       if (!db.objectStoreNames.contains('memory_nodes')) {
@@ -2335,6 +2348,63 @@ export const DB = {
       });
   },
 
+  // ─── AIRP 自主生活转述账本 + 心跳（v77）───
+  getOutboxByChar: async (charId: string, limit = 200): Promise<AutonomousOutboxEntry[]> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_AUTONOMOUS_OUTBOX)) return [];
+      return new Promise((resolve, reject) => {
+          const transaction = db.transaction(STORE_AUTONOMOUS_OUTBOX, 'readonly');
+          const request = transaction.objectStore(STORE_AUTONOMOUS_OUTBOX).index('charId').getAll(charId);
+          request.onsuccess = () => {
+              const all = (request.result || []) as AutonomousOutboxEntry[];
+              all.sort((a, b) => b.ts - a.ts);
+              resolve(all.slice(0, limit));
+          };
+          request.onerror = () => reject(request.error);
+      });
+  },
+
+  saveOutboxEntries: async (entries: AutonomousOutboxEntry[]): Promise<void> => {
+      if (entries.length === 0) return;
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_AUTONOMOUS_OUTBOX)) return;
+      return new Promise((resolve, reject) => {
+          const transaction = db.transaction(STORE_AUTONOMOUS_OUTBOX, 'readwrite');
+          const store = transaction.objectStore(STORE_AUTONOMOUS_OUTBOX);
+          for (const entry of entries) store.put(entry);
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => reject(transaction.error);
+          transaction.onabort = () => reject(transaction.error || new Error('saveOutboxEntries aborted'));
+      });
+  },
+
+  getHeartbeatsByChar: async (charId: string, limit = 20): Promise<AutonomyHeartbeat[]> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_AUTONOMOUS_HEARTBEATS)) return [];
+      return new Promise((resolve, reject) => {
+          const transaction = db.transaction(STORE_AUTONOMOUS_HEARTBEATS, 'readonly');
+          const request = transaction.objectStore(STORE_AUTONOMOUS_HEARTBEATS).index('charId').getAll(charId);
+          request.onsuccess = () => {
+              const all = (request.result || []) as AutonomyHeartbeat[];
+              all.sort((a, b) => b.ts - a.ts);
+              resolve(all.slice(0, limit));
+          };
+          request.onerror = () => reject(request.error);
+      });
+  },
+
+  saveHeartbeat: async (heartbeat: AutonomyHeartbeat): Promise<void> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_AUTONOMOUS_HEARTBEATS)) return;
+      return new Promise((resolve, reject) => {
+          const transaction = db.transaction(STORE_AUTONOMOUS_HEARTBEATS, 'readwrite');
+          transaction.objectStore(STORE_AUTONOMOUS_HEARTBEATS).put(heartbeat);
+          transaction.oncomplete = () => resolve();
+          transaction.onerror = () => reject(transaction.error);
+          transaction.onabort = () => reject(transaction.error || new Error('saveHeartbeat aborted'));
+      });
+  },
+
   getAllGames: async (): Promise<GameSession[]> => {
       const db = await openDB();
       if (!db.objectStoreNames.contains(STORE_GAMES)) return [];
@@ -3327,7 +3397,7 @@ export const DB = {
           });
       };
 
-      const [characters, characterGroups, messages, themes, emojis, emojiCategories, assets, galleryImages, userProfiles, diaries, tasks, anniversaries, roomTodos, roomNotes, groups, journalStickers, socialPosts, courses, games, worldbooks, storyTheaters, storyTheaterPresets, storyTheaterMasks, novels, bankTx, bankData, xhsActivities, xhsOwnedPosts, xhsStockImages, songs, quizzes, tarotReadings, shoppingOrders, guidebookSessions, scheduledMessages, lifeSimStates, handbooks, trackers, trackerEntries, hotNewsSnapshots, vrNovels, vrAnnotations, customCreatorParts, vrMusic, vrGuestbook, vrScripts, vrStagedPlays, vrPresets, vrLetters, vrSettings, worlds, worldEpisodes, lifeRecords, medPlans, lifeRecordSettings, promptPresets, airpEvents, airpWorlds] = await Promise.all([
+      const [characters, characterGroups, messages, themes, emojis, emojiCategories, assets, galleryImages, userProfiles, diaries, tasks, anniversaries, roomTodos, roomNotes, groups, journalStickers, socialPosts, courses, games, worldbooks, storyTheaters, storyTheaterPresets, storyTheaterMasks, novels, bankTx, bankData, xhsActivities, xhsOwnedPosts, xhsStockImages, songs, quizzes, tarotReadings, shoppingOrders, guidebookSessions, scheduledMessages, lifeSimStates, handbooks, trackers, trackerEntries, hotNewsSnapshots, vrNovels, vrAnnotations, customCreatorParts, vrMusic, vrGuestbook, vrScripts, vrStagedPlays, vrPresets, vrLetters, vrSettings, worlds, worldEpisodes, lifeRecords, medPlans, lifeRecordSettings, promptPresets, airpEvents, airpWorlds, autonomousOutbox, autonomousHeartbeats] = await Promise.all([
           getAllFromStore(STORE_CHARACTERS),
           getAllFromStore(STORE_CHAR_GROUPS),
           getAllFromStore(STORE_MESSAGES),
@@ -3386,6 +3456,8 @@ export const DB = {
           getAllFromStore(STORE_PROMPT_PRESETS),
           getAllFromStore(STORE_AIRP_EVENTS),
           getAllFromStore(STORE_AIRP_WORLD),
+          getAllFromStore(STORE_AUTONOMOUS_OUTBOX),
+          getAllFromStore(STORE_AUTONOMOUS_HEARTBEATS),
       ]);
 
       const userProfile = userProfiles.length > 0 ? {
@@ -3436,6 +3508,8 @@ export const DB = {
           worldEpisodes,
           airpEvents,
           airpWorlds,
+          autonomousOutbox,
+          autonomousHeartbeats,
           worldHomeLocal: exportWorldHomeLocal(), // 家园本机配置：全局 API + 文风收藏（存 localStorage）
           luckinLocal: exportLuckinLocal(),       // 瑞幸 token + 启用状态（存 localStorage）
           mcdLocal: exportMcdLocal(),             // 麦当劳 token + 启用状态（存 localStorage）
@@ -3491,6 +3565,8 @@ export const DB = {
           STORE_SHOPPING_ORDERS, // v73 购物订单（Shopping App）
           STORE_AIRP_EVENTS, // v75 AIRP 世界事件流 —— importFullData 侧白名单
           STORE_AIRP_WORLD, // v76 AIRP 世界事实/知识（物化缓存）—— importFullData 侧白名单
+          STORE_AUTONOMOUS_OUTBOX, // v77 AIRP 自主生活转述账本 —— importFullData 侧白名单
+          STORE_AUTONOMOUS_HEARTBEATS, // v77 AIRP 自主生活心跳 —— importFullData 侧白名单
       ].filter(name => db.objectStoreNames.contains(name));
 
       const hasStore = (storeName: string) => availableStores.includes(storeName);
@@ -3910,6 +3986,14 @@ export const DB = {
           await clearAndAdd(STORE_AIRP_WORLD, data.airpWorlds, 'AIRP 世界事实/知识', false);
           data.airpWorlds = undefined as any;
       }, data.airpWorlds?.length || 0);
+      await runSection('AIRP 自主转述账本', data.autonomousOutbox !== undefined, async () => {
+          await clearAndAdd(STORE_AUTONOMOUS_OUTBOX, data.autonomousOutbox, 'AIRP 自主转述账本', false);
+          data.autonomousOutbox = undefined as any;
+      }, data.autonomousOutbox?.length || 0);
+      await runSection('AIRP 自主心跳', data.autonomousHeartbeats !== undefined, async () => {
+          await clearAndAdd(STORE_AUTONOMOUS_HEARTBEATS, data.autonomousHeartbeats, 'AIRP 自主心跳', false);
+          data.autonomousHeartbeats = undefined as any;
+      }, data.autonomousHeartbeats?.length || 0);
       await runSection('家园本机配置', (data as any).worldHomeLocal !== undefined, async () => {
           importWorldHomeLocal((data as any).worldHomeLocal); // 全局 API + 文风收藏
           (data as any).worldHomeLocal = undefined;

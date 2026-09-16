@@ -1,5 +1,5 @@
 import { DB } from '../db';
-import type { AirpFact, AirpKnowledge } from './types';
+import type { AirpFact, AirpFactAuthority, AirpKnowledge } from './types';
 import type { AirpCommittedEvent } from './commit';
 import { resolveFactConflict } from './facts';
 
@@ -63,6 +63,7 @@ export async function materializeCommittedEvents(
   charId: string,
   events: AirpCommittedEvent[],
   atMs: number,
+  authorityOverride: AirpFactAuthority = 'confirmed_scene',
 ): Promise<{ factsWritten: AirpFact[]; knowledgeAdded: AirpKnowledge[] }> {
   if (!Array.isArray(events) || events.length === 0) {
     return { factsWritten: [], knowledgeAdded: [] };
@@ -82,7 +83,7 @@ export async function materializeCommittedEvents(
       subjectId: charId,
       predicate: `airp_event_${event.type}`,
       value: event.summary,
-      authority: 'confirmed_scene',
+      authority: authorityOverride,
       status: 'active',
       validFrom: event.at,
       // 批量内单调递增（atMs + 输入下标）：同一批次里后出现的事件在同槽位上

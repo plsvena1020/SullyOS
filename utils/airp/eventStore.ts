@@ -19,3 +19,20 @@ export async function listAirpEventsByChar(
   if (!charId) return [];
   return DB.getAirpEventsByChar(charId, limit);
 }
+
+/**
+ * 把指定事件标成「已对用户交代」。转述账本（autonomous_outbox）被消费时，
+ * 消费方拿条目上的 eventIds 调这里翻掉 linked 事件的 disclosedToUser。
+ * 空输入 / 空 charId no-op；事件表缺表时 list 回空数组，自然 no-op。
+ */
+export async function markEventsDisclosed(charId: string, ids: string[]): Promise<void> {
+  if (!charId || !Array.isArray(ids) || ids.length === 0) return;
+  const wanted = new Set(ids.filter((id): id is string => typeof id === 'string' && id.length > 0));
+  if (wanted.size === 0) return;
+  const events = await listAirpEventsByChar(charId, 1000);
+  const flipped = events
+    .filter((event) => wanted.has(event.id) && event.disclosedToUser !== true)
+    .map((event) => ({ ...event, disclosedToUser: true }));
+  if (flipped.length === 0) return;
+  await saveAirpEvents(flipped);
+}

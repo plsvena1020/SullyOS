@@ -17,6 +17,7 @@
 
 import { PLATE_CONSOLIDATE_RESULT_KIND } from './amsgPlateJob';
 import { SCHEDULE_CHANGE_RESULT_KIND } from './amsgScheduleResult';
+import { AUTONOMY_RESULT_KIND } from './airp/autonomySettings';
 
 const HEADER = '[amsg2:result]';
 
@@ -113,6 +114,10 @@ const dispatchOne = async (payload: unknown, context?: AmsgResultContext): Promi
       case SCHEDULE_CHANGE_RESULT_KIND: {
         const { applyScheduleChangeResult } = await import('./amsgScheduleResultApply');
         return await applyScheduleChangeResult(payload, context);
+      }
+      case AUTONOMY_RESULT_KIND: {
+        const { applyAutonomyResult } = await import('./autonomyResultApply');
+        return await applyAutonomyResult(payload);
       }
       default:
         // 认不出来的多半是**前端比 worker 旧**：worker 可以脱开前端单独更新（fork 的

@@ -3987,6 +3987,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               // v75/v76 AIRP：世界事件流 + 世界事实/知识（导入端 importFullData 已支持恢复；
               // 此前仅在兜底清单里，这里补显式登记，消除每次导出的 default-path warn）。
               'airp_events', 'airp_world',
+              // v77 AIRP 自主生活：转述账本 + 心跳（导入端 importFullData 已支持恢复）
+              'autonomous_outbox', 'autonomous_heartbeats',
               // 角色小红书主页（导入端 runSection 早已支持，此前一直漏在本清单外——
               // 现在即使再漏，下面 ensureBackupStoresCovered 也会按 objectStoreNames 兜底）。
               'xhs_owned_posts'
@@ -4635,6 +4637,9 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   // AIRP（v75/v76）—— 键名须与 importFullData 读取的字段（data.airpEvents / data.airpWorlds）对齐
                   case 'airp_events': backupData.airpEvents = processedData; break;
                   case 'airp_world': backupData.airpWorlds = processedData; break;
+                  // 自主生活（v77）—— 键名须与 importFullData 读取的字段（data.autonomousOutbox / data.autonomousHeartbeats）对齐
+                  case 'autonomous_outbox': backupData.autonomousOutbox = processedData; break;
+                  case 'autonomous_heartbeats': backupData.autonomousHeartbeats = processedData; break;
                   // 漂移防护：未来新登记的 store 忘写 case 时，按 backupCoverage 的 KNOWN
                   // 映射自动落包（单例 store 取首条），并提醒把显式 case 补回这里。
                   default: {

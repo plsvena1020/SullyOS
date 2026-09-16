@@ -4268,6 +4268,37 @@ export interface Emoji {
     categoryId?: string; 
 }
 
+// ─── 自主背景生活（autonomy）客户端落点（DB v77）───
+//
+// 形状与 worker 结果信封（worker/amsg/src/autonomyFire.ts 的 AutonomyResultPayload）
+// 及面板只读行（components/character/AutonomyPanel.tsx 的 AutonomyHeartbeatRow）
+// 逐字段对齐，定义放在根 types.ts 供 db.ts accessor / FullBackupData / 落点共用。
+export interface AutonomousOutboxEntry {
+    id: string;
+    charId: string;
+    ts: number;
+    q: string;
+    note: string;
+    kind: 'surf' | 'game' | 'forum' | 'rest' | 'mixed';
+    importance: 'big' | 'small';
+    told: 0 | 1;
+    toldBy?: number;
+    pushed: 0 | 1;
+    eventIds?: string[];
+}
+
+export interface AutonomyHeartbeat {
+    id: string;
+    charId: string;
+    ts: number;
+    wokeAt: number;
+    did: 'surf' | 'game' | 'forum' | 'rest' | 'mixed';
+    toolsUsed: string[];
+    usage: { prompt?: number; completion?: number; total: number };
+    pushed: 0 | 1;
+    outboxed: number;
+}
+
 export interface FullBackupData {
     timestamp: number;
     version: number;
@@ -4331,6 +4362,8 @@ export interface FullBackupData {
     worldEpisodes?: WorldEpisode[];            // 家园·演绎历史
     airpEvents?: AirpCommittedEvent[];         // AIRP 世界事件流（角色导演提交的事件）
     airpWorlds?: AirpWorldDoc[];               // AIRP 世界事实/知识（按角色物化的世界文档，keyPath charId）
+    autonomousOutbox?: AutonomousOutboxEntry[];     // AIRP 自主生活转述账本（DB v77）
+    autonomousHeartbeats?: AutonomyHeartbeat[];     // AIRP 自主生活心跳（DB v77）
     vrPostOffice?: Record<string, string>;     // 邮局本机配置：身份 deviceId / 后端地址（存 localStorage）
     vrSignal?: Record<string, string>;         // 信号坠落处本机记录：句子归属「你·角色」+ 反复用清单（存 localStorage）
     worldHomeLocal?: Record<string, string>;   // 家园本机配置：全局 API + 文风收藏（存 localStorage）
