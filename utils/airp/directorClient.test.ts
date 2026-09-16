@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { runAirpDirector } from './directorClient';
+import { AIRP_CAPABILITIES } from './capabilityCatalog';
 import type {
   AirpDirectorApi,
   AirpLlmFetcher,
@@ -388,6 +389,45 @@ describe('runAirpDirector — tool round', () => {
     const result = await runAirpDirector(char, makeApi(), snapshot, 'hi', [], { fetcher, executor });
 
     expect(result.usage).toEqual({ promptTokens: 17, completionTokens: 8 });
+  });
+
+  it.each([
+    'recall_deep',
+    'web_search',
+    'read_note',
+    'weather_lookup_place',
+    'amap_search_places',
+  ])('executes wired catalog tool %s end to end', async (toolName) => {
+    const capability = AIRP_CAPABILITIES.find((candidate) =>
+      candidate.toolNames.includes(toolName),
+    );
+    if (capability === undefined) {
+      throw new Error(`no AIRP_CAPABILITIES entry declares wired tool ${toolName}`);
+    }
+
+    const snapshot = makeSnapshot({ autonomyLevel: 1, capabilities: [capability] });
+    const round1 = makeDirectorJson({
+      toolIntents: [
+        { capabilityId: capability.id, toolName, reason: '需要这个能力', arguments: {} },
+      ],
+    });
+    const round2 = makeDirectorJson({ sceneGoal: '融合工具结果' });
+    const { fetcher, calls } = makeFetcher(
+      chatResponse(JSON.stringify(round1)),
+      chatResponse(JSON.stringify(round2)),
+    );
+    const { executor, calls: execCalls } = makeExecutor({ ok: true, text: 'X' });
+
+    const result = await runAirpDirector(char, makeApi(), snapshot, '你好', [], {
+      fetcher,
+      executor,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.output?.sceneGoal).toBe('融合工具结果');
+    expect(execCalls).toEqual([{ toolName, args: {} }]);
+    expect(calls).toHaveLength(2);
+    expect(messagesOf(calls[1])[1].content).toContain(`- ${toolName}: X`);
   });
 
   it('truncates over-long tool results before feeding them back', async () => {
