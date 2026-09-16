@@ -11,6 +11,7 @@
  */
 
 import { classifyFetchFailure, parseTargetUrl } from './networkFailureDiagnosis';
+import { classifyXhsBridgeFailure, RETRYABLE_COMMANDS, isSessionExpiry } from './xhsSession';
 
 export interface McpToolResult {
     success: boolean;
@@ -40,6 +41,12 @@ const detectMode = (serverUrl: string): BackendProtocol => {
 // Local Bridge/Skills servers ignore the header; the cloud Worker requires it.
 let liteCookie = '';
 let litePlatform: XhsPlatform | 'auto' = 'auto';
+// vps-bridge 模式鉴权头(服务器托管会话);手工 lite 模式恒为空。
+let liteBridgeToken = '';
+// vps 模式下 bridge 在响应里带的不透明会话标签(sha256(a1) 前 16 位),Spider v3 断路器键。
+let lastSessionTag = '';
+// 单飞的「重验登录」:多个请求同时发现失效时只发一次 check-login,等待者共享同一 Promise。
+let inflightLoginCheck: Promise<boolean> | null = null;
 
 // Resolve the XHS cookie for bridge requests: prefer the explicitly-set value,
 // otherwise read it straight from persisted realtime config. This keeps chat-
@@ -128,7 +135,8 @@ const trySpiderV3CommentPatch = async (
         return detail;
     }
 
-    const a1Tag = await spiderCookieTag(cookie);
+    // vps 模式下客户端没有 cookie,a1Tag 回退到 bridge 下发的会话标签(同为 a1 哈希口径)。
+    const a1Tag = (await spiderCookieTag(cookie)) || lastSessionTag;
     if (!a1Tag) return detail;
     let sessionState = readSpiderJson(XHS_SPIDER_V3_EXPERIMENT.sessionKey);
     if (sessionState?.a1Tag !== a1Tag) {
@@ -152,6 +160,7 @@ const trySpiderV3CommentPatch = async (
                 'Content-Type': 'application/json',
                 'x-xhs-cookie': cookie,
                 ...(litePlatform !== 'auto' ? { 'x-xhs-platform': litePlatform } : {}),
+                ...(liteBridgeToken ? { 'x-bridge-token': liteBridgeToken } : {}),
                 'x-xhs-experiment-ack': XHS_SPIDER_V3_EXPERIMENT.optInValue,
             },
             body: JSON.stringify({
@@ -191,7 +200,8 @@ const trySpiderV3CommentPatch = async (
 
 // ==================== Bridge Mode (REST) ====================
 
-const bridgePost = async (
+/** bridgePost 的无重试内核(单飞刷新与主路径共用,防止刷新自身触发嵌套重试)。 */
+const rawBridgePost = async (
     serverUrl: string,
     endpoint: string,
     body: Record<string, any> = {},
@@ -202,6 +212,7 @@ const bridgePost = async (
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     const ck = resolveLiteCookie();
     if (ck) headers['x-xhs-cookie'] = ck;
+    if (liteBridgeToken) headers['x-bridge-token'] = liteBridgeToken;
     const requestPlatform = endpoint === 'check-login'
         ? litePlatform
         : (litePlatform === 'auto' ? resolvePersistedLitePlatform() : litePlatform);
@@ -212,6 +223,9 @@ const bridgePost = async (
             method: 'POST',
             headers,
             body: JSON.stringify(body),
+            signal: (typeof AbortSignal !== 'undefined' && AbortSignal.timeout)
+                ? AbortSignal.timeout(20_000)
+                : undefined,
         });
 
         if (resp.status === 401) {
@@ -220,10 +234,11 @@ const bridgePost = async (
 
         if (!resp.ok) {
             const errData = await resp.json().catch(() => ({}));
-            return { success: false, error: errData.error || `HTTP ${resp.status}` };
+            return { success: false, error: (errData as any).error || `HTTP ${resp.status}` };
         }
 
         let data = await resp.json();
+        if (data?.xhs_session_tag) lastSessionTag = String(data.xhs_session_tag);
         if (data.error) {
             return { success: false, error: data.error };
         }
@@ -236,8 +251,49 @@ const bridgePost = async (
         }
         return { success: true, data };
     } catch (e: any) {
-        return { success: false, error: e.message };
+        if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {
+            return { success: false, error: '请求超时，请检查网络后重试' };
+        }
+        return { success: false, error: e?.message };
     }
+};
+
+/** 单飞 check-login:确认当前 cookie/token 是否真的失效(手工 lite 模式的「假失效」防护)。 */
+const refreshSessionProbe = async (serverUrl: string): Promise<boolean> => {
+    if (inflightLoginCheck) return inflightLoginCheck;
+    inflightLoginCheck = (async () => {
+        try {
+            const probe = await rawBridgePost(serverUrl, 'check-login');
+            return !!(probe.success && (probe.data as any)?.logged_in);
+        } catch {
+            return false;
+        }
+    })();
+    try { return await inflightLoginCheck; } finally { inflightLoginCheck = null; }
+};
+
+const bridgePost = async (
+    serverUrl: string,
+    endpoint: string,
+    body: Record<string, any> = {},
+): Promise<McpToolResult> => {
+    const first = await rawBridgePost(serverUrl, endpoint, body);
+    if (first.success) return first;
+
+    // 会话失效分类:只有明确过期 + 只读命令才走刷新重试;写命令永不重试。
+    const failureCode = classifyXhsBridgeFailure({ errorText: first.error, endpoint });
+    if (!isSessionExpiry(failureCode) || !RETRYABLE_COMMANDS.has(endpoint)) return first;
+    if (endpoint === 'check-login') return first; // 探针命令直接透传,避免自旋
+
+    const ck = resolveLiteCookie();
+    if (!ck && !liteBridgeToken) return first;
+    if (ck) {
+        // 手工 lite 模式:先确认 cookie 真失效了(网络抖动也可能产出类似文案)。
+        const stillValid = await refreshSessionProbe(serverUrl);
+        if (!stillValid) return first;
+    }
+    // vps-bridge 模式:bridge 自动使用服务器最新会话,直接重试一次。
+    return rawBridgePost(serverUrl, endpoint, body);
 };
 
 // ==================== MCP Mode (JSON-RPC 2.0) ====================
@@ -578,6 +634,11 @@ export const XhsMcpClient = {
         const nextCookie = cookie || '';
         if (nextCookie !== liteCookie) litePlatform = 'auto';
         liteCookie = nextCookie;
+    },
+
+    // vps-bridge 模式鉴权:bridge 对除 health 外的端点校验 X-Bridge-Token。
+    setBridgeToken: (token?: string) => {
+        liteBridgeToken = (token || '').trim();
     },
 
 

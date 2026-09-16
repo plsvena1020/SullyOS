@@ -302,3 +302,78 @@ describe('XHS 分享给角色读的数据面（2026-09-06 链接提取）', () =
         expect(comments[0].likes).toBe(12_000);
     });
 });
+
+describe('bridgePost timeout / refresh single-flight (session hardening)', () => {
+    const EXPIRY_ERROR = '这串 cookie 在 xiaohongshu.com 和 rednote.com 两套后端都没有通过登录校验。请从当前实际登录的网站重新复制完整请求 Cookie。';
+
+    afterEach(() => {
+        XhsMcpClient.setCookie('');
+        XhsMcpClient.setBridgeToken('');
+        vi.restoreAllMocks();
+        vi.unstubAllGlobals();
+    });
+
+    it('confirms expiry once then retries a read command exactly once', async () => {
+        XhsMcpClient.setCookie(`a1=${'a'.repeat(52)}; web_session=stale`);
+        const fetchSpy = vi.fn(async (input: any) => {
+            const url = String(input);
+            if (url.endsWith('/api/check-login')) {
+                return new Response(JSON.stringify({ logged_in: true, user_id: 'u1' }), { headers: { 'content-type': 'application/json' } });
+            }
+            const searchCalls = fetchSpy.mock.calls.filter((c: any) => String(c[0]).endsWith('/api/search')).length;
+            if (url.endsWith('/api/search') && searchCalls === 1) {
+                return new Response(JSON.stringify({ error: EXPIRY_ERROR }), { headers: { 'content-type': 'application/json' } });
+            }
+            return new Response(JSON.stringify({ success: true, feeds: [] }), { headers: { 'content-type': 'application/json' } });
+        });
+        vi.stubGlobal('fetch', fetchSpy);
+
+        const result = await XhsMcpClient.search('https://worker.test/api', 'cat');
+        expect(result.success).toBe(true);
+        expect(fetchSpy).toHaveBeenCalledTimes(3); // search 失败 + check-login 确认 + search 重试
+    });
+
+    it('NEVER retries write commands after expiry', async () => {
+        XhsMcpClient.setCookie(`a1=${'a'.repeat(52)}; web_session=stale`);
+        const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: EXPIRY_ERROR }), { headers: { 'content-type': 'application/json' } }));
+        vi.stubGlobal('fetch', fetchMock);
+        const result = await XhsMcpClient.replyComment('https://worker.test/api', 'feed1', 'tok', 'hi');
+        expect(result.success).toBe(false);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('maps timeout to a friendly error instead of hanging', async () => {
+        XhsMcpClient.setCookie(`a1=${'a'.repeat(52)}; web_session=stale`);
+        vi.spyOn(globalThis, 'fetch').mockImplementation(() =>
+            Promise.reject(Object.assign(new Error('aborted'), { name: 'TimeoutError' })));
+        const result = await XhsMcpClient.search('https://worker.test/api', 'cat');
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('请求超时');
+    });
+
+    it('sends X-Bridge-Token and captures xhs_session_tag (vps mode)', async () => {
+        XhsMcpClient.setBridgeToken('bridge-tok');
+        vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input: any, init?: any) => {
+            expect(new Headers(init?.headers).get('x-bridge-token')).toBe('bridge-tok');
+            return new Response(JSON.stringify({ logged_in: true, xhs_session_tag: 'deadbeefdeadbeef' }), { headers: { 'content-type': 'application/json' } });
+        });
+        const result = await XhsMcpClient.checkLogin('https://bridge.test/api');
+        expect(result.success).toBe(true);
+    });
+
+    it('vps mode retries read commands once without a local cookie', async () => {
+        XhsMcpClient.setBridgeToken('bridge-tok');
+        const fetchSpy = vi.fn(async (input: any) => {
+            const url = String(input);
+            const searchCalls = fetchSpy.mock.calls.filter((c: any) => String(c[0]).endsWith('/api/search')).length;
+            if (url.endsWith('/api/search') && searchCalls === 1) {
+                return new Response(JSON.stringify({ error: EXPIRY_ERROR }), { headers: { 'content-type': 'application/json' } });
+            }
+            return new Response(JSON.stringify({ success: true, feeds: [] }), { headers: { 'content-type': 'application/json' } });
+        });
+        vi.stubGlobal('fetch', fetchSpy);
+        const result = await XhsMcpClient.search('https://bridge.test/api', 'cat');
+        expect(result.success).toBe(true);
+        expect(fetchSpy).toHaveBeenCalledTimes(2); // search 失败 + search 重试(无 check-login)
+    });
+});
