@@ -29,6 +29,20 @@ function pushUnique(out: string[], value: string): void {
   if (!out.includes(value)) out.push(value);
 }
 
+/** 合并 id 数组：prev 非数组视为空、next 丢弃非字符串项；保序去重，先见者胜。 */
+export function appendUniqueIds(prev: unknown, next: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (value: unknown): void => {
+    if (typeof value !== 'string' || seen.has(value)) return;
+    seen.add(value);
+    out.push(value);
+  };
+  if (Array.isArray(prev)) for (const value of prev) push(value);
+  if (Array.isArray(next)) for (const value of next) push(value);
+  return out;
+}
+
 const keywordsOf = (normSummary: string): string[] => {
   const out: string[] = [];
   for (const m of normSummary.matchAll(/[a-z0-9]{2,}/g)) pushUnique(out, m[0]);

@@ -123,7 +123,10 @@ describe('commitAirpRound（真实 DB 层）', () => {
   it('重复提交同一轮 → committed 为空、skippedIds 记下已提交 id（幂等）', async () => {
     const charId = freshCharId();
     const output = director([proposal(GO_PARK), proposal(DRINK_COFFEE)]);
-    await seedAssistant(charId, AT_MS + 5);
+    // Anchor carries a legacy duplicated mark: after the rerun the marks must be duplicate-free.
+    const anchorId = await seedAssistant(charId, AT_MS + 5, {
+      airpCommittedIds: ['airp-stale-0', 'airp-stale-0'],
+    });
 
     const first = await commitAirpRound({
       charId, output, replyText: REPLY, atMs: AT_MS, postStartMs: AT_MS,
@@ -139,6 +142,10 @@ describe('commitAirpRound（真实 DB 层）', () => {
     expect(second.committed).toEqual([]);
     expect([...second.skippedIds].sort()).toEqual(priorIds);
     expect((await listAirpEventsByChar(charId)).length).toBe(2);
+
+    const marks = (await DB.getMessageById(anchorId))?.metadata?.airpCommittedIds ?? [];
+    expect(new Set(marks).size).toBe(marks.length);
+    expect([...marks].sort()).toEqual(['airp-stale-0', ...priorIds].sort());
   });
 
   it('正文未叙述任何提议 → 空结果且零写入（事件/世界/记账都不动）', async () => {

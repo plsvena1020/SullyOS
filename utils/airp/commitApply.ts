@@ -1,6 +1,6 @@
 import { DB } from '../db';
 import type { AirpDirectorOutput } from './types';
-import { extractCommittedEvents, type AirpCommittedEvent } from './commit';
+import { appendUniqueIds, extractCommittedEvents, type AirpCommittedEvent } from './commit';
 import { saveAirpEvents } from './eventStore';
 import { materializeCommittedEvents } from './worldStore';
 
@@ -84,10 +84,7 @@ export async function commitAirpRound(
       const savedIds = toSave.map((event) => event.id);
       await DB.updateMessageMetadata(anchorMessageId, (prev: any) => ({
         ...(prev ?? {}),
-        airpCommittedIds: [
-          ...(Array.isArray(prev?.airpCommittedIds) ? prev.airpCommittedIds : []),
-          ...savedIds,
-        ],
+        airpCommittedIds: appendUniqueIds(prev?.airpCommittedIds, savedIds),
       }));
     }
 

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { extractCommittedEvents } from './commit';
+import { appendUniqueIds, extractCommittedEvents } from './commit';
 import type { AirpCommittedEvent } from './commit';
 import type { AirpDirectorOutput, AirpProposedEvent } from './types';
 
@@ -244,6 +244,36 @@ describe('extractCommittedEvents edge rules', () => {
         extractCommittedEvents(input as AirpDirectorOutput, COFFEE_REPLY, { charId: 'c', atMs: 1 }),
       ).not.toThrow();
     }
+  });
+});
+
+describe('appendUniqueIds', () => {
+  it('collapses duplicates across prev and next, first-seen order wins', () => {
+    expect(appendUniqueIds(['a', 'b', 'a'], ['b', 'c', 'a', 'd'])).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('treats a non-array prev as empty', () => {
+    for (const prev of [undefined, null, 0, 'x', {}, 'a,b']) {
+      expect(appendUniqueIds(prev, ['a', 'b'])).toEqual(['a', 'b']);
+    }
+  });
+
+  it('drops non-string entries from next and from a dirty prev', () => {
+    const next = ['b', 2, undefined, 'b'] as unknown as string[];
+    expect(appendUniqueIds(['a', 1, null, 'a'], next)).toEqual(['a', 'b']);
+  });
+
+  it('keeps order stable and never mutates prev', () => {
+    const prev = ['z', 'y'];
+    const out = appendUniqueIds(prev, ['x', 'z']);
+    expect(out).toEqual(['z', 'y', 'x']);
+    expect(prev).toEqual(['z', 'y']);
+    expect(out).not.toBe(prev);
+  });
+
+  it('returns [] when both sides are empty', () => {
+    expect(appendUniqueIds(undefined, [])).toEqual([]);
+    expect(appendUniqueIds([], [])).toEqual([]);
   });
 });
 

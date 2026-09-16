@@ -65,6 +65,7 @@ import { lastUserMessageWantsImage } from './imageRequestIntent';
 import { commitAirpRound } from './airp/commitApply';
 import type { AirpDirectorOutput } from './airp/types';
 import { markAutonomyTold } from './airp/autonomyRetell';
+import { appendUniqueIds } from './airp/commit';
 
 // ─── 模块内辅助 ──────────────────────────────────────────────────────────────
 
@@ -2507,10 +2508,7 @@ ${material}
                 // 审计面：本轮气泡上面记下它转述过哪些条目（合并，不覆盖既有 metadata）。
                 await DB.updateMessageMetadata(anchorMessageId, (prev: any) => ({
                     ...(prev ?? {}),
-                    autonomyToldIds: [
-                        ...(Array.isArray(prev?.autonomyToldIds) ? prev.autonomyToldIds : []),
-                        ...toldIds,
-                    ],
+                    autonomyToldIds: appendUniqueIds(prev?.autonomyToldIds, toldIds),
                 }));
             }
         } catch (e) {
