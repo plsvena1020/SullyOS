@@ -397,6 +397,10 @@ describe('runAirpDirector — tool round', () => {
     'read_note',
     'weather_lookup_place',
     'amap_search_places',
+    'schedule_now',
+    'schedule_cancel',
+    'schedule_renew',
+    'save_diary',
   ])('executes wired catalog tool %s end to end', async (toolName) => {
     const capability = AIRP_CAPABILITIES.find((candidate) =>
       candidate.toolNames.includes(toolName),
@@ -405,7 +409,8 @@ describe('runAirpDirector — tool round', () => {
       throw new Error(`no AIRP_CAPABILITIES entry declares wired tool ${toolName}`);
     }
 
-    const snapshot = makeSnapshot({ autonomyLevel: 1, capabilities: [capability] });
+    const autonomyLevel = capability.risk === 'low_write' ? 2 : 1;
+    const snapshot = makeSnapshot({ autonomyLevel, capabilities: [capability] });
     const round1 = makeDirectorJson({
       toolIntents: [
         { capabilityId: capability.id, toolName, reason: '需要这个能力', arguments: {} },
