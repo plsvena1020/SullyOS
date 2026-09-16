@@ -350,6 +350,57 @@ describe('createChatToolExecutor —— save_diary runner', () => {
         expect(row.isArchived).toBe(false);
         expect('autoSync' in row).toBe(false);
     });
+
+    it('同一天同样正文重复调用：内容寻址命中同一 id，put 覆盖成一行', async () => {
+        const { executor } = makeDiaryExecutor();
+
+        await executor.executeTool('save_diary', { text: '同样的咖啡记录。' });
+        await executor.executeTool('save_diary', { text: '同样的咖啡记录。' });
+
+        expect(await DB.getDiariesByCharId('char-diary')).toHaveLength(1);
+    });
+
+    it('同一天不同正文：留下两行', async () => {
+        const { executor } = makeDiaryExecutor();
+
+        await executor.executeTool('save_diary', { text: '第一件事。' });
+        await executor.executeTool('save_diary', { text: '第二件事。' });
+
+        expect(await DB.getDiariesByCharId('char-diary')).toHaveLength(2);
+    });
+
+    it('同样正文跨 UTC 天：日期进了 id，留下两行', async () => {
+        const { executor } = makeDiaryExecutor();
+        const nowSpy = vi.spyOn(Date, 'now');
+
+        try {
+            nowSpy.mockReturnValue(Date.UTC(2026, 8, 17, 12, 0, 0));
+            await executor.executeTool('save_diary', { text: '跨天也要记。' });
+            nowSpy.mockReturnValue(Date.UTC(2026, 8, 18, 12, 0, 0));
+            await executor.executeTool('save_diary', { text: '跨天也要记。' });
+        } finally {
+            nowSpy.mockRestore();
+        }
+
+        const rows = await DB.getDiariesByCharId('char-diary');
+        expect(rows).toHaveLength(2);
+        expect(new Set(rows.map((row) => row.date))).toEqual(new Set(['2026-09-17', '2026-09-18']));
+        expect(new Set(rows.map((row) => row.id)).size).toBe(2);
+    });
+
+    it('正文哈希确定性：同文本两次调用产出同一个 id，形状为日期 + 8 位十六进制', async () => {
+        const { executor } = makeDiaryExecutor();
+
+        await executor.executeTool('save_diary', { text: '确定性的正文。' });
+        const [first] = await DB.getDiariesByCharId('char-diary');
+
+        await clearDiaries();
+        await executor.executeTool('save_diary', { text: '确定性的正文。' });
+        const [second] = await DB.getDiariesByCharId('char-diary');
+
+        expect(first.id).toBe(second.id);
+        expect(first.id).toMatch(/^airp-diary-tool-\d{4}-\d{2}-\d{2}-[0-9a-f]{8}$/);
+    });
 });
 
 // 验收要求「loop test covering 9 wired names」：这里在 executor 层锁住全部 9 个目录名

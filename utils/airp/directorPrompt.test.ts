@@ -12,6 +12,7 @@ import type {
   AirpKnowledge,
   AirpRuntimeSnapshot,
 } from './types';
+import { AMSG2_TOOLS } from '../amsg2ToolBridge';
 
 function makeFact(overrides: Partial<AirpFact> = {}): AirpFact {
   return {
@@ -341,6 +342,48 @@ describe('buildDirectorSystemPrompt — capability tool schemas (behavior 7)', (
     expect(output).toContain('capabilityId');
     expect(output).toContain('toolName');
     expect(output).toContain('arguments');
+  });
+});
+
+describe('WIRED_TOOL_SCHEMAS — 声明的参数键不出真实工具参数表（防漂移）', () => {
+  const NEW_TOOLS = ['schedule_now', 'schedule_cancel', 'schedule_renew', 'save_diary'];
+
+  // 真名映射与 toolExecutor 的 CATALOG_TO_REAL 一致；排程三件套的真工具就在 AMSG2_TOOLS 里。
+  const REAL_NAMES: Record<string, string> = {
+    schedule_now: 'schedule_active_message',
+    schedule_cancel: 'cancel_active_message',
+    schedule_renew: 'renew_active_message',
+  };
+
+  function declaredSchemaKeys(toolName: string): string[] {
+    const source = readFileSync(new URL('./directorPrompt.ts', import.meta.url), 'utf8');
+    const entry = source.match(new RegExp(`\\b${toolName}: '参数 (\\{[^']*\\})`))?.[1];
+    expect(entry, `missing WIRED_TOOL_SCHEMAS entry: ${toolName}`).toBeTruthy();
+    return Object.keys(JSON.parse(entry as string));
+  }
+
+  function realParamKeys(toolName: string): string[] | undefined {
+    const tool = AMSG2_TOOLS.find((candidate) => candidate.function.name === toolName);
+    return tool ? Object.keys(tool.function.parameters.properties ?? {}) : undefined;
+  }
+
+  it('4 条新 schema 的参数键都是对应真实工具参数的子集', () => {
+    for (const toolName of NEW_TOOLS) {
+      const declared = declaredSchemaKeys(toolName);
+      const real = REAL_NAMES[toolName];
+      // save_diary 没有共享面工具，由 toolExecutor 的内部 runner 执行，只读 text。
+      const allowedKeys = real ? realParamKeys(real) : ['text'];
+      expect(allowedKeys, `no real parameter table for ${toolName}`).toBeDefined();
+
+      const allowed = new Set(allowedKeys ?? []);
+      expect(declared.filter((key) => !allowed.has(key)), `${toolName} 声明了真实工具没有的参数`)
+        .toEqual([]);
+    }
+
+    // 防空转：排程三件套必须真的能在 AMSG2_TOOLS 里查到，否则上面退化成空断言。
+    for (const realName of Object.values(REAL_NAMES)) {
+      expect(realParamKeys(realName), `AMSG2_TOOLS missing ${realName}`).toBeDefined();
+    }
   });
 });
 

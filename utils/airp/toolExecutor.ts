@@ -182,6 +182,21 @@ async function runScheduleTool(
 const utcDateKey = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
 
 /**
+ * 日记 id 的内容哈希：djb2 → 8 位十六进制。
+ *
+ * 特意没用 agenticToolFeedback 的 `toolCallFingerprint`：那是「工具名 + 参数」的调用指纹
+ * （`name:JSON` 形状，不是字符串哈希），拿它当 `fingerprint(text)` 会把整段正文塞进 id。
+ * djb2 短且确定，同一段文本每次都是同一个值——这正是内容寻址去重要求的。
+ */
+function hashDiaryText(text: string): string {
+    let hash = 5381;
+    for (let index = 0; index < text.length; index += 1) {
+        hash = ((hash << 5) + hash + text.charCodeAt(index)) >>> 0;
+    }
+    return hash.toString(16).padStart(8, '0');
+}
+
+/**
  * AgenticToolCtx.char 是窄接口（只有 name 等字段，不含 id）；生产侧传进来的是完整
  * CharacterProfile，运行时 id 一定在。id 缺失就不落这条无主日记。
  */
@@ -194,6 +209,10 @@ function readCharId(ctx: AgenticToolCtx): string {
  * 日记 runner：按 Task-19 C1 的约定写角色侧一页——userPage 只是占位空页（grid），
  * charPage 存正文（plain），日期用 UTC 的 YYYY-MM-DD，不写 autoSync（自动同步时代的
  * 字段，这里没有）。空内容不写；DB 失败回文案，绝不抛给 directorClient。
+ *
+ * id 是内容寻址的：`airp-diary-tool-<UTC日期>-<正文哈希>`。同一天同样正文重复调用会
+ * 命中同一个 id、被 IndexedDB 的 put 覆盖成一行（重滚一轮不会留重复日记）；正文变了
+ * 或跨了 UTC 天就是新行。
  */
 async function runSaveDiary(
     args: Record<string, unknown>,
@@ -206,11 +225,12 @@ async function runSaveDiary(
     if (!charId) return { ok: false, text: TEXT_DIARY_FAILED };
 
     const now = Date.now();
+    const date = utcDateKey(now);
     try {
         await DB.saveDiary({
-            id: `airp-diary-tool-${crypto.randomUUID()}`,
+            id: `airp-diary-tool-${date}-${hashDiaryText(text)}`,
             charId,
-            date: utcDateKey(now),
+            date,
             userPage: { text: '', paperStyle: 'grid', stickers: [] },
             charPage: { text, paperStyle: 'plain', stickers: [] },
             timestamp: now,
