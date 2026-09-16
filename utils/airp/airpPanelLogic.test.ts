@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   applyAutonomyLevel,
   isCapabilityEnabled,
+  selectCapabilities,
   toggleCapability,
   formatAirpEventTime,
   formatAirpEventRow,
@@ -9,7 +10,7 @@ import {
   AIRP_RISK_LABELS,
 } from '../../components/character/AirpPanel';
 import { AIRP_CAPABILITIES } from '../../utils/airp/capabilityCatalog';
-import type { AirpSettings } from '../../utils/airp/settings';
+import { mergeAirpSettings, type AirpSettings } from '../../utils/airp/settings';
 
 const ALL_IDS = ['a', 'b', 'c'];
 
@@ -134,6 +135,25 @@ describe('toggleCapability（勾选 = 显式白名单；勾满收敛回空 = 全
   });
 });
 
+describe('selectCapabilities（面板读白名单：损坏 / 导入的非数组值不炸渲染）', () => {
+  it('字符串数组原样透传', () => {
+    expect(selectCapabilities({ capabilities: ['a', 'b'] })).toEqual(['a', 'b']);
+  });
+
+  it('非数组脏值（字符串 / 数字 / null / undefined）→ []', () => {
+    expect(selectCapabilities({ capabilities: 'oops' })).toEqual([]);
+    expect(selectCapabilities({ capabilities: 42 })).toEqual([]);
+    expect(selectCapabilities({ capabilities: null })).toEqual([]);
+    expect(selectCapabilities(undefined)).toEqual([]);
+  });
+
+  it('与 mergeAirpSettings 同口径（归并等价）', () => {
+    for (const raw of [{ capabilities: ['a', 5, 'b'] }, { capabilities: {} }, 'junk', null, undefined]) {
+      expect(selectCapabilities(raw)).toEqual(mergeAirpSettings(raw).capabilities);
+    }
+  });
+});
+
 describe('formatAirpEventTime（M/D HH:mm，坏值回落占位）', () => {
   it('有效时间戳按本地时间格式化', () => {
     expect(formatAirpEventTime(new Date(2026, 0, 2, 3, 4).getTime())).toBe('1/2 03:04');
@@ -145,6 +165,10 @@ describe('formatAirpEventTime（M/D HH:mm，坏值回落占位）', () => {
     expect(formatAirpEventTime('abc')).toBe('—');
     expect(formatAirpEventTime(Number.NaN)).toBe('—');
     expect(formatAirpEventTime(Number.POSITIVE_INFINITY)).toBe('—');
+  });
+
+  it('null 不当作 0（Number(null) === 0）→ 占位符', () => {
+    expect(formatAirpEventTime(null)).toBe('—');
   });
 });
 

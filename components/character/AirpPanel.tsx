@@ -90,8 +90,15 @@ export const applyAutonomyLevel = (
   level: AirpAutonomyLevel,
 ): AirpSettings => buildAirpSettings(current, { autonomyLevel: level });
 
+/**
+ * 面板读取能力白名单：经 mergeAirpSettings 归一化，保证是字符串数组。
+ * 损坏 / 导入的非数组值（字符串、数字、null…）一律回落 []，渲染期不抛错。
+ */
+export const selectCapabilities = (airp: unknown): string[] => mergeAirpSettings(airp).capabilities;
+
 /** 事件时间：M/D HH:mm（与 AutonomyPanel formatStamp 同格式）；坏值回落占位符。 */
 export const formatAirpEventTime = (ts: unknown): string => {
+  if (ts === null || ts === undefined) return '—';
   const time = Number(ts);
   if (!Number.isFinite(time)) return '—';
   const date = new Date(time);
@@ -169,7 +176,7 @@ interface AirpPanelProps {
 const AirpPanel: React.FC<AirpPanelProps> = ({ char, onChange }) => {
   const airp = char.airp;
   const level = mergeAirpSettings(airp).autonomyLevel;
-  const selectedCapabilities = airp?.capabilities ?? [];
+  const selectedCapabilities = selectCapabilities(airp);
 
   const emit = (patch: Partial<AirpSettings>) => onChange(buildAirpSettings(airp, patch));
   const setLevel = (next: AirpAutonomyLevel) => onChange(applyAutonomyLevel(airp, next));
@@ -244,6 +251,8 @@ const AirpPanel: React.FC<AirpPanelProps> = ({ char, onChange }) => {
               <button
                 key={capability.id}
                 type="button"
+                role="checkbox"
+                aria-checked={checked}
                 onClick={() => emit({ capabilities: toggleCapability(selectedCapabilities, capability.id, CAPABILITY_IDS) })}
                 className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-2xl border text-left transition-all ${checked ? 'border-violet-400 bg-violet-50' : 'border-slate-200 bg-white active:scale-[0.98]'}`}
               >
