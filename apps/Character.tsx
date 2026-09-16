@@ -13,6 +13,7 @@ import RoomPlatePanel from '../components/character/RoomPlatePanel';
 import MemoryArchivist from '../components/character/MemoryArchivist';
 import ChibiStudio, { ChibiShelfPanel } from '../components/character/ChibiStudio';
 import AutonomyPanel from '../components/character/AutonomyPanel';
+import AirpPanel from '../components/character/AirpPanel';
 import TokenImg from '../components/os/TokenImg';
 import { resolveBlobRefsDeep, migrateDataUrlToRef } from '../utils/blobRef';
 import { characterLaunch } from '../utils/characterLaunch';
@@ -2164,6 +2165,17 @@ ${isInitialGeneration ? `
                    {detailTab === 'identity' && (
                        <div className="mt-6 pt-4 border-t border-slate-100">
                            <AutonomyPanel
+                               char={formData}
+                               onChange={(next) => handleChange('airp', next)}
+                           />
+                       </div>
+                   )}
+
+                   {/* AIRP 权限与能力：档位 + 能力白名单 + 活动记录（只读）。字段归属与 AutonomyPanel
+                       划清：这里只写 autonomyLevel / capabilities，不碰 enabled / mcpAllow / writable。 */}
+                   {detailTab === 'identity' && (
+                       <div className="mt-6 pt-4 border-t border-slate-100">
+                           <AirpPanel
                                char={formData}
                                onChange={(next) => handleChange('airp', next)}
                            />
