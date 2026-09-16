@@ -9,6 +9,7 @@ import type {
 } from './types';
 import { AIRP_CAPABILITIES } from './capabilityCatalog';
 import { mergeAirpSettings } from './settings';
+import { mergeAutonomySettings } from './autonomySettings';
 import { resolveCharTimeZone } from '../timezone';
 import { injectMemoryPalace } from '../memoryPalace/pipeline';
 import { getDailyScheduleForChar } from '../dailySchedule';
@@ -146,6 +147,81 @@ function readRealtimeConfig(): RealtimeConfig {
   return defaultRealtimeConfig;
 }
 
+/** 新闻相关性打分用的市名：只认 char.location.city，trim 后为空视为缺席。 */
+function readCharCity(char: CharacterProfile): string | undefined {
+  try {
+    const city = char?.location?.city;
+    if (typeof city !== 'string') return undefined;
+    const trimmed = city.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 新闻相关性打分用的兴趣词：merge 终值里只收字符串、trim 后非空、按小写去重。 */
+function readCharInterests(char: CharacterProfile): string[] {
+  let raw: unknown;
+  try {
+    raw = mergeAutonomySettings(char).interests;
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const words: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== 'string') continue;
+    const word = entry.trim();
+    if (word.length === 0) continue;
+    const key = word.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    words.push(word);
+  }
+  return words;
+}
+
+/**
+ * 确定性新闻筛选：市名命中 +2，每个不同兴趣词命中 +1；只留 score > 0，
+ * 按分数降序（同分保持缓存顺序）取前 MAX_NEWS_FACTS 条。不改动入参。
+ */
+function selectRelevantNews(
+  newsItems: string[],
+  city: string | undefined,
+  interests: string[],
+): string[] {
+  const cityKey = city ? city.toLowerCase() : undefined;
+  const interestKeys = interests.map((word) => word.toLowerCase());
+  const scored: { title: string; score: number; index: number }[] = [];
+  newsItems.forEach((title, index) => {
+    if (typeof title !== 'string' || title.trim().length === 0) return;
+    const hay = title.toLowerCase();
+    let score = cityKey !== undefined && hay.includes(cityKey) ? 2 : 0;
+    for (const key of interestKeys) {
+      if (hay.includes(key)) score += 1;
+    }
+    if (score > 0) scored.push({ title, score, index });
+  });
+  scored.sort((a, b) => (b.score - a.score) || (a.index - b.index));
+  return scored.slice(0, MAX_NEWS_FACTS).map((entry) => entry.title);
+}
+
+/**
+ * 应用筛选并把空结果折成缺席（严格口径：无 city/interests 就是零条新闻）。
+ * 返回浅拷贝，不改动注入进来的 digest（调用方可能复用同一对象）。
+ */
+function withFilteredNews(digest: AirpRealtimeDigest, char: CharacterProfile): AirpRealtimeDigest {
+  if (!Array.isArray(digest.newsItems)) return digest;
+  const kept = selectRelevantNews(digest.newsItems, readCharCity(char), readCharInterests(char));
+  if (kept.length === 0) {
+    const copy = { ...digest };
+    delete copy.newsItems;
+    return copy;
+  }
+  return { ...digest, newsItems: kept };
+}
+
 /**
  * 运行时的实时摘要（生产默认）：只读 peek 缓存 + 纯函数节日，绝不 fetch。
  * peek 没有新闻时补一份 IndexedDB 热点快照（同样是纯读取）；缓存为空且当天无节日时返回 null。
@@ -166,12 +242,18 @@ async function loadRealtimeFromCache(
     typeof peek?.weatherText === 'string' && peek.weatherText.trim().length > 0
       ? peek.weatherText
       : undefined;
+  const filterCity = readCharCity(char);
+  const filterInterests = readCharInterests(char);
   const peekNewsItems =
     peek?.newsItems && peek.newsItems.length > 0 ? peek.newsItems : undefined;
-
-  let newsItems = peekNewsItems;
+  // 先筛选再算 observedAt：被丢掉新闻的抓取时间不得给天气/节日当新鲜度锚点。
+  const keptPeekNews = peekNewsItems
+    ? selectRelevantNews(peekNewsItems, filterCity, filterInterests)
+    : [];
+  let newsItems: string[] | undefined = keptPeekNews.length > 0 ? keptPeekNews : undefined;
   let newsFetchedAt: number | undefined;
-  if (!newsItems) {
+  // peek 没给新闻时才读 IDB 快照；peek 给了但全被筛掉 = 严格零条，不再回退别的来源。
+  if (!peekNewsItems) {
     try {
       const snap = await DB.getLatestHotNewsSnapshot();
       if (snap && Number.isFinite(snap.fetchedAt) && snap.fetchedAt <= builtAt) {
@@ -180,10 +262,10 @@ async function loadRealtimeFromCache(
             .map((item) => item?.title)
             .filter(
               (title): title is string => typeof title === 'string' && title.trim().length > 0,
-            )
-            .slice(0, MAX_NEWS_FACTS);
-          if (titles.length > 0) {
-            newsItems = titles;
+            );
+          const kept = selectRelevantNews(titles, filterCity, filterInterests);
+          if (kept.length > 0) {
+            newsItems = kept;
             newsFetchedAt = snap.fetchedAt;
           }
         }
@@ -198,7 +280,7 @@ async function loadRealtimeFromCache(
   const observedCandidates: number[] = [];
   const peekObservedAt = peek?.observedAt;
   if (
-    (peekWeather || peekNewsItems) &&
+    (peekWeather || keptPeekNews.length > 0) &&
     typeof peekObservedAt === 'number' &&
     Number.isFinite(peekObservedAt)
   ) {
@@ -368,7 +450,9 @@ async function assembleSnapshot(
     const digest = opts.loadRealtime
       ? await opts.loadRealtime()
       : await loadRealtimeFromCache(char, tzId, builtAt);
-    if (digest) appendRealtimeFacts(digest, builtAt, drafts);
+    // 注入的 digest 也要走同一条筛选（生产路径已在 loadRealtimeFromCache 内筛过，
+    // 这里幂等重筛一遍，保证不论来源都只落角色相关新闻）。
+    if (digest) appendRealtimeFacts(withFilteredNews(digest, char), builtAt, drafts);
   } catch {
     /* 实时来源失败 → 跳过 */
   }

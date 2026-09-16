@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { buildAirpRuntimeSnapshot, type AirpEpisodeSummary, type BuildSnapshotOpts } from './snapshot';
+import {
+  buildAirpRuntimeSnapshot,
+  type AirpEpisodeSummary,
+  type AirpRealtimeDigest,
+  type BuildSnapshotOpts,
+} from './snapshot';
 import { AIRP_CAPABILITIES } from './capabilityCatalog';
 import type { AirpFact } from './types';
 import type { CharacterProfile } from '../../types';
@@ -48,7 +53,16 @@ describe('buildAirpRuntimeSnapshot', () => {
       memoryPalaceEnabled: true,
       roomPlatesInjection: 'ROOM-PLATE',
       location: { province: '广东省', city: '深圳市', district: '南山区', source: 'user', updatedAt: 1 },
-      airp: { enabled: true, autonomyLevel: 3, capabilities: [], mcpAllow: [], writable: false, version: 1 },
+      // 行为变更（Task 23）：新闻改按角色相关性筛选，桩角色补兴趣以继续覆盖 news_hot 渲染。
+      airp: {
+        enabled: true,
+        autonomyLevel: 3,
+        capabilities: [],
+        mcpAllow: [],
+        writable: false,
+        version: 1,
+        autonomy: { templateId: 'custom', overrides: { interests: ['科技', '体育', '财经'] } },
+      },
     });
 
     const snap = await buildAirpRuntimeSnapshot(char, {
@@ -64,7 +78,8 @@ describe('buildAirpRuntimeSnapshot', () => {
       loadRealtime: async () => ({
         weatherText: '深圳晴，气温 26°C',
         holidayText: '中秋节',
-        newsItems: ['n1', 'n2', 'n3', 'n4'],
+        // 行为变更（Task 23）：新闻按角色相关性筛选，桩新闻需含兴趣命中才保留 3 条。
+        newsItems: ['科技新品发布', '体育联赛开幕', '财经市场观察', 'n4'],
         observedAt: 123,
       }),
       loadSchedule: async () => '赶一份稿子',
@@ -297,7 +312,8 @@ describe('buildAirpRuntimeSnapshot', () => {
       loadRealtime: async () => ({
         weatherText: 'w',
         holidayText: 'h',
-        newsItems: ['n'],
+        // 行为变更（Task 23）：新闻按角色相关性筛选，桩标题需含城市命中才保留。
+        newsItems: ['京都市晚报头条'],
         observedAt: 999,
       }),
     });
@@ -381,16 +397,20 @@ describe('buildAirpRuntimeSnapshot', () => {
   });
 
   it('gives each realtime fact its own source object', async () => {
-    const snap = await buildAirpRuntimeSnapshot(makeChar(), {
-      now: NOW,
-      recallMemories: async () => [],
-      loadRealtime: async () => ({
-        weatherText: 'w',
-        holidayText: 'h',
-        newsItems: ['n'],
-        observedAt: 999,
-      }),
-    });
+    // 行为变更（Task 23）：新闻按角色相关性筛选，桩角色补城市并让桩标题命中以保留 news_hot。
+    const snap = await buildAirpRuntimeSnapshot(
+      makeChar({ location: { city: '京都', source: 'user', updatedAt: 1 } }),
+      {
+        now: NOW,
+        recallMemories: async () => [],
+        loadRealtime: async () => ({
+          weatherText: 'w',
+          holidayText: 'h',
+          newsItems: ['京都新闻'],
+          observedAt: 999,
+        }),
+      },
+    );
 
     const weather = snap.facts.find((f) => f.predicate === 'weather_now');
     const holiday = snap.facts.find((f) => f.predicate === 'holiday_today');
@@ -403,5 +423,113 @@ describe('buildAirpRuntimeSnapshot', () => {
     (weather!.source as { observedAt?: number }).observedAt = 1;
     expect(holiday?.source.observedAt).toBe(999);
     expect(news?.source.observedAt).toBe(999);
+  });
+});
+
+describe('buildAirpRuntimeSnapshot · realtime news relevance filter', () => {
+  const charWithPrefs = () =>
+    makeChar({
+      location: { city: '深圳市', source: 'user', updatedAt: 1 },
+      airp: {
+        enabled: true,
+        autonomyLevel: 2,
+        capabilities: [],
+        mcpAllow: [],
+        writable: false,
+        version: 1,
+        autonomy: { templateId: 'custom', overrides: { interests: ['人工智能'] } },
+      },
+    });
+
+  // 打分：市名命中 2；兴趣命中 1；两者 3；无关 0。
+  const makeDigest = (): AirpRealtimeDigest => ({
+    weatherText: 'w',
+    holidayText: 'h',
+    newsItems: [
+      '深圳市今日多云',
+      '人工智能大会召开',
+      '深圳市人工智能产业峰会',
+      '娱乐八卦速览',
+      '体育赛事集锦',
+    ],
+    observedAt: 999,
+  });
+
+  it('keeps only character-relevant news, ordered by score descending', async () => {
+    const snap = await buildAirpRuntimeSnapshot(charWithPrefs(), {
+      now: NOW,
+      recallMemories: async () => [],
+      loadRealtime: async () => makeDigest(),
+    });
+
+    const news = snap.facts.filter((f) => f.predicate === 'news_hot').map((f) => f.value);
+    expect(news).toEqual(['深圳市人工智能产业峰会', '深圳市今日多云', '人工智能大会召开']);
+  });
+
+  it('emits zero news facts when the character has neither city nor interests', async () => {
+    const snap = await buildAirpRuntimeSnapshot(makeChar(), {
+      now: NOW,
+      recallMemories: async () => [],
+      loadRealtime: async () => makeDigest(),
+    });
+
+    expect(snap.facts.some((f) => f.predicate === 'news_hot')).toBe(false);
+    expect(snap.facts.some((f) => f.predicate === 'weather_now')).toBe(true);
+    expect(snap.facts.some((f) => f.predicate === 'holiday_today')).toBe(true);
+  });
+
+  it('matches Latin interests case-insensitively and CJK by substring', async () => {
+    const char = makeChar({
+      airp: {
+        enabled: true,
+        autonomyLevel: 2,
+        capabilities: [],
+        mcpAllow: [],
+        writable: false,
+        version: 1,
+        autonomy: { templateId: 'custom', overrides: { interests: ['AI', '人工智能'] } },
+      },
+    });
+    const snap = await buildAirpRuntimeSnapshot(char, {
+      now: NOW,
+      recallMemories: async () => [],
+      loadRealtime: async () => ({
+        newsItems: ['ai WEEKLY digest', '聚焦人工智能产业', '无关内容'],
+        observedAt: 999,
+      }),
+    });
+
+    expect(snap.facts.filter((f) => f.predicate === 'news_hot').map((f) => f.value)).toEqual([
+      'ai WEEKLY digest',
+      '聚焦人工智能产业',
+    ]);
+  });
+
+  it('caps at three kept items and preserves cache order on score ties', async () => {
+    const char = makeChar({
+      airp: {
+        enabled: true,
+        autonomyLevel: 2,
+        capabilities: [],
+        mcpAllow: [],
+        writable: false,
+        version: 1,
+        autonomy: { templateId: 'custom', overrides: { interests: ['AI'] } },
+      },
+    });
+    const snap = await buildAirpRuntimeSnapshot(char, {
+      now: NOW,
+      recallMemories: async () => [],
+      loadRealtime: async () => ({
+        newsItems: ['AI one', 'zebra news', 'AI two', 'AI three', 'AI four'],
+        observedAt: 999,
+      }),
+    });
+
+    expect(snap.facts.filter((f) => f.predicate === 'news_hot').map((f) => f.value)).toEqual([
+      'AI one',
+      'AI two',
+      'AI three',
+    ]);
   });
 });
