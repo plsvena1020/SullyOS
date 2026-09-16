@@ -8,6 +8,7 @@ import {
 import { FIRE_PACK_VERSION, type AmsgFirePack } from '../../../utils/amsgFirePack';
 import { AUTONOMOUS_ROUND_KIND, type ResolvedAirpAutonomy } from '../../../utils/airp/autonomySettings';
 import { FIRE_KIND_HANDLERS } from './fireKinds';
+import { AUTONOMY_FIRE_SKIP, autonomyRoundHandler, configureAutonomyFireDb } from './autonomyFire';
 import {
   AUTONOMY_FAIL_LIMIT,
   AUTONOMY_SKIP_REASONS,
@@ -452,6 +453,12 @@ describe('自转发的载荷与加密', () => {
     expect(typeof payload.metadata.amsgJobId).toBe('string');
     expect(payload.credRefs).toEqual({ chat: `char:${CHAR_ID}/chat` });
     expect(payload.messages).toHaveLength(1);
+    // 自主经历这一轮的采样：显式 temperature，只有 temperature（top_p 一个字都不出现）；
+    // maxTokens = 理想长度 800 ×2。fire 侧从任务 payload 取采样，handler 层设不了。
+    expect(payload.temperature).toBe(0.4);
+    expect(payload.maxTokens).toBe(1600);
+    expect(Object.keys(payload)).not.toContain('top_p');
+    expect(Object.keys(payload)).not.toContain('topP');
   });
 
   it('没配口令不带 X-Client-Token；charName 缺失时回落到 charId', async () => {
@@ -478,19 +485,27 @@ describe('自转发的载荷与加密', () => {
 });
 
 describe('接线', () => {
-  it('注册表里有 autonomous_round，且 stub 零 LLM 零副作用（skip-plan）', async () => {
+  it('注册表里的 autonomous_round 就是真 handler；没配 D1 时安全跳过（Task-17 的 stub 已下线）', async () => {
     const handler = FIRE_KIND_HANDLERS[AUTONOMOUS_ROUND_KIND];
-    expect(handler).toBeTruthy();
+    expect(handler).toBe(autonomyRoundHandler);
 
-    const plan = await handler.beforeFire({
-      ctx: { task: {}, readState: async () => [], now: new Date(NOW), scratch: {} },
-      charId: CHAR_ID,
-      taskMeta: {},
-    });
-    expect(plan).toEqual({ skip: true, reason: 'handler-pending-task-18' });
+    configureAutonomyFireDb(null);
+    try {
+      const plan = await handler.beforeFire({
+        ctx: { task: {}, readState: async () => [], now: new Date(NOW), scratch: {} },
+        charId: CHAR_ID,
+        taskMeta: {},
+      });
+      expect(plan).toEqual({ skip: true, reason: AUTONOMY_FIRE_SKIP.dbUnavailable });
+      expect(JSON.stringify(plan)).not.toContain('handler-pending-task-18');
 
-    const decision = await handler.llmOutput({ ctx: { llmOutputText: '' }, state: null });
-    expect(decision).toEqual({ decision: 'skip-push', reason: 'handler-pending-task-18' });
+      const decision = await handler.llmOutput({ ctx: { llmOutputText: '' }, state: null });
+      expect(decision).toEqual({ decision: 'skip-push', reason: AUTONOMY_FIRE_SKIP.dbUnavailable });
+      expect(JSON.stringify(decision)).not.toContain('handler-pending-task-18');
+    } finally {
+      // holder 是模块级单例，别把「没配」的状态漏给后面的用例。
+      configureAutonomyFireDb(null);
+    }
   });
 
   it('cron 的 scheduled() 里先认领再扫描/跑 tick', async () => {

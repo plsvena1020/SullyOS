@@ -177,6 +177,7 @@ import {
   scanAutonomyPacks,
 } from './autonomyScheduler';
 import { claimAutonomyTick, ensureAutonomySchema, type AutonomyDb } from './autonomyStore';
+import { configureAutonomyFireDb } from './autonomyFire';
 
 // opencode.ai 上游自标识：凭据表里存的是原始供应商地址，worker 直连时必须带
 // User-Agent + x-opencode-session（Go 防滥用要求），否则所有 LLM 调用到点必被拒。
@@ -2546,6 +2547,8 @@ export const buildWorkerConfig = (env: Env) => {
   configureInstantErrorPush(env.DB && env.AMSG_MASTER_KEY
     ? { webpush: pushTransport, db: env.DB as unknown as InstantErrorPushDeps['db'], masterKey: env.AMSG_MASTER_KEY }
     : null);
+  // 自主回合 handler 的 D1：kind 分派点够不到 env，同 configureInstantErrorPush 走模块级注入。
+  configureAutonomyFireDb(env.DB as AutonomyDb | null);
   return {
     // db 缺省时 factory 自动用 createD1Adapter(env.DB)
     masterKey: env.AMSG_MASTER_KEY,

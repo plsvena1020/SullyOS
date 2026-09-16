@@ -472,6 +472,11 @@ export async function buildAutonomyScheduleRequest(args: {
     // 时刻在路上就过去了，服务端一律打回「时间必须在未来」）。
     immediate: true,
     recurrenceType: 'none',
+    // 自主经历这一轮的采样：显式 0.4 只动 temperature，top_p 全篇不出现（不动共享采样
+    // 体系）。maxTokens = 理想长度 800 字 ×2（B2 的口径），留给 JSON 信封与收笔的余量。
+    // 上游请求体的采样参数来自任务 payload（amsg-shared 的 buildLlmRequestBody）。
+    temperature: 0.4,
+    maxTokens: 1600,
     metadata: {
       charId: args.charId,
       charName,
