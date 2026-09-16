@@ -1,4 +1,4 @@
-import type { AirpDirectorOutput, AirpProposedEvent, AirpSourceRef } from './types';
+import type { AirpDirectorOutput, AirpFactAuthority, AirpProposedEvent, AirpSourceRef } from './types';
 
 export interface AirpCommittedEvent {
   id: string;
@@ -9,7 +9,8 @@ export interface AirpCommittedEvent {
   locationLabel?: string;
   impact: 'trace' | 'minor' | 'major';
   at: number;
-  authority: 'confirmed_scene';
+  /** 目击场景记 confirmed_scene；自主生活等没人目击的来源记 runtime_state。 */
+  authority: AirpFactAuthority;
   disclosedToUser: boolean;
   source: AirpSourceRef;
 }

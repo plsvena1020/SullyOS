@@ -495,7 +495,8 @@ export interface AutonomyResultExperience {
   q: string;
   note: string;
   kind: string;
-  importance: number;
+  /** 信封边界只分 big/small 两档；D1 行的 importance 仍是 0..3 数字（两种口径就此分开）。 */
+  importance: 'big' | 'small';
   pushed: boolean;
 }
 
@@ -516,6 +517,9 @@ export interface AutonomyResultPayload {
   did: string;
   rested: boolean;
 }
+
+/** 信封只带 big/small：D1 保留 0..3 数字，跨边界的档位在这里收窄（>=2 视为 big）。 */
+const toEmittedImportance = (value: number): 'big' | 'small' => (value >= 2 ? 'big' : 'small');
 
 export function buildAutonomyResultPayload(args: {
   charId: string;
@@ -752,6 +756,9 @@ export const autonomyRoundHandler: FireKindHandler = {
       .filter((item) => item.note.length > 0);
 
     // 推送判定在写库之前：pushed 要跟着经历行一起落（客户端按它决定要不要转述）。
+    // 只有 big（importance>=2）配推送；整轮全是 small 就一条都不推、也不响铃。
+    const hasBig = processed.some((item) => item.importance >= 2);
+    const pushedIndex = hasBig ? processed.findIndex((item) => item.importance >= 2) : -1;
     const parts = wallClockPartsInZone(carried.nowMs, { tzId: carried.tzId });
     const pushedToday = await countPushedOnDate(db, carried.charId, carried.tzId, carried.dateKey, carried.nowMs);
     const push = shouldPushAutonomy({
@@ -761,11 +768,11 @@ export const autonomyRoundHandler: FireKindHandler = {
       nowMs: carried.nowMs,
       ...(carried.autonomy.quietHours ? { quietHours: carried.autonomy.quietHours } : {}),
       minutesOfDay: parts.hour * 60 + parts.minute,
-    }) && processed.length > 0;
+    }) && pushedIndex >= 0;
 
     const written: AutonomyResultExperience[] = [];
     for (const [index, item] of processed.entries()) {
-      const isPushed = push && index === 0;
+      const isPushed = push && index === pushedIndex;
       const id = crypto.randomUUID();
       await addAutonomyExperience(db, {
         id,
@@ -774,6 +781,7 @@ export const autonomyRoundHandler: FireKindHandler = {
         q: item.q,
         note: item.note,
         kind: item.kind,
+        // D1 行的 importance 保持 0..3 数字（没有任何读侧按它分档）。
         importance: item.importance,
         pushed: isPushed,
       });
@@ -782,7 +790,8 @@ export const autonomyRoundHandler: FireKindHandler = {
         q: item.q,
         note: item.note,
         kind: item.kind,
-        importance: item.importance,
+        // 信封边界：只送 big/small 两档给客户端。
+        importance: toEmittedImportance(item.importance),
         pushed: isPushed,
       });
     }
@@ -798,8 +807,8 @@ export const autonomyRoundHandler: FireKindHandler = {
       did,
       rested: finalRested,
     });
-    const notification = push && written.length > 0
-      ? { show: 'always' as const, body: written[0].note }
+    const notification = push
+      ? { show: 'always' as const, body: written[pushedIndex].note }
       : { show: false as const };
 
     const outcome = async (): Promise<void> => {

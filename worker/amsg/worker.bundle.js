@@ -8418,6 +8418,7 @@ function shouldPushAutonomy(input) {
   if (input.lastPushAt > 0 && push.cooldownMinutes > 0 && input.nowMs - input.lastPushAt <= push.cooldownMinutes * 6e4) return false;
   return !isWithinQuietHours(input.quietHours, input.minutesOfDay);
 }
+var toEmittedImportance = (value) => value >= 2 ? "big" : "small";
 function buildAutonomyResultPayload(args) {
   return {
     resultKind: AUTONOMY_RESULT_KIND,
@@ -8570,6 +8571,8 @@ var autonomyRoundHandler = {
       }
     }
     const processed = experiences.map((item) => ({ ...item, note: postProcessNote(item.note) })).filter((item) => item.note.length > 0);
+    const hasBig = processed.some((item) => item.importance >= 2);
+    const pushedIndex = hasBig ? processed.findIndex((item) => item.importance >= 2) : -1;
     const parts = wallClockPartsInZone(carried.nowMs, { tzId: carried.tzId });
     const pushedToday = await countPushedOnDate(db, carried.charId, carried.tzId, carried.dateKey, carried.nowMs);
     const push = shouldPushAutonomy({
@@ -8579,10 +8582,10 @@ var autonomyRoundHandler = {
       nowMs: carried.nowMs,
       ...carried.autonomy.quietHours ? { quietHours: carried.autonomy.quietHours } : {},
       minutesOfDay: parts.hour * 60 + parts.minute
-    }) && processed.length > 0;
+    }) && pushedIndex >= 0;
     const written = [];
     for (const [index, item] of processed.entries()) {
-      const isPushed = push && index === 0;
+      const isPushed = push && index === pushedIndex;
       const id = crypto.randomUUID();
       await addAutonomyExperience(db, {
         id,
@@ -8591,6 +8594,7 @@ var autonomyRoundHandler = {
         q: item.q,
         note: item.note,
         kind: item.kind,
+        // D1 行的 importance 保持 0..3 数字（没有任何读侧按它分档）。
         importance: item.importance,
         pushed: isPushed
       });
@@ -8599,7 +8603,8 @@ var autonomyRoundHandler = {
         q: item.q,
         note: item.note,
         kind: item.kind,
-        importance: item.importance,
+        // 信封边界：只送 big/small 两档给客户端。
+        importance: toEmittedImportance(item.importance),
         pushed: isPushed
       });
     }
@@ -8613,7 +8618,7 @@ var autonomyRoundHandler = {
       did,
       rested: finalRested
     });
-    const notification = push && written.length > 0 ? { show: "always", body: written[0].note } : { show: false };
+    const notification = push ? { show: "always", body: written[pushedIndex].note } : { show: false };
     const outcome = async () => {
       await reportOutcome(
         carried.charId,

@@ -40,8 +40,8 @@ const roundPayload = (overrides: Record<string, unknown> = {}) => ({
   resultKind: 'autonomy_result',
   charId: 'c1',
   experiences: [
-    { id: 'exp-1', q: '想知道蝴蝶怎么过冬', note: '查了半天，蝴蝶会找树缝越冬。', kind: 'surf', importance: 2, pushed: true },
-    { id: 'exp-2', q: '试了新游戏', note: '玩了两小时，手感一般。', kind: 'game', importance: 1, pushed: false },
+    { id: 'exp-1', q: '想知道蝴蝶怎么过冬', note: '查了半天，蝴蝶会找树缝越冬。', kind: 'surf', importance: 'big', pushed: true },
+    { id: 'exp-2', q: '试了新游戏', note: '玩了两小时，手感一般。', kind: 'game', importance: 'small', pushed: false },
   ],
   proposedEvents: [
     { type: 'activity', summary: '去河边跑步', impact: 'minor' },
@@ -77,7 +77,7 @@ describe('applyAutonomyResult — 完整一轮', () => {
     await expect(applyAutonomyResult(roundPayload())).resolves.toBe(true);
     const after = Date.now();
 
-    // outbox：两条经历行，told=0，pushed 回显，重要性按 >=2 分档
+    // outbox：两条经历行，told=0，pushed 回显，importance 直接取信封字符串
     const outbox = await DB.getOutboxByChar('c1');
     expect(outbox.map((e) => e.id).sort()).toEqual(['exp-1', 'exp-2']);
     const byId = new Map(outbox.map((e) => [e.id, e]));
@@ -98,9 +98,8 @@ describe('applyAutonomyResult — 完整一轮', () => {
     // 事件：未被改道 → 落库即 disclosed=true；authority runtime_state
     const events = await listAirpEventsByChar('c1');
     expect(events.map((e) => e.id).sort()).toEqual(['airp-c1-exp-1-0', 'airp-c1-exp-1-1']);
-    // commit.ts 的 AirpCommittedEvent.authority 仍是 'confirmed_scene' 字面量（不在本次 staged 集合），
-    // 运行时值按 deviation-3 记 runtime_state，故这里读侧放宽成 string 比较。
-    expect(events.every((e) => (e.authority as string) === 'runtime_state')).toBe(true);
+    // authority 已放宽为 AirpFactAuthority，事件行按 deviation-3 记 runtime_state。
+    expect(events.every((e) => e.authority === 'runtime_state')).toBe(true);
     expect(events.every((e) => e.disclosedToUser === true)).toBe(true);
     expect(events.find((e) => e.id === 'airp-c1-exp-1-0')).toMatchObject({
       type: 'activity', summary: '去河边跑步', impact: 'minor', participants: [],
@@ -132,6 +131,26 @@ describe('applyAutonomyResult — 完整一轮', () => {
   });
 });
 
+describe('applyAutonomyResult — importance 边界', () => {
+  it('信封字符串直接透传；缺失 / 未知 / 旧数字一律 fail-safe 收成 small', async () => {
+    await expect(applyAutonomyResult(roundPayload({
+      experiences: [
+        { id: 'exp-a', q: '', note: 'a', kind: 'surf', importance: 'big', pushed: false },
+        { id: 'exp-b', q: '', note: 'b', kind: 'surf', importance: 2, pushed: false },
+        { id: 'exp-c', q: '', note: 'c', kind: 'surf', pushed: false },
+        { id: 'exp-d', q: '', note: 'd', kind: 'surf', importance: 'huge', pushed: false },
+      ],
+    }))).resolves.toBe(true);
+
+    const byId = new Map((await DB.getOutboxByChar('c1')).map((e) => [e.id, e]));
+    expect(byId.get('exp-a')!.importance).toBe('big');
+    // 旧数字信封（>=2）不再被分档成 big——数值映射已下线。
+    expect(byId.get('exp-b')!.importance).toBe('small');
+    expect(byId.get('exp-c')!.importance).toBe('small');
+    expect(byId.get('exp-d')!.importance).toBe('small');
+  });
+});
+
 describe('applyAutonomyResult — 重投幂等', () => {
   it('同一份 payload 再投一次：outbox / 日记 / 心跳 / 事件 / 事实都不翻倍', async () => {
     const payload = roundPayload();
@@ -152,7 +171,7 @@ describe('applyAutonomyResult — 降级改道（major × 档位）', () => {
   it('major + L2 → 不物化，落【待定】outbox 行 + 事件 disclosed=false', async () => {
     await seedChar({ autonomyLevel: 2 });
     const payload = roundPayload({
-      experiences: [{ id: 'exp-1', q: '念头', note: '想换个城市住。', kind: 'rest', importance: 1, pushed: false }],
+      experiences: [{ id: 'exp-1', q: '念头', note: '想换个城市住。', kind: 'rest', importance: 'small', pushed: false }],
       proposedEvents: [{ type: 'movement', summary: '决定搬去另一个城市', impact: 'major' }],
       did: 'rest',
     });
@@ -188,7 +207,7 @@ describe('applyAutonomyResult — 降级改道（major × 档位）', () => {
   it('major + L3 → 正常物化（authority runtime_state），无【待定】行', async () => {
     await seedChar({ autonomyLevel: 3 });
     const payload = roundPayload({
-      experiences: [{ id: 'exp-1', q: '念头', note: '想换个城市住。', kind: 'rest', importance: 1, pushed: false }],
+      experiences: [{ id: 'exp-1', q: '念头', note: '想换个城市住。', kind: 'rest', importance: 'small', pushed: false }],
       proposedEvents: [{ type: 'movement', summary: '决定搬去另一个城市', impact: 'major' }],
     });
 

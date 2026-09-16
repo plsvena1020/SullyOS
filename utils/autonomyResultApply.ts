@@ -48,9 +48,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isNonEmptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.length > 0;
 
-/** 经历 importance 是 0..3 的数字；outbox 只分大小两档（>=2 视为 big）。 */
+/** 信封已把档位收成 'big'|'small' 字符串；不认识 / 缺失一律 fail-safe 收成 small（兜住版本错位）。 */
 const toOutboxImportance = (value: unknown): 'big' | 'small' =>
-  typeof value === 'number' && Number.isFinite(value) && value >= 2 ? 'big' : 'small';
+  value === 'big' ? 'big' : 'small';
 
 const toOutboxKind = (value: unknown): OutboxKind =>
   typeof value === 'string' && (OUTBOX_KINDS as readonly string[]).includes(value)
@@ -224,9 +224,8 @@ async function landAutonomyResult(input: LandInput): Promise<void> {
       ...(proposal.locationLabel !== undefined ? { locationLabel: proposal.locationLabel } : {}),
       impact: proposal.impact,
       at: atMs,
-      // commit.ts 的 authority 是 'confirmed_scene' 字面量（不在本次改动范围），
-      // 自主事件没人目击、按 deviation-3 记 runtime_state，运行时值优先于这里的窄化声明。
-      authority: 'runtime_state' as AirpCommittedEvent['authority'],
+      // 自主事件没人目击：按 deviation-3 记 runtime_state（authority 已放宽为 AirpFactAuthority）。
+      authority: 'runtime_state',
       // 落地即有 outbox/转述账追踪的事件视为已交代（told 标记才是真正的追踪面）；
       // 改道的大事件没人知道，等 told-flip 翻。
       disclosedToUser: !rerouted,

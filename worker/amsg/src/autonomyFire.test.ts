@@ -593,6 +593,51 @@ describe('autonomyFire 整轮（经 amsgHooks 的 kind 分派）', () => {
     expect(stateRows.get(CHAR_ID)).toMatchObject({ last_push_at: NOW, tokens_today: 150, fail_streak: 0 });
   });
 
+  it('整轮全是 small：一条都不推、不响铃，但经历照落 D1', async () => {
+    const { decision, emitResult, experiences } = await runRound({
+      reply: JSON.stringify({
+        v: 1,
+        experiences: [
+          { q: '随口一条', note: '今天风有点大', kind: 'surf', importance: 0 },
+          { q: '又一条', note: '顺手记一笔', kind: 'game', importance: 1 },
+        ],
+      }),
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    });
+
+    expect(decision).toEqual({ decision: 'skip-push', reason: 'autonomy-result-emitted' });
+    const payload = emitResult.mock.calls[0]![0] as Record<string, unknown>;
+    const rows = payload.experiences as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => row.pushed === false)).toBe(true);
+    expect(payload.notification).toEqual({ show: false });
+    expect(payload.did).toBe('mixed');
+    // D1 行 importance 仍是数字（信封才是字符串）；没有一条被标 pushed。
+    expect(experiences.map((row) => row.importance)).toEqual([0, 1]);
+    expect(experiences.every((row) => row.pushed === 0)).toBe(true);
+  });
+
+  it('夹心 big：推的是第一条 big（findIndex），铃铛文案就是它的 note，不是队首', async () => {
+    const { emitResult, experiences } = await runRound({
+      reply: JSON.stringify({
+        v: 1,
+        experiences: [
+          { q: '小的在前', note: '先记一条小的', kind: 'game', importance: 0 },
+          { q: '大的在后', note: '翻到了：深海那条沉船', kind: 'surf', importance: 3 },
+        ],
+      }),
+    });
+
+    const payload = emitResult.mock.calls[0]![0] as Record<string, unknown>;
+    const rows = payload.experiences as Array<Record<string, unknown>>;
+    // 信封 importance 收成字符串两档。
+    expect(rows.map((row) => row.importance)).toEqual(['small', 'big']);
+    expect(rows.map((row) => row.pushed)).toEqual([false, true]);
+    expect(payload.notification).toEqual({ show: 'always', body: '深海那条沉船' });
+    // D1：只有那条 big（第二条）标 pushed=1。
+    expect(experiences.map((row) => row.pushed)).toEqual([0, 1]);
+  });
+
   it('冷却没过：照样落 D1，但不推（show:false / pushed=0）', async () => {
     const { emitResult, experiences } = await runRound({
       reply: REPLY,
@@ -636,7 +681,7 @@ describe('autonomyFire 整轮（经 amsgHooks 的 kind 分派）', () => {
 
   it('只撞一页不算冷饭（第二回放行）：照常落库', async () => {
     const { decision, emitResult, experiences } = await runRound({
-      reply: JSON.stringify({ v: 1, experiences: [{ q: '深海潜水装备', note: '又想去看看', kind: 'surf' }] }),
+      reply: JSON.stringify({ v: 1, experiences: [{ q: '深海潜水装备', note: '又想去看看', kind: 'surf', importance: 2 }] }),
       seed: { experiences: [experienceRow({ q: '深海潜水装备', created_at: NOW - HOUR })] },
     });
     expect(decision).toEqual({ decision: 'skip-push', reason: 'autonomy-result-emitted' });
