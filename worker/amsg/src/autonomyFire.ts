@@ -364,7 +364,16 @@ const renderTopicBlock = (args: {
   ].join('\n');
 };
 
-/** 这一轮的提示词。顺序锁死：人格全文 → 框定语 → 自由度 → 由头 → 语气 → 无工具 → 产出。 */
+/**
+ * 覆盖句：渲染出来的完整聊天模板末尾还挂着【开口之前】那套「已经发生过就什么都不要输出」，
+ * 那是实时聊天（推送到用户）的规矩，跟这一轮的 JSON 契约正好顶牛。句子紧跟在模板后面，
+ * 先把「这一轮以 JSON 契约为准」立死，再进框定语。
+ */
+export const AUTONOMY_ROUND_OVERRIDE =
+  '注意：上面是你在正常聊天时的完整规矩，但【开口之前】那段只管实时聊天、不管这一轮——'
+  + '这一轮必须按下面的 JSON 契约输出（想歇就输出 rest），绝不能输出空内容。';
+
+/** 这一轮的提示词。顺序锁死：人格全文 → 覆盖句 → 框定语 → 自由度 → 由头 → 语气 → 无工具 → 产出。 */
 export function buildAutonomyRoundPrompt(args: {
   pack: AmsgFirePack;
   nowMs: number;
@@ -382,6 +391,7 @@ export function buildAutonomyRoundPrompt(args: {
 
   return [
     personality,
+    AUTONOMY_ROUND_OVERRIDE,
     [
       '【这一轮的处境】',
       '- 对方没有在等你回话，你现在做的事不需要为了谁，也不用向谁交代。',
@@ -439,7 +449,11 @@ export function isWithinQuietHours(
 }
 
 export interface AutonomyPushGateInput {
-  push: ResolvedAirpAutonomy['push'];
+  /**
+   * 推送参数原样透传：缺省、不是对象、字段不合形状（旧包 / 坏包）都可能出现在这里。
+   * parseFirePack 不校验 autonomy，所以 handler 侧不能假设它一定合法。
+   */
+  push: unknown;
   /** 角色时区下的当日已推条数。 */
   pushedToday: number;
   lastPushAt: number;
@@ -449,10 +463,24 @@ export interface AutonomyPushGateInput {
   minutesOfDay: number;
 }
 
+/**
+ * 推送参数归一：push 缺失或不是对象、mode 不认识、配额/冷却不是有限数字，一律回 null
+ * （= 不推）。坏包只该让这一轮不推，不该把整轮掀翻——调度器读 push 也是同一姿势
+ * （`autonomy.push?.cooldownMinutes ?? 0`）。
+ */
+const readPushConfig = (raw: unknown): { maxPerDay: number; cooldownMinutes: number } | null => {
+  if (!isRecord(raw)) return null;
+  if (raw.mode !== 'big') return null;
+  const { maxPerDay, cooldownMinutes } = raw;
+  if (typeof maxPerDay !== 'number' || !Number.isFinite(maxPerDay)) return null;
+  if (typeof cooldownMinutes !== 'number' || !Number.isFinite(cooldownMinutes)) return null;
+  return { maxPerDay, cooldownMinutes };
+};
+
 /** big 才推；当日配额、冷却、静默段全过才推。 */
 export function shouldPushAutonomy(input: AutonomyPushGateInput): boolean {
-  const { push } = input;
-  if (push.mode !== 'big') return false;
+  const push = readPushConfig(input.push);
+  if (!push) return false;
   if (input.pushedToday >= push.maxPerDay) return false;
   if (input.lastPushAt > 0 && push.cooldownMinutes > 0
     && input.nowMs - input.lastPushAt <= push.cooldownMinutes * 60_000) return false;

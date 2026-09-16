@@ -8353,6 +8353,7 @@ var renderTopicBlock = (args) => {
     "\u91CC\u5934\u8981\u6709\u5F53\u65F6\u5FC3\u91CC\u4E00\u52A8\u3001\u8FD9\u4F1A\u513F\u60F3\u63A5\u7740\u7422\u78E8\u7684\uFF0C\u5C31\u987A\u7740\u53BB\uFF1B\u6CA1\u6709\u5C31\u5F53\u6CA1\u770B\u89C1\uFF0C\u4E0D\u7528\u6C47\u62A5\u3001\u4E0D\u7528\u63A5\u7740\u804A\u3002"
   ].join("\n");
 };
+var AUTONOMY_ROUND_OVERRIDE = "\u6CE8\u610F\uFF1A\u4E0A\u9762\u662F\u4F60\u5728\u6B63\u5E38\u804A\u5929\u65F6\u7684\u5B8C\u6574\u89C4\u77E9\uFF0C\u4F46\u3010\u5F00\u53E3\u4E4B\u524D\u3011\u90A3\u6BB5\u53EA\u7BA1\u5B9E\u65F6\u804A\u5929\u3001\u4E0D\u7BA1\u8FD9\u4E00\u8F6E\u2014\u2014\u8FD9\u4E00\u8F6E\u5FC5\u987B\u6309\u4E0B\u9762\u7684 JSON \u5951\u7EA6\u8F93\u51FA\uFF08\u60F3\u6B47\u5C31\u8F93\u51FA rest\uFF09\uFF0C\u7EDD\u4E0D\u80FD\u8F93\u51FA\u7A7A\u5185\u5BB9\u3002";
 function buildAutonomyRoundPrompt(args) {
   const personality = renderFirePack(args.pack, args.nowMs, "");
   const topicBlock = renderTopicBlock({ personality, autonomy: args.autonomy });
@@ -8360,6 +8361,7 @@ function buildAutonomyRoundPrompt(args) {
   const noteHint = args.autonomy.noteStyleHint ? [`\u3010\u8BB0\u5F55\u7684\u8BED\u6C14\u3011`, args.autonomy.noteStyleHint].join("\n") : "";
   return [
     personality,
+    AUTONOMY_ROUND_OVERRIDE,
     [
       "\u3010\u8FD9\u4E00\u8F6E\u7684\u5904\u5883\u3011",
       "- \u5BF9\u65B9\u6CA1\u6709\u5728\u7B49\u4F60\u56DE\u8BDD\uFF0C\u4F60\u73B0\u5728\u505A\u7684\u4E8B\u4E0D\u9700\u8981\u4E3A\u4E86\u8C01\uFF0C\u4E5F\u4E0D\u7528\u5411\u8C01\u4EA4\u4EE3\u3002",
@@ -8401,9 +8403,17 @@ function isWithinQuietHours(quiet, minutes) {
   if (start === null || end === null || start === end) return false;
   return start < end ? minutes >= start && minutes < end : minutes >= start || minutes < end;
 }
+var readPushConfig = (raw) => {
+  if (!isRecord(raw)) return null;
+  if (raw.mode !== "big") return null;
+  const { maxPerDay, cooldownMinutes } = raw;
+  if (typeof maxPerDay !== "number" || !Number.isFinite(maxPerDay)) return null;
+  if (typeof cooldownMinutes !== "number" || !Number.isFinite(cooldownMinutes)) return null;
+  return { maxPerDay, cooldownMinutes };
+};
 function shouldPushAutonomy(input) {
-  const { push } = input;
-  if (push.mode !== "big") return false;
+  const push = readPushConfig(input.push);
+  if (!push) return false;
   if (input.pushedToday >= push.maxPerDay) return false;
   if (input.lastPushAt > 0 && push.cooldownMinutes > 0 && input.nowMs - input.lastPushAt <= push.cooldownMinutes * 6e4) return false;
   return !isWithinQuietHours(input.quietHours, input.minutesOfDay);

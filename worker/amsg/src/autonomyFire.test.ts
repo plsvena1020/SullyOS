@@ -17,6 +17,7 @@ import {
   AUTONOMY_BAD_OUTPUT_REASON,
   AUTONOMY_FIRE_SKIP,
   AUTONOMY_NOTE_MAX_CHARS,
+  AUTONOMY_ROUND_OVERRIDE,
   autonomyRoundHandler,
   buildAutonomyRoundPrompt,
   collectBurntLines,
@@ -72,6 +73,8 @@ const buildPack = (overrides: Partial<AmsgFirePack> = {}): AmsgFirePack => ({
     '那早点睡，别硬撑',
     '【当前时刻补充】',
     '当前本地时间（你所在地）：{{AMSG_CURRENT_TIME}}',
+    '【开口之前】',
+    '已经发生过 → 什么都不要输出。一个字都不要写。',
   ].join('\n'),
   lastUserMessageAt: NOW - 3 * HOUR,
   tzId: 'Asia/Shanghai',
@@ -387,6 +390,15 @@ describe('autonomyFire 提示词', () => {
       expect(at, `${marker} 的顺序不对`).toBeGreaterThan(cursor);
       cursor = at;
     }
+    // 覆盖句：完整聊天模板末尾的【开口之前】「沉默」指令与这一轮的 JSON 契约顶牛，
+    // 覆盖句必须夹在模板尾与框定语之间，把「这一轮以 JSON 契约为准」立死。
+    const templateTail = prompt.indexOf('【开口之前】');
+    const overrideAt = prompt.indexOf(AUTONOMY_ROUND_OVERRIDE);
+    const framingAt = prompt.indexOf('【这一轮的处境】');
+    expect(templateTail, '模板尾没进提示词').toBeGreaterThan(-1);
+    expect(overrideAt, '缺了覆盖句').toBeGreaterThan(-1);
+    expect(overrideAt, '覆盖句没排在模板尾之后').toBeGreaterThan(templateTail);
+    expect(framingAt, '覆盖句没排在框定语之前').toBeGreaterThan(overrideAt);
     // 对话尾巴被引成由头；时间槽位在 fire 时刻填掉（不留 {{...}}）。
     expect(prompt).toContain('今天搬完家了，累瘫');
     expect(prompt).not.toContain('{{AMSG_');
@@ -437,6 +449,19 @@ describe('autonomyFire 推送判定', () => {
     expect(gate({ quietHours: { start: '23:00', end: '06:00' }, minutesOfDay: 60 })).toBe(false);
     expect(isWithinQuietHours({ start: '23:00', end: '06:00' }, 23 * 60 + 30)).toBe(true);
     expect(isWithinQuietHours(undefined, 300)).toBe(false);
+  });
+
+  it('push 缺省 / 不是对象 / mode 不认识 / 配额冷却不是数字：一律不推，绝不抛', () => {
+    expect(gate({ push: undefined })).toBe(false);
+    expect(gate({ push: null })).toBe(false);
+    expect(gate({ push: 'big' })).toBe(false);
+    expect(gate({ push: [] })).toBe(false);
+    expect(gate({ push: { mode: 'weird', maxPerDay: 1, cooldownMinutes: 0 } })).toBe(false);
+    expect(gate({ push: { maxPerDay: 1, cooldownMinutes: 0 } })).toBe(false);
+    expect(gate({ push: { mode: 'big', maxPerDay: '1', cooldownMinutes: 0 } })).toBe(false);
+    expect(gate({ push: { mode: 'big', maxPerDay: 1, cooldownMinutes: 'soon' } })).toBe(false);
+    expect(gate({ push: { mode: 'big', maxPerDay: Number.NaN, cooldownMinutes: 0 } })).toBe(false);
+    expect(gate({ push: { mode: 'big', maxPerDay: 1, cooldownMinutes: Number.POSITIVE_INFINITY } })).toBe(false);
   });
 });
 
@@ -574,6 +599,17 @@ describe('autonomyFire 整轮（经 amsgHooks 的 kind 分派）', () => {
       pack: buildPack({ autonomy: baseAutonomy({ push: { mode: 'big', maxPerDay: 1, cooldownMinutes: 60 } }) }),
       seed: { state: { [CHAR_ID]: { char_id: CHAR_ID, last_push_at: NOW - 10 * 60_000 } } },
     });
+    const payload = emitResult.mock.calls[0]![0] as Record<string, unknown>;
+    expect(payload.notification).toEqual({ show: false });
+    expect((payload.experiences as Array<Record<string, unknown>>)[0].pushed).toBe(false);
+    expect(experiences[0].pushed).toBe(0);
+  });
+
+  it('坏包：push 整块缺失也不抛，整轮照跑、只是不推（pushed=0）', async () => {
+    const autonomy = baseAutonomy();
+    delete (autonomy as { push?: unknown }).push;
+    const { decision, emitResult, experiences } = await runRound({ reply: REPLY, pack: buildPack({ autonomy }) });
+    expect(decision).toEqual({ decision: 'skip-push', reason: 'autonomy-result-emitted' });
     const payload = emitResult.mock.calls[0]![0] as Record<string, unknown>;
     expect(payload.notification).toEqual({ show: false });
     expect((payload.experiences as Array<Record<string, unknown>>)[0].pushed).toBe(false);
