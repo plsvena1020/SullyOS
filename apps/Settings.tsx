@@ -838,6 +838,8 @@ const Settings: React.FC = () => {
   // lite 模式走中心配置的主代理 worker（/api 是 worker/index.js 里的 XHSLite 桥）。
   // 用户改了「自定义网络代理」，lite 模式自动跟着切到新 worker。
   const XHS_LITE_URL = `${getProxyWorkerUrl()}/api`;
+  // vps 托管会话:VPS session bridge 经 Caddy 暴露的公网入口(见 docs/xhs-vps-session.md)。
+  const XHS_VPS_URL = 'https://ethernet-vps.bot.cd/xhs-api/api';
   const XHS_RISK_TEXT = '使用提示：Lite 通过网页接口连接小红书，平台规则变化时可能出现登录失效或功能暂时不可用。建议先用小号体验，并在发布或互动前确认内容。';
   const XHS_COOKIE_GUIDE = [
     '【获取小红书 cookie 教程】',
@@ -856,11 +858,12 @@ const Settings: React.FC = () => {
   const _xhsStoredMode = resolveXhsDeploymentMode(realtimeConfig.xhsMcpConfig, XHS_LITE_URL);
   const _xhsIsLocal = _xhsStoredMode === 'local';
   const [rtXhsMcpEnabled, setRtXhsMcpEnabled] = useState(realtimeConfig.xhsMcpConfig?.enabled || false);
-  const [rtXhsMode, setRtXhsMode] = useState<'lite' | 'local'>(_xhsIsLocal ? 'local' : 'lite');
+  const [rtXhsMode, setRtXhsMode] = useState<'lite' | 'local' | 'vps'>(_xhsStoredMode === 'local' ? 'local' : (_xhsStoredMode === 'vps' ? 'vps' : 'lite'));
   const [rtXhsLocalUrl, setRtXhsLocalUrl] = useState(_xhsIsLocal ? _xhsCfgUrl : 'http://localhost:18060/mcp');
   const [rtXhsNickname, setRtXhsNickname] = useState(realtimeConfig.xhsMcpConfig?.loggedInNickname || '');
   const [rtXhsUserId, setRtXhsUserId] = useState(realtimeConfig.xhsMcpConfig?.loggedInUserId || '');
   const [rtXhsCookie, setRtXhsCookie] = useState(realtimeConfig.xhsMcpConfig?.cookie || '');
+  const [rtXhsBridgeToken, setRtXhsBridgeToken] = useState(realtimeConfig.xhsMcpConfig?.bridgeToken || '');
   const [rtXhsPlatform, setRtXhsPlatform] = useState<'xhs' | 'rednote' | undefined>(realtimeConfig.xhsMcpConfig?.platform);
   const [rtXhsGuideOpen, setRtXhsGuideOpen] = useState(false);
   const [rtTestStatus, setRtTestStatus] = useState('');
@@ -1751,9 +1754,10 @@ const Settings: React.FC = () => {
           xhsMcpConfig: {
               enabled: rtXhsMcpEnabled,
               mode: rtXhsMode,
-              serverUrl: rtXhsMode === 'lite' ? XHS_LITE_URL : rtXhsLocalUrl,
+              serverUrl: rtXhsMode === 'lite' ? XHS_LITE_URL : (rtXhsMode === 'vps' ? XHS_VPS_URL : rtXhsLocalUrl),
               cookie: rtXhsMode === 'lite' ? (rtXhsCookie.trim() || undefined) : undefined,
-              platform: rtXhsMode === 'lite' ? rtXhsPlatform : undefined,
+              bridgeToken: rtXhsMode === 'vps' ? (rtXhsBridgeToken.trim() || undefined) : undefined,
+              platform: rtXhsMode === 'local' ? undefined : rtXhsPlatform,
               loggedInNickname: rtXhsNickname || undefined,
               loggedInUserId: rtXhsUserId || undefined,
               userXsecToken: realtimeConfig.xhsMcpConfig?.userXsecToken,
@@ -1871,7 +1875,7 @@ const Settings: React.FC = () => {
 
   // 测试小红书 Bridge 连接
   const testXhsMcp = async () => {
-      const urlToUse = rtXhsMode === 'lite' ? XHS_LITE_URL : rtXhsLocalUrl;
+      const urlToUse = rtXhsMode === 'lite' ? XHS_LITE_URL : (rtXhsMode === 'vps' ? XHS_VPS_URL : rtXhsLocalUrl);
       const cookieToUse = rtXhsMode === 'lite' ? (rtXhsCookie.trim() || undefined) : undefined;
       if (!urlToUse) {
           setRtTestStatus('请填写服务器 URL');
@@ -1882,6 +1886,7 @@ const Settings: React.FC = () => {
           return;
       }
       setRtTestStatus('正在连接...');
+      if (rtXhsMode === 'vps') XhsMcpClient.setBridgeToken(rtXhsBridgeToken.trim());
       try {
           const result = await XhsMcpClient.testConnection(
               urlToUse,
@@ -1906,6 +1911,7 @@ const Settings: React.FC = () => {
                       mode: rtXhsMode,
                       serverUrl: urlToUse,
                       cookie: cookieToUse,
+                      bridgeToken: rtXhsMode === 'vps' ? (rtXhsBridgeToken.trim() || undefined) : undefined,
                       platform: result.platform,
                       loggedInNickname: rtXhsNickname || result.nickname,
                       loggedInUserId: rtXhsUserId || result.userId,
@@ -4520,7 +4526,7 @@ const Settings: React.FC = () => {
                           <span className="text-[9px] bg-rose-100 text-rose-500 px-1.5 py-0.5 rounded-full">持续维护</span>
                       </div>
                       <label className="relative inline-flex items-center cursor-pointer">
-                          <input type="checkbox" checked={rtXhsMcpEnabled && rtXhsMode === 'lite'} onChange={e => { if (e.target.checked) { if (!window.confirm(XHS_RISK_TEXT + '\n\n确定要开启吗？')) return; setRtXhsMcpEnabled(true); setRtXhsEnabled(true); setRtXhsMode('lite'); } else { setRtXhsMcpEnabled(false); setRtXhsEnabled(false); } }} className="sr-only peer" />
+                          <input type="checkbox" checked={rtXhsMcpEnabled && rtXhsMode !== 'local'} onChange={e => { if (e.target.checked) { if (!window.confirm(XHS_RISK_TEXT + '\n\n确定要开启吗？')) return; setRtXhsMcpEnabled(true); setRtXhsEnabled(true); setRtXhsMode(rtXhsMode === 'local' ? 'lite' : rtXhsMode); } else { setRtXhsMcpEnabled(false); setRtXhsEnabled(false); } }} className="sr-only peer" />
                           <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-rose-500"></div>
                       </label>
                   </div>
@@ -4528,12 +4534,24 @@ const Settings: React.FC = () => {
                       免电脑、免扫码：粘贴一次小红书 / RedNote cookie，即可搜索、浏览、看详情及互动；国内小红书还支持发帖(带图)。地址已内置，无需填写。
                   </p>
                   <p className="text-[10px] text-amber-700 leading-relaxed bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">{XHS_RISK_TEXT}</p>
-                  {rtXhsMcpEnabled && rtXhsMode === 'lite' && (
+                  {rtXhsMcpEnabled && rtXhsMode !== 'local' && (
                       <div className="space-y-2">
+                          <div className="flex gap-1">
+                              <button type="button" onClick={() => setRtXhsMode('lite')} className={`flex-1 py-1.5 text-[11px] font-bold rounded-xl transition-colors ${rtXhsMode === 'lite' ? 'bg-rose-500 text-white' : 'bg-rose-50 text-rose-500'}`}>云端 Lite</button>
+                              <button type="button" onClick={() => setRtXhsMode('vps')} className={`flex-1 py-1.5 text-[11px] font-bold rounded-xl transition-colors ${rtXhsMode === 'vps' ? 'bg-rose-500 text-white' : 'bg-rose-50 text-rose-500'}`}>VPS 托管</button>
+                          </div>
+                          {rtXhsMode === 'lite' && (
                           <div>
                               <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">小红书 Cookie</label>
                               <textarea value={rtXhsCookie} onChange={e => { setRtXhsCookie(e.target.value); setRtXhsPlatform(undefined); }} rows={2} className="w-full bg-white/80 border border-rose-200 rounded-xl px-3 py-2 text-[10px] font-mono resize-y" placeholder="a1=...; web_session=...; （从浏览器登录后复制完整 cookie）" />
                           </div>
+                          )}
+                          {rtXhsMode === 'vps' && (
+                          <div>
+                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Bridge Token</label>
+                              <input type="password" value={rtXhsBridgeToken} onChange={e => setRtXhsBridgeToken(e.target.value)} className="w-full bg-white/80 border border-rose-200 rounded-xl px-3 py-2 text-[11px] font-mono" placeholder="XHS_BRIDGE_TOKEN（见 docs/xhs-vps-session.md）" />
+                          </div>
+                          )}
                           <button onClick={testXhsMcp} className="w-full py-2 bg-rose-100 text-rose-600 text-xs font-bold rounded-xl active:scale-95 transition-transform">测试连接</button>
                           <div className="grid grid-cols-2 gap-2">
                               <div>
@@ -4545,6 +4563,7 @@ const Settings: React.FC = () => {
                                   <input value={rtXhsUserId} onChange={e => setRtXhsUserId(e.target.value)} className="w-full bg-white/80 border border-rose-200 rounded-xl px-3 py-2 text-[11px] font-mono" placeholder="自动获取" />
                               </div>
                           </div>
+                          {rtXhsMode === 'lite' && (
                           <div>
                               <button type="button" onClick={() => { setRtXhsGuideOpen(v => !v); }} className="text-[11px] font-bold text-rose-600 underline">📖 点击获取 cookie 教程 {rtXhsGuideOpen ? '▲' : '▼'}</button>
                               {rtXhsGuideOpen && (
@@ -4554,8 +4573,10 @@ const Settings: React.FC = () => {
                                   </div>
                               )}
                           </div>
+                          )}
                           <p className="text-[10px] text-slate-400 leading-relaxed bg-slate-100/60 rounded-lg px-2 py-1.5">
                               使用说明：Cookie 保存在本机配置中；使用 Lite 时会随请求发送到网络 Worker，用于登录校验和接口签名，当前开源 Worker 不主动留存。建议使用小号，并在退出账号或 Cookie 失效后及时更新。
+                              {rtXhsMode === 'vps' && 'VPS 模式：登录态由服务器浏览器维护，失效时去服务器扫码即可，无需复制 cookie。'}
                           </p>
                       </div>
                   )}
