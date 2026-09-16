@@ -86,6 +86,26 @@ export function selectEventsByType<
   return takeLimit(sortByAtDesc(matched), limit);
 }
 
+/**
+ * 返回还没被投影过的事件：id 不在 `projectedIds` 里的原样保留，顺序与入参完全一致
+ * （本函数不排序，调用方需要「最新在前」就先自己排好）。
+ *
+ * `projectedIds` 兼容 Set 与数组两种形态（数组内部转 Set，重复 id 自动去重）。
+ * 纯函数、不碰数据库，浏览器与 worker 都能用；不 clone 事件对象本身。
+ */
+export function selectUnprojectedEvents<T extends { id: string }>(
+  events: readonly T[],
+  projectedIds: ReadonlySet<string> | readonly string[],
+): T[] {
+  if (!Array.isArray(events)) return [];
+  const projected = new Set<string>(
+    Array.isArray(projectedIds)
+      ? projectedIds
+      : ((projectedIds as Iterable<string> | undefined) ?? []),
+  );
+  return events.filter((event) => !projected.has(event.id));
+}
+
 export interface AirpSceneInput {
   now: number;
   tzId: string;

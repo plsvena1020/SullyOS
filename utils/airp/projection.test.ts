@@ -4,6 +4,7 @@ import {
   classifyEventVisibility,
   selectEventsByVisibility,
   selectEventsByType,
+  selectUnprojectedEvents,
   renderSceneBlock,
   type AirpEventVisibility,
 } from './projection';
@@ -168,6 +169,61 @@ describe('selectEventsByType', () => {
 
   it('returns [] for a type with no matches', () => {
     expect(selectEventsByType(events, 'discovery')).toEqual([]);
+  });
+});
+
+describe('selectUnprojectedEvents', () => {
+  const events = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+
+  it('returns every event when nothing has been projected yet', () => {
+    expect(selectUnprojectedEvents(events, new Set<string>()).map((e) => e.id)).toEqual([
+      'a',
+      'b',
+      'c',
+    ]);
+    expect(selectUnprojectedEvents(events, []).map((e) => e.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('returns [] when every event is already projected', () => {
+    expect(selectUnprojectedEvents(events, new Set(['a', 'b', 'c']))).toEqual([]);
+    expect(selectUnprojectedEvents(events, ['a', 'b', 'c'])).toEqual([]);
+  });
+
+  it('returns only the unprojected ones (mixed set/array input)', () => {
+    expect(selectUnprojectedEvents(events, new Set(['b'])).map((e) => e.id)).toEqual(['a', 'c']);
+    expect(selectUnprojectedEvents(events, ['a', 'c']).map((e) => e.id)).toEqual(['b']);
+  });
+
+  it('preserves the incoming order and never re-sorts', () => {
+    const unsorted = [{ id: 'z' }, { id: 'm' }, { id: 'a' }];
+    expect(selectUnprojectedEvents(unsorted, ['a', 'z']).map((e) => e.id)).toEqual(['m']);
+  });
+
+  it('dedupes repeated ids inside the projected set / array', () => {
+    expect(selectUnprojectedEvents(events, ['b', 'b', 'b']).map((e) => e.id)).toEqual(['a', 'c']);
+  });
+
+  it('handles empty inputs', () => {
+    expect(selectUnprojectedEvents([], new Set(['a']))).toEqual([]);
+    expect(selectUnprojectedEvents([], [])).toEqual([]);
+  });
+
+  it('does not mutate the input array', () => {
+    const input = [{ id: 'a' }, { id: 'b' }];
+    const snapshot = [...input];
+    selectUnprojectedEvents(input, ['a']);
+    expect(input).toEqual(snapshot);
+  });
+
+  it('tolerates a missing events array', () => {
+    expect(
+      selectUnprojectedEvents(undefined as unknown as { id: string }[], ['a']),
+    ).toEqual([]);
+  });
+
+  it('keeps the original event objects (no cloning / extra-property loss)', () => {
+    const rich = [{ id: 'a', summary: 'hi' }];
+    expect(selectUnprojectedEvents(rich, [])[0]).toBe(rich[0]);
   });
 });
 

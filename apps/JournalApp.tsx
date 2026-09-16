@@ -12,6 +12,8 @@ import { safeResponseJson, extractJson } from '../utils/safeApi';
 import { normalizeMessageContent } from '../utils/messageFormat';
 import { injectMemoryPalace, ingestDiaryToPalace, type DiaryIngestResult } from '../utils/memoryPalace/pipeline';
 import { getRoomLabel } from '../utils/memoryPalace/types';
+import { listAirpEventsByChar } from '../utils/airp/eventStore';
+import { selectUnprojectedEvents, classifyEventVisibility } from '../utils/airp/projection';
 import { Sparkle, Archive } from '@phosphor-icons/react';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 import JournalAppearanceButton, { JournalAppearanceStyle } from '../components/journal/JournalAppearanceEditor';
@@ -465,6 +467,32 @@ const JournalApp: React.FC = () => {
                 return `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.role === 'user' ? 'User' : 'You'}: ${content}`;
             }).join('\n');
 
+            // AIRP 事件投影（试点）：把角色最近真实发生、还没写进过日记的事件当素材喂给这次回复。
+            // 去重是无状态的：每次全量扫该角色已存日记上的 airpEventIds 求并集（日记是手动动作
+            // 规模、量小，全扫可接受），已用过的事件不再重复出现。listAirpEventsByChar 走
+            // utils/db.ts:2295 的 at 倒序，返回即「最新在前」，所以这里直接取前 8 条，不重排。
+            // 没有未投影事件时 materialLines 为空 → 不追加任何 prompt 文本，字节级等同旧行为。
+            const projectedEventIds = new Set<string>(
+                (await DB.getDiariesByCharId(selectedChar.id))
+                    .flatMap(d => d.airpEventIds ?? []),
+            );
+            const unprojectedEvents = selectUnprojectedEvents(
+                await listAirpEventsByChar(selectedChar.id),
+                projectedEventIds,
+            ).slice(0, 8);
+            const airpMaterialLines = unprojectedEvents.map(event =>
+                classifyEventVisibility(event) === 'private'
+                    ? `- ${event.summary}（私密，仅可写入日记正文，不可外传）`
+                    : `- ${event.summary}`
+            );
+            const airpMaterialSection = airpMaterialLines.length > 0
+                ? `
+
+### 最近真实发生过的事 (Recent Events)
+${airpMaterialLines.join('\n')}
+以上是她真实发生过的事，只能依据这些写，不得编造与之冲突的新事实。`
+                : '';
+
             systemPrompt += `### [Exchange Diary Mode Instructions]
 你正在和用户进行【交换日记】互动。
 
@@ -473,7 +501,7 @@ const JournalApp: React.FC = () => {
 不要只写空泛的回复，还要说一些用户不知道的，你自己没有说过的想法，和你自己独立于用户经历过的今天的事情。
 [RECENT LOGS START]
 ${recentContext}
-[RECENT LOGS END]
+[RECENT LOGS END]${airpMaterialSection}
 
 ### 任务
 1. 阅读用户今天的日记 (${currentEntry.date})。
@@ -542,6 +570,14 @@ Structure:
             };
 
             const updatedEntry = { ...currentEntry, charPage };
+            // AIRP 投影锚点：记下这次回复用掉了哪些事件，下次投影靠全扫这些 id 去重（无状态）。
+            // 没用素材时两个字段保持缺省（不是 false / []），与老日记逐字节一致。
+            if (unprojectedEvents.length > 0) {
+                updatedEntry.airpEventIds = unprojectedEvents.map(event => event.id);
+                updatedEntry.isPrivate = unprojectedEvents.some(
+                    event => classifyEventVisibility(event) === 'private',
+                );
+            }
             // 自动发送 / 同步到聊天：char 有回复 → 卡片落地到对应角色的聊天历史。
             // 重交换（同一日记重新让 char 写回复）会复用已有 chatCardMessageId 走更新而不是再创建一条。
             const synced = await syncDiaryCardToChat(updatedEntry, selectedChar);
