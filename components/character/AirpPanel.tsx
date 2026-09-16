@@ -204,7 +204,7 @@ const AirpPanel: React.FC<AirpPanelProps> = ({ char, onChange }) => {
         <div className="min-w-0">
           <h3 className="text-sm font-bold text-slate-700">AIRP 权限与能力</h3>
           <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">
-            只管两件事：TA 能自主到什么程度、能用哪些能力。总闸与工具白名单在下面的「自主背景生活」里。
+            只管两件事：TA 能自主到什么程度、能用哪些能力。总闸与工具白名单在上面的「自主背景生活」面板里。
           </p>
         </div>
       </div>
