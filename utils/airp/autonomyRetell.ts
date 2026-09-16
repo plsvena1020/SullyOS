@@ -41,6 +41,15 @@ const STYLE_LINES: Record<Exclude<RetellStyle, 'custom'>, string> = {
 const DEFAULT_MAX_ITEMS = 5;
 const DEFAULT_MAX_CHARS = 800;
 
+/**
+ * 起头许可（opener）单向分叉：默认收紧 —— 只有显式 `opener === true` 才允许主动提起。
+ * 位置在条目清单之后：紧随语气行会切断「块头/分寸语/语气/清单」的连续文本断言。
+ */
+const OPENER_LINES = {
+  allowed: '这些经历你也可以主动提起，不必等用户先聊到。',
+  restricted: '只有聊到相关话头时才自然带出，不要主动提起这些经历。',
+} as const;
+
 const styleLine = (retell: ResolvedAirpAutonomy['retell']): string => {
   if (retell.style === 'custom') {
     const hint = (retell.customHint ?? '').trim();
@@ -48,6 +57,9 @@ const styleLine = (retell: ResolvedAirpAutonomy['retell']): string => {
   }
   return STYLE_LINES[retell.style] ?? STYLE_LINES.plain;
 };
+
+const openerLine = (retell: ResolvedAirpAutonomy['retell']): string =>
+  retell.opener === true ? OPENER_LINES.allowed : OPENER_LINES.restricted;
 
 /** big 优先、同级按时间倒序；同 ts 用 id 兜底，保证选择结果稳定可复现。 */
 const compareImportance = (a: AutonomousOutboxEntry, b: AutonomousOutboxEntry): number => {
@@ -62,6 +74,7 @@ const compareImportance = (a: AutonomousOutboxEntry, b: AutonomousOutboxEntry): 
  * 组装本轮转述块。told=0 && pushed=0 的条目按重要性排序，取到条数 / 字数上限为止；
  * 上限按条目整条结算——放不下的整条丢弃，绝不把一条经历截成半截。
  * 一条都取不出（含空账本）→ 整块不注入（"没查"与"查了没有"不共用出口的既有纪律）。
+ * 块尾按 opener 补一句「可否主动提起」的许可：`true` 才允许主动起头，否则只接话头。
  */
 export async function buildAutonomyRetellBlock(
   charId: string,
@@ -94,6 +107,7 @@ export async function buildAutonomyRetellBlock(
     FIXED_TONE,
     styleLine(retell),
     ...selected.map((row) => `- ${typeof row.note === 'string' ? row.note : ''}`),
+    openerLine(retell),
   ].join('\n');
 
   return { block, toldIds: selected.map((row) => row.id) };

@@ -13,6 +13,9 @@ import type { ResolvedAirpAutonomy } from './autonomySettings';
 const HEADER = '[System: 离线自主经历]';
 // §2.5 固定分寸语（逐字）。
 const TONE = '你前几晚自己去网上逛过/玩过，记着这些——TA 聊到相关话头、或你自己想分享时自然带一句就好；别报流水账、别每轮都提。';
+// 起头许可（opener）两句话。
+const OPENER_ALLOWED = '这些经历你也可以主动提起，不必等用户先聊到。';
+const OPENER_RESTRICTED = '只有聊到相关话头时才自然带出，不要主动提起这些经历。';
 
 const STYLE_LINES: Record<string, string> = {
   battle: '讲得像打了一场仗：句子短、有输有赢，带点劲儿。',
@@ -152,6 +155,33 @@ describe('buildAutonomyRetellBlock（真实 DB 层）', () => {
     // custom 但没写提示 → 回落 plain，不能凭空编一句。
     const customNoHint = await buildAutonomyRetellBlock(charId, retell({ style: 'custom' }));
     expect(customNoHint.block).toContain(STYLE_LINES.plain);
+  });
+
+  it('opener=true → 允许主动起头，不出现收紧句', async () => {
+    const charId = freshCharId();
+    await DB.saveOutboxEntries([mkEntry({ id: 'op1', charId, ts: 1, note: 'nnn' })]);
+
+    const out = await buildAutonomyRetellBlock(charId, retell({ opener: true }));
+    expect(out.block).toContain(OPENER_ALLOWED);
+    expect(out.block).not.toContain(OPENER_RESTRICTED);
+  });
+
+  it('opener=false → 只接话头，不出现主动许可', async () => {
+    const charId = freshCharId();
+    await DB.saveOutboxEntries([mkEntry({ id: 'op2', charId, ts: 2, note: 'nnn' })]);
+
+    const out = await buildAutonomyRetellBlock(charId, retell({ opener: false }));
+    expect(out.block).toContain(OPENER_RESTRICTED);
+    expect(out.block).not.toContain(OPENER_ALLOWED);
+  });
+
+  it('opener=undefined → 同默认收紧（与 merge 默认 false 一致）', async () => {
+    const charId = freshCharId();
+    await DB.saveOutboxEntries([mkEntry({ id: 'op3', charId, ts: 3, note: 'nnn' })]);
+
+    const out = await buildAutonomyRetellBlock(charId, retell({ opener: undefined }));
+    expect(out.block).toContain(OPENER_RESTRICTED);
+    expect(out.block).not.toContain(OPENER_ALLOWED);
   });
 });
 
