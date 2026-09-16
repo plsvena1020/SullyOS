@@ -14,6 +14,10 @@ const WIRED_TOOL_SCHEMAS: Record<string, string> = {
   read_note: '参数 {"keyword":"关键词"}',
   weather_lookup_place: '参数 {"city":"城市名，如 杭州"}（查的是指定地点，不是角色当前地）',
   amap_search_places: '参数 {"keywords":"搜什么，如 咖啡馆", "city":"城市（必填，不确定就用角色所在城市）"}',
+  schedule_now: '参数 {"send_at":"你本地墙钟的 YYYY-MM-DDTHH:mm:ss（如 2026-07-20T20:00:00），不带时区后缀，必须晚于当前时间","mode":"auto 或 prompted（可选，默认 auto）","prompt_hint":"仅 mode=prompted 时给的方向","recurrence":"none 或 daily 或 weekly（可选，默认 none）","expire_policy":"expire 或 force（可选）"}，仅 send_at 必填；管理角色自己的定时主动消息排程',
+  schedule_cancel: '参数 {"task_id":"要取消的任务短 id（8 位）；当前只有一个待触发任务时可省略"}；取消角色的一个定时主动消息任务',
+  schedule_renew: '参数 {"send_at":"新触发时间，写你本地墙钟的 YYYY-MM-DDTHH:mm:ss，不带时区后缀，必须晚于当前时间","task_id":"要续期的任务短 id（8 位）；只有一个任务时可省略"}，仅 send_at 必填；给角色的定时主动消息续期',
+  save_diary: '参数 {"text":"要记下的内容"}（以角色身份写进手机日记）',
 };
 
 function safeText(value: unknown): string {

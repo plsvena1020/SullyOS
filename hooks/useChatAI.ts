@@ -834,7 +834,10 @@ export const useChatAI = ({
                         {
                             // 阶段一 ctx 刻意最小：接线的 recall/web_search/read_note 都不读 XHS 系列字段，
                             // 也就不把 XHS 缓存跟后处理共享（等 XHS 家族能力接线时再议）。
-                            executor: createChatToolExecutor(dispatchAgenticTool, { char: charForGen, userProfile, realtimeConfig }),
+                            executor: createChatToolExecutor(dispatchAgenticTool, { char: charForGen, userProfile, realtimeConfig }, {
+                                // 复用本轮的 amsg2 会话（不新建）：seenCalls 共享，导演与正文重复的排程调用会被同一道闸拦掉。
+                                amsg2Execute: (toolName, args) => executeAmsg2Tool(toolName, args, amsg2Session),
+                            }),
                         },
                     );
                     if (run.ok && run.output) {

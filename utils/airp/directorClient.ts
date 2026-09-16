@@ -51,13 +51,17 @@ interface ToolExecutionRecord {
   text: string;
 }
 
-/** AIRP 实际接线的只读工具（其余能力只注册不接线；amap_route 仍不在其中）。 */
+/** AIRP 实际接线的只读 + 低写入工具（其余能力只注册不接线；amap_route 仍不在其中）。 */
 const AIRP_WIRED_TOOLS: readonly string[] = [
   'recall_deep',
   'web_search',
   'read_note',
   'weather_lookup_place',
   'amap_search_places',
+  'schedule_now',
+  'schedule_cancel',
+  'schedule_renew',
+  'save_diary',
 ];
 
 const RESPONSE_FORMAT_MODEL = /gpt|deepseek/i;

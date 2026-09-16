@@ -285,6 +285,38 @@ describe('buildDirectorSystemPrompt — capability tool schemas (behavior 7)', (
     expect(output).not.toContain('undefined');
   });
 
+  it('renders argument schemas for the wired schedule / diary tools', () => {
+    const output = buildDirectorSystemPrompt(
+      makeSnapshot({
+        capabilities: [
+          makeCapability({
+            id: 'schedule_write',
+            title: '自管排程',
+            risk: 'low_write',
+            toolNames: ['schedule_now', 'schedule_cancel', 'schedule_renew'],
+          }),
+          makeCapability({
+            id: 'diary_write',
+            title: '写日记',
+            risk: 'low_write',
+            toolNames: ['save_diary'],
+          }),
+        ],
+      }),
+    );
+
+    expect(output).toContain('  schedule_now 参数 {"send_at":"你本地墙钟的 YYYY-MM-DDTHH:mm:ss');
+    expect(output).toContain('仅 send_at 必填');
+    expect(output).toContain('  schedule_cancel 参数 {"task_id":"要取消的任务短 id（8 位）');
+    expect(output).toContain('  schedule_renew 参数 {"send_at":"新触发时间');
+    expect(output).toContain('  save_diary 参数 {"text":"要记下的内容"}');
+    expect(output).not.toContain('schedule_now（尚未接线');
+    expect(output).not.toContain('schedule_cancel（尚未接线');
+    expect(output).not.toContain('schedule_renew（尚未接线');
+    expect(output).not.toContain('save_diary（尚未接线');
+    expect(output).not.toContain('undefined');
+  });
+
   it('marks amap_route as still unwired', () => {
     const output = buildDirectorSystemPrompt(
       makeSnapshot({

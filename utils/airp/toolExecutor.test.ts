@@ -4,6 +4,7 @@ import type { AgenticToolCtx } from '../agenticTools';
 import type { AirpToolExecutor } from './directorClient';
 import type { CityPlace } from '../amapCore';
 import type { WeatherData } from '../realtimeWorldCore';
+import { DB, openDB } from '../db';
 
 // 注入桩 dispatch：不 mock 真实工具，只验证「目录名 → 仓库真名」的映射与结果编码。
 const ctx = { char: { name: 'Aria' }, userProfile: { name: '小明' } } as unknown as AgenticToolCtx;
@@ -240,5 +241,148 @@ describe('createChatToolExecutor —— amap_search_places runner', () => {
             .rejects.toThrow(/amap_route/);
         expect(amapSearch).not.toHaveBeenCalled();
         expect(dispatch).not.toHaveBeenCalled();
+    });
+});
+
+// 排程三件套：目录名翻成 amsg2 真名后，经注入的 amsg2Execute 缝执行（不走 dispatchAgenticTool）。
+describe('createChatToolExecutor —— schedule 目录名走 amsg2 缝', () => {
+    function makeScheduleExecutor(
+        impl: (toolName: string, args: Record<string, unknown>) => Promise<string>,
+    ): {
+        executor: AirpToolExecutor;
+        amsg2Execute: ReturnType<typeof vi.fn>;
+        dispatch: ReturnType<typeof vi.fn>;
+    } {
+        const amsg2Execute = vi.fn(impl);
+        const dispatch = vi.fn(async () => 'never');
+        const executor = createChatToolExecutor(dispatch as any, ctx, { amsg2Execute });
+        return { executor, amsg2Execute, dispatch };
+    }
+
+    it.each<[string, string]>([
+        ['schedule_now', 'schedule_active_message'],
+        ['schedule_cancel', 'cancel_active_message'],
+        ['schedule_renew', 'renew_active_message'],
+    ])('%s → %s：参数原样透传、结果原样返回、不派发共享面工具', async (catalog, real) => {
+        const { executor, amsg2Execute, dispatch } = makeScheduleExecutor(async () => '排程结果文本');
+        const args = { send_at: '2026-09-18T09:00:00', mode: 'auto' };
+
+        const result = await executor.executeTool(catalog, args);
+
+        expect(amsg2Execute).toHaveBeenCalledTimes(1);
+        expect(amsg2Execute).toHaveBeenCalledWith(real, args);
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(result).toEqual({ ok: true, text: '排程结果文本' });
+    });
+
+    it('缝缺席：回「排程工具暂不可用」，不抛、不派发', async () => {
+        const dispatch = vi.fn(async () => 'never');
+        const executor = createChatToolExecutor(dispatch as any, ctx);
+
+        await expect(executor.executeTool('schedule_now', { send_at: '2026-09-18T09:00:00' }))
+            .resolves.toEqual({ ok: true, text: '排程工具暂不可用' });
+        expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    it('缝抛错：降级成失败文本，不把异常抛给 directorClient', async () => {
+        const { executor } = makeScheduleExecutor(async () => { throw new Error('boom'); });
+
+        expect(await executor.executeTool('schedule_cancel', {}))
+            .toEqual({ ok: false, text: '执行失败：boom' });
+    });
+});
+
+// 日记 runner：IndexedDB 由 test-setup 的 fake-indexeddb 提供，走真实 DB 层（同 C1 落点测试）。
+describe('createChatToolExecutor —— save_diary runner', () => {
+    const diaryCtx = {
+        char: { id: 'char-diary', name: 'Aria' },
+        userProfile: { name: '小明' },
+    } as unknown as AgenticToolCtx;
+
+    function makeDiaryExecutor(): { executor: AirpToolExecutor; dispatch: ReturnType<typeof vi.fn> } {
+        const dispatch = vi.fn(async () => 'never');
+        return { executor: createChatToolExecutor(dispatch as any, diaryCtx), dispatch };
+    }
+
+    async function clearDiaries(): Promise<void> {
+        const db = await openDB();
+        await new Promise<void>((resolve, reject) => {
+            const tx = db.transaction('diaries', 'readwrite');
+            tx.objectStore('diaries').clear();
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+    }
+
+    beforeEach(async () => { await clearDiaries(); });
+
+    it('text 缺失或全空白：回「缺少日记内容，无法记录」，零写入', async () => {
+        const { executor, dispatch } = makeDiaryExecutor();
+
+        expect(await executor.executeTool('save_diary', {}))
+            .toEqual({ ok: true, text: '缺少日记内容，无法记录' });
+        expect(await executor.executeTool('save_diary', { text: '   ' }))
+            .toEqual({ ok: true, text: '缺少日记内容，无法记录' });
+
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(await DB.getDiariesByCharId('char-diary')).toEqual([]);
+    });
+
+    it('写一行可读日记，字段逐项符合 C1 约定（charPage 正文、UTC 日期、无 autoSync）', async () => {
+        const before = Date.now();
+        const { executor } = makeDiaryExecutor();
+
+        const result = await executor.executeTool('save_diary', { text: '今天聊了咖啡。' });
+        const after = Date.now();
+
+        expect(result).toEqual({ ok: true, text: '已写入今天的日记' });
+
+        const rows = await DB.getDiariesByCharId('char-diary');
+        expect(rows).toHaveLength(1);
+        const row = rows[0];
+        expect(row.id).toMatch(/^airp-diary-tool-/);
+        expect(row.charId).toBe('char-diary');
+        expect(row.date).toBe(new Date().toISOString().slice(0, 10));
+        expect(row.userPage).toEqual({ text: '', paperStyle: 'grid', stickers: [] });
+        expect(row.charPage).toEqual({ text: '今天聊了咖啡。', paperStyle: 'plain', stickers: [] });
+        expect(row.timestamp).toBeGreaterThanOrEqual(before);
+        expect(row.timestamp).toBeLessThanOrEqual(after);
+        expect(row.isArchived).toBe(false);
+        expect('autoSync' in row).toBe(false);
+    });
+});
+
+// 验收要求「loop test covering 9 wired names」：这里在 executor 层锁住全部 9 个目录名
+// 都能端到端执行（5 个走 dispatch、4 个走 runner/缝），与 directorClient 的 5 名循环互补。
+describe('createChatToolExecutor —— 9 个已接线目录名端到端', () => {
+    const loopCtx = {
+        char: { id: 'char-loop', name: 'Aria' },
+        userProfile: { name: '小明' },
+    } as unknown as AgenticToolCtx;
+
+    const WIRED_NAMES: Array<[string, Record<string, unknown>, number]> = [
+        ['recall_deep', { year: '2026', month: '9' }, 1],
+        ['web_search', { query: '咖啡' }, 1],
+        ['read_note', { keyword: '咖啡' }, 1],
+        ['weather_lookup_place', { city: '杭州' }, 0],
+        ['amap_search_places', { keywords: '咖啡馆', city: '杭州' }, 0],
+        ['schedule_now', { send_at: '2026-09-18T09:00:00' }, 0],
+        ['schedule_cancel', { task_id: 'abcd1234' }, 0],
+        ['schedule_renew', { send_at: '2026-09-18T09:00:00', task_id: 'abcd1234' }, 0],
+        ['save_diary', { text: '记一笔' }, 0],
+    ];
+
+    it.each(WIRED_NAMES)('%s 端到端可执行', async (toolName, args, dispatchCalls) => {
+        const dispatch = vi.fn(async () => 'X');
+        const executor = createChatToolExecutor(dispatch as any, loopCtx, {
+            weatherLookup: async () => HANGZHOU_WEATHER,
+            amapSearch: async () => [],
+            amsg2Execute: async () => 'X',
+        });
+
+        const result = await executor.executeTool(toolName, args);
+
+        expect(result.ok).toBe(true);
+        expect(dispatch).toHaveBeenCalledTimes(dispatchCalls);
     });
 });
