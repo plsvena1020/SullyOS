@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { buildChatRequestPayload } from './chatRequestPayload';
 import type { BuildChatPayloadInput } from './chatRequestPayload';
 import { RealtimeContextManager } from './realtimeContext';
+import { DB, openDB } from './db';
+import type { AutonomousOutboxEntry } from '../types';
 
 // 即时对话（这一轮交给用户自己的 amsg worker 生成）那份 prompt 里，凡是 worker 到点
 // 会自己补一遍的时效段，前端就不再烤进去：当前时间块、【真实世界感知系统】（节日 /
@@ -266,6 +268,83 @@ describe('airpInstruction —— AIRP 导演《演出指令》插在钢印之前
         expect(absent.fullMessages.some(
             (m) => typeof m.content === 'string' && m.content.includes('[System: 演出指令]'),
         )).toBe(false);
+    });
+});
+
+describe('autonomyToldIds —— 自主生活转述块插在钢印之前（私聊主链限定）', () => {
+    const RETELL_CHAR = 'char-retell-payload';
+
+    const retellEntry = (id: string, note: string): AutonomousOutboxEntry => ({
+        id,
+        charId: RETELL_CHAR,
+        ts: 100,
+        q: 'q',
+        note,
+        kind: 'surf',
+        importance: 'big',
+        told: 0,
+        pushed: 0,
+    });
+
+    const retellInput = (): BuildChatPayloadInput => ({
+        ...baseInput(),
+        char: { id: RETELL_CHAR, name: '阿然' } as any,
+    });
+
+    async function clearOutbox(): Promise<void> {
+        const db = await openDB();
+        await new Promise<void>((resolve, reject) => {
+            const tx = db.transaction('autonomous_outbox', 'readwrite');
+            tx.objectStore('autonomous_outbox').clear();
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+    }
+
+    beforeEach(clearOutbox);
+
+    it('有未转述经历 → 块进 volatileTail，排名在钢印之前，toldIds 随结果交出', async () => {
+        await DB.saveOutboxEntries([retellEntry('e1', '深夜在论坛翻到一篇老帖')]);
+
+        const payload = await buildChatRequestPayload({
+            ...retellInput(),
+            recallEntryPoint: 'chat_app',
+        });
+        const tail = String(payload.fullMessages[payload.volatileTailIndex]?.content ?? '');
+        expect(tail).toContain('[System: 离线自主经历]');
+        expect(tail).toContain('深夜在论坛翻到一篇老帖');
+        // 钢印仍是最后一眼：背景块必须排在它前面。
+        expect(tail.indexOf('[System: 离线自主经历]')).toBeLessThan(tail.indexOf('回到你自己'));
+        expect(payload.autonomyToldIds).toEqual(['e1']);
+    });
+
+    it('空账本 → 整块不注入、toldIds 空', async () => {
+        const payload = await buildChatRequestPayload({
+            ...retellInput(),
+            recallEntryPoint: 'chat_app',
+        });
+        expect(joinMessages(payload.fullMessages)).not.toContain('[System: 离线自主经历]');
+        expect(payload.autonomyToldIds).toEqual([]);
+    });
+
+    it('非私聊主链（没给 chat_app）即使账本有货也不注入', async () => {
+        await DB.saveOutboxEntries([retellEntry('e1', '深夜在论坛翻到一篇老帖')]);
+
+        const payload = await buildChatRequestPayload({ ...retellInput() });
+        expect(joinMessages(payload.fullMessages)).not.toContain('[System: 离线自主经历]');
+        expect(payload.autonomyToldIds).toEqual([]);
+    });
+
+    it('即时对话（timelyByWorker）不注入：那条路走不到 told 记账', async () => {
+        await DB.saveOutboxEntries([retellEntry('e1', '深夜在论坛翻到一篇老帖')]);
+
+        const payload = await buildChatRequestPayload({
+            ...retellInput(),
+            recallEntryPoint: 'chat_app',
+            timelyByWorker: true,
+        });
+        expect(joinMessages(payload.fullMessages)).not.toContain('[System: 离线自主经历]');
+        expect(payload.autonomyToldIds).toEqual([]);
     });
 });
 

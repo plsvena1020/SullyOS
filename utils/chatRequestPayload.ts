@@ -40,6 +40,8 @@ import { cleanApiMessages, flattenImageContentParts } from './promptMessageClean
 import { materializeVisionDescriptions } from './visionApi';
 import type { RecallEntryPoint, RecallTrace } from './memoryPalace/trace';
 import { loadCollaborationFileCabinetBlock } from '../features/collaboration/chatLibrary';
+import { mergeAutonomySettings } from './airp/autonomySettings';
+import { buildAutonomyRetellBlock } from './airp/autonomyRetell';
 
 export { cleanApiMessages, flattenImageContentParts } from './promptMessageCleanup';
 
@@ -134,6 +136,12 @@ export interface BuildChatPayloadResult {
      * -1 = 没有可插的尾段（prompt build 被跳过，或 dev 的 system 合并开关把多条并成了一条）。
      */
     volatileTailIndex: number;
+    /**
+     * 本轮转述块（autonomy 离线自主经历）里出现过的 outbox 条目 id。
+     * 调用方在后处理里把它们记成「已转述」（见 utils/airp/autonomyRetell）。
+     * 没构建转述块（非私聊主链 / 空账本）时为空数组。
+     */
+    autonomyToldIds: string[];
     /** 本轮记忆召回的脱敏 Trace；Prompt Build 被整体跳过时不存在。 */
     recallTrace?: RecallTrace;
     /** 调试用：bilingual / mcd 是否实际注入 */
@@ -275,6 +283,7 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
             cleanedApiMessages,
             fullMessages: [...cleanedApiMessages],
             volatileTailIndex: -1,
+            autonomyToldIds: [],
             flags: {
                 bilingualActive: false,
                 mcdActive: false,
@@ -495,6 +504,29 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
         }
     }
 
+    // 自主生活《离线自主经历》转述块（plans/autonomy-round.md §2.5，C2）：把角色离线时
+    // 攒下的经历放进背景，让"角色不在场的那几晚"在聊天里是有记忆的。插在《演出指令》
+    // 之前——时间线背景先于本轮方向，钢印仍是模型开口前最后一眼；与 amsg2 排程清单同一
+    // 位置纪律（都在 volatileTail 内、钢印之前），但排程清单另有「功能开启」门，转述块刻意
+    // 不设：经历已经发生过，用户中途关掉自主生活也不该让已攒下的经历烂在账本里，只由
+    // 「讲过了」来消耗（told 记账）。
+    // 私聊主链限定（chat_app）且排除交给 worker 的即时对话：那条路在 useChatAI 里提前
+    // return，走不到后处理 Step 8 的 told 记账，转述块会被每轮重复注入、永不消耗。
+    let autonomyToldIds: string[] = [];
+    if (input.recallEntryPoint === 'chat_app' && !input.timelyByWorker) {
+        try {
+            const retellSelection = await buildAutonomyRetellBlock(
+                char.id,
+                mergeAutonomySettings(char).retell,
+            );
+            if (retellSelection.block) volatileTail += '\n\n' + retellSelection.block;
+            autonomyToldIds = retellSelection.toldIds;
+        } catch (e) {
+            // 账本读取失败只丢这一段：转述块是背景补充，绝不能挡住本轮聊天。
+            console.warn('[airp] autonomy retell block degraded', e);
+        }
+    }
+
     // AIRP《演出指令》由导演产出，插在钢印之前：既拿到 recency 注意力，又不改「回到你自己」
     // 永远最后一句的约定。空串 / undefined 一律不拼，保证 AIRP 关闭时输出与历史逐字一致。
     if (typeof input.airpInstruction === 'string' && input.airpInstruction.length > 0) {
@@ -540,6 +572,7 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
         fullMessages: finalMessages,
         // 合并开关开着时多条 system 被并进开头一条，下标失去意义 → 交出 -1，调用方退回贴尾。
         volatileTailIndex: finalMessages === fullMessages ? 1 + messagesWithWorldbookDepth.length : -1,
+        autonomyToldIds,
         recallTrace,
         flags: { bilingualActive, mcdActive, luckinActive, luckinChatActive, mcpChatActive, htmlActive, thinkingActive, promptBuildSkipped: false },
     };

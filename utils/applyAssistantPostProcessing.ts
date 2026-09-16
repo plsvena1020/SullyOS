@@ -64,6 +64,7 @@ import { appendDevDebugLog } from './devDebug';
 import { lastUserMessageWantsImage } from './imageRequestIntent';
 import { commitAirpRound } from './airp/commitApply';
 import type { AirpDirectorOutput } from './airp/types';
+import { markAutonomyTold } from './airp/autonomyRetell';
 
 // ─── 模块内辅助 ──────────────────────────────────────────────────────────────
 
@@ -541,6 +542,12 @@ export interface PostProcessCtx {
      * Step 7 整段跳过，行为跟历史完全一致。
      */
     airpDirectorOutput?: AirpDirectorOutput;
+    /**
+     * 本轮转述块里出现过的自主生活账本条目 id（buildChatRequestPayload 的
+     * autonomyToldIds）。传了才在 Step 8 把它们记成「已转述」并锚在本轮气泡上；
+     * 缺省 / 空数组 = 这一轮没有转述，整段跳过，行为跟历史一致。
+     */
+    autonomyToldIds?: string[];
 }
 
 /**
@@ -2468,6 +2475,47 @@ ${material}
         } catch (e) {
             // commitAirpRound 自身已吞掉流水线失败；这层是第二道保险，AIRP 永远不能挡住本轮聊天。
             console.warn('[airp] commit degraded', e);
+        }
+    }
+
+    // ─── Step 8: 自主生活转述记账（C2 收口）───
+    // 本轮 prompt 若转述了离线经历（payload.autonomyToldIds），在这里销账：把 outbox 条目标
+    // told、把账记在本轮气泡的 metadata 上，并翻转 linked AIRP 事件的 disclosedToUser。
+    // 锚点查询与 Step 7 的 commitAirpRound 同一手法（见 utils/airp/commitApply.ts 的锚点段）：
+    // 两处各自持一份 5 行查询，刻意不抽公共 helper —— 抽出来会把两个模块的 DB 读绑在一起，
+    // 等出现第三处再说（阶段四卫生）。
+    const toldIds = ctx.autonomyToldIds;
+    if (toldIds && toldIds.length > 0) {
+        try {
+            // 锚点：可见窗口内最新的、时间戳不早于本轮开始的那个 assistant 气泡。
+            // getRecentMessagesByCharId 返回按 id 升序的最近 N 条（见 db.ts），故按 id 取最大，
+            // 不依赖数组顺序。
+            let anchorMessageId: number | undefined;
+            const recent = await DB.getRecentMessagesByCharId(char.id, 5);
+            for (const message of recent) {
+                if (message.role !== 'assistant') continue;
+                if (typeof message.timestamp !== 'number' || message.timestamp < postStartMs) continue;
+                if (anchorMessageId === undefined || message.id > anchorMessageId) {
+                    anchorMessageId = message.id;
+                }
+            }
+
+            // 锚点缺失 = 本轮没有说出任何可见内容（空轮）：转述没有真正发生，不销账，
+            // 条目留给下一轮。
+            if (anchorMessageId !== undefined) {
+                await markAutonomyTold(char.id, toldIds, anchorMessageId);
+                // 审计面：本轮气泡上面记下它转述过哪些条目（合并，不覆盖既有 metadata）。
+                await DB.updateMessageMetadata(anchorMessageId, (prev: any) => ({
+                    ...(prev ?? {}),
+                    autonomyToldIds: [
+                        ...(Array.isArray(prev?.autonomyToldIds) ? prev.autonomyToldIds : []),
+                        ...toldIds,
+                    ],
+                }));
+            }
+        } catch (e) {
+            // 账面失败只能丢这一段：自主生活的存储问题永远不能挡住本轮聊天。
+            console.warn('[airp] autonomy retell bookkeeping degraded', e);
         }
     }
 }

@@ -2156,6 +2156,8 @@ export const useChatAI = ({
                 skipSecondPassLLM: false,
                 directives: [],
                 airpDirectorOutput: airpDirectorOutputRef.current,
+                // 自主生活转述记账输入（C2）：本轮转述块里出现过的账本条目 id。
+                autonomyToldIds: payload.autonomyToldIds,
             });
 
             // B2 空回复可见化：正文空 + 无工具调用 + 漏斗没产出过可见消息时，

@@ -56,6 +56,8 @@
 [已处理]  ← 高水位标记之前的
 ```
 
+角色的离线自主生活（`autonomous_outbox` 里的经历）经转述块进入私聊上下文、被角色说出口后，也随这条统一时间线进入提取管线。
+
 #### Step 1 — 缓冲触发
 
 - 水位节奏按角色独立保存于 `CharacterProfile.memoryPalaceWaterline`，随 IndexedDB
