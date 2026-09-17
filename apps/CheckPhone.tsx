@@ -911,7 +911,13 @@ ${realCharRule}
                     projectedEventIds,
                     type,
                 );
-            const airpMaterialSection = renderCheckPhoneMaterialSection(airpMaterial);
+            // 订单/外卖分支本身就要模型生成金额与商家（value=价格、title=商品名/店名），
+            // 严格版「金额一律不得虚构」会与生成规则打架 —— 仅这两个类型换兼容版约束；
+            // chat/social 维持严格版（discipline 为 undefined 时逐字节等同默认）。
+            const airpDiscipline = type === 'order' || type === 'delivery'
+                ? CHECK_PHONE_PURCHASE_DISCIPLINE
+                : undefined;
+            const airpMaterialSection = renderCheckPhoneMaterialSection(airpMaterial, { discipline: airpDiscipline });
 
             const perspectiveLock = `### [视角锁定 · 极重要]
 接下来要生成的是**你（${targetChar.name}）自己手机里的东西**——你自己的生活、社交、记录。
