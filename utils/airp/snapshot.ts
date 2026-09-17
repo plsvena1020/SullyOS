@@ -17,6 +17,7 @@ import { resolveScheduleSlots } from '../scheduleInjection';
 import { checkSpecialDates } from '../realtimeWorldCore';
 import { RealtimeContextManager, defaultRealtimeConfig, resolveCharCity } from '../realtimeContext';
 import { DB } from '../db';
+import { buildPomodoroContextBlock, readLivePomodoroSession } from '../pomodoroContextBlock';
 
 export interface AirpRealtimeDigest {
   weatherText?: string;
@@ -455,6 +456,34 @@ async function assembleSnapshot(
     if (digest) appendRealtimeFacts(withFilteredNews(digest, char), builtAt, drafts);
   } catch {
     /* 实时来源失败 → 跳过 */
+  }
+
+  // 基线 F：番茄钟进行中（浏览器本地 session，复用聊天路径同一份文本）。
+  // '用户' 是该模块自带默认——BuildSnapshotOpts 没有 userName，不新增没人传的 opts 参数；
+  // builtAt 显式传入以保证时间旅行/确定性；value 原样透传不 trim，与聊天路径看到的易变尾部逐字节一致。
+  // 数字守卫：读侧只守 shape/status 不守数字，坏数字（NaN / null / 字符串）会让文本出现
+  // 「已专注约NaN分钟」，绝不允许进 director——非有限即整块丢弃。
+  try {
+    const session = readLivePomodoroSession();
+    const numericsOk =
+      session !== null &&
+      Number.isFinite(session.accumulatedMs) &&
+      Number.isFinite(session.durationMs) &&
+      (session.segmentStartedAt == null || Number.isFinite(session.segmentStartedAt));
+    if (numericsOk) {
+      const pomoText = buildPomodoroContextBlock('用户', builtAt);
+      if (pomoText.length > 0) {
+        drafts.push({
+          kind: 'built',
+          predicate: 'pomodoro_now',
+          value: pomoText,
+          authority: 'runtime_state',
+          source: { kind: 'runtime' },
+        });
+      }
+    }
+  } catch {
+    /* 番茄钟不可读 → 跳过该来源，绝不抛 */
   }
 
   const facts: AirpFact[] = drafts.map((draft, index) => {

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   buildAirpRuntimeSnapshot,
   type AirpEpisodeSummary,
@@ -8,6 +8,7 @@ import {
 import { AIRP_CAPABILITIES } from './capabilityCatalog';
 import type { AirpFact } from './types';
 import type { CharacterProfile } from '../../types';
+import { POMODORO_SESSION_LS_KEY } from '../pomodoroSession';
 
 const NOW = 1_700_000_000_000;
 
@@ -531,5 +532,78 @@ describe('buildAirpRuntimeSnapshot · realtime news relevance filter', () => {
       'AI two',
       'AI three',
     ]);
+  });
+});
+
+describe('buildAirpRuntimeSnapshot · pomodoro snapshot fact', () => {
+  // 番茄钟 session 是浏览器 localStorage 事实；本组用例前后都清掉该键，
+  // 保证同文件其它用例假定的「LS 为空」不被污染（文件级封闭）。
+  beforeEach(() => {
+    try { localStorage.removeItem(POMODORO_SESSION_LS_KEY); } catch { /* noop */ }
+  });
+  afterEach(() => {
+    try { localStorage.removeItem(POMODORO_SESSION_LS_KEY); } catch { /* noop */ }
+  });
+
+  // 固定 session：segmentStartedAt 相对 NOW 打开 10 分钟，accumulatedMs 为 0，计划 25 分钟。
+  const seedSession = (overrides: Record<string, unknown> = {}) => {
+    localStorage.setItem(POMODORO_SESSION_LS_KEY, JSON.stringify({
+      sessionKey: 'pomo-1', charId: 'c1', topic: 'physics',
+      durationMs: 25 * 60_000, startedAt: NOW - 30 * 60_000, accumulatedMs: 0,
+      segmentStartedAt: NOW - 10 * 60_000, awaySince: null, awayLimitMs: 5 * 60_000,
+      status: 'running', encourageMinMs: 180_000, encourageMaxMs: 420_000,
+      nextEncourageAt: null, encouragements: [],
+      ...overrides,
+    }));
+  };
+
+  it('emits the live session text verbatim as the last runtime_state fact', async () => {
+    seedSession();
+    const snap = await buildAirpRuntimeSnapshot(makeChar(), {
+      now: NOW,
+      recallMemories: async () => [],
+      loadRealtime: async () => ({ weatherText: '深圳晴', observedAt: NOW }),
+    });
+
+    // 基线 F 排在基线 E（实时）之后。
+    expect(snap.facts.map((f) => f.predicate)).toEqual(['weather_now', 'pomodoro_now']);
+    const fact = snap.facts.find((f) => f.predicate === 'pomodoro_now');
+    // 期望文本按 buildPomodoroContextBlock 公式手算（不调用 builder）：10 分钟 / 计划 25 分钟，
+    // 首尾换行原样保留（value 不 trim，与聊天路径看到的易变尾部逐字节一致）。
+    expect(fact?.value).toBe(
+      '\n[番茄钟进行中] 用户正在番茄钟专注「physics」，本轮计划25分钟，已专注约10分钟。你可以用自然的方式偶尔关心进度，但不要刷屏说教。\n',
+    );
+    expect(fact?.authority).toBe('runtime_state');
+    expect(fact?.source).toEqual({ kind: 'runtime' });
+    expect(fact?.id).toBe(`airp-${NOW}-1`);
+    expect(fact?.validFrom).toBe(NOW);
+    expect(fact?.updatedAt).toBe(NOW);
+    expect(fact?.locked).toBe(false);
+  });
+
+  it('omits the fact when no live session is stored', async () => {
+    const snap = await buildAirpRuntimeSnapshot(makeChar(), stubOpts());
+    expect(snap.facts.some((f) => f.predicate === 'pomodoro_now')).toBe(false);
+  });
+
+  it('omits the fact for completed and abandoned sessions', async () => {
+    for (const status of ['completed', 'abandoned']) {
+      seedSession({ status });
+      const snap = await buildAirpRuntimeSnapshot(makeChar(), stubOpts());
+      expect(snap.facts.some((f) => f.predicate === 'pomodoro_now')).toBe(false);
+    }
+  });
+
+  it('omits the fact when session numerics are corrupt (guard)', async () => {
+    // 读侧只守 shape/status 不守数字；坏数字（含 JSON 化后变成 null 的 NaN）不得进 director。
+    for (const broken of [
+      { accumulatedMs: null },
+      { durationMs: 'twenty-five' },
+      { segmentStartedAt: null, accumulatedMs: 'NaN' },
+    ]) {
+      seedSession(broken);
+      const snap = await buildAirpRuntimeSnapshot(makeChar(), stubOpts());
+      expect(snap.facts.some((f) => f.predicate === 'pomodoro_now')).toBe(false);
+    }
   });
 });
