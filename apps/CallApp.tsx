@@ -1898,6 +1898,9 @@ ${sentencePlan}`;
           movements: (await listAirpEventsByChar(selectedChar.id)).filter(e => e.type === 'movement'),
         })
       : '';
+    // 通话侧没有等价的「线下时间感知」开关：dateTimeAwarenessEnabled（types.ts:3267-3269）
+    // 文档与设置界面只覆盖见面/约会 App，通话的时间注入（buildCallPrompt 的 timeContext）本就
+    // 不受它控制，因此这里不设门控。将来若给通话加同类开关，需在此处按同一谓词撤掉本块。
     const baseCallPrompt = selectedChar
       ? buildCallPrompt(
           userName,

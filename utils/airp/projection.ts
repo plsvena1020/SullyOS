@@ -246,7 +246,9 @@ export function renderSceneBlock(input: AirpSceneInput): string {
     // 未设自定义时区的角色（绝大多数）跟随设备：取设备时区渲染墙钟，与 VN/通话的
     // 本地时间线保持一致。设备时区解析失败时受保护地回落，仍走下面的 ISO/UTC 分支；
     // 非法自定义 tzId 同理（wallClockText 抛错 → null → ISO/UTC）。
-    let tzId = input.tzId;
+    // 纯空白 tzId 等同缺省（trim 后再判断），走设备时区默认；否则 Intl 会把空白当非法 zone
+    // 直接回落 ISO/UTC，和 VN/通话的本地墙钟对不上。
+    let tzId = typeof input.tzId === 'string' ? input.tzId.trim() : '';
     if (!isPresentText(tzId)) {
       try {
         tzId = Intl.DateTimeFormat().resolvedOptions().timeZone || '';

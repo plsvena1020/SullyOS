@@ -536,6 +536,16 @@ describe('renderSceneBlock', () => {
     expect(block).not.toContain('undefined');
   });
 
+  it('treats a whitespace-only tzId as absent (same as undefined)', () => {
+    const absent = renderSceneBlock({ now: NOW, tzId: '', movements: [] });
+    const blank = renderSceneBlock({ now: NOW, tzId: '   ', movements: [] });
+    expect(blank).toBe(absent);
+    expect(renderSceneBlock({ now: NOW, tzId: undefined as unknown as string, movements: [] })).toBe(absent);
+    if (Intl.DateTimeFormat().resolvedOptions().timeZone !== 'UTC') {
+      expect(blank).not.toContain('（UTC）');
+    }
+  });
+
   it('returns an empty string when there is nothing renderable', () => {
     expect(renderSceneBlock({ now: Number.NaN, tzId: 'UTC', movements: [] })).toBe('');
   });

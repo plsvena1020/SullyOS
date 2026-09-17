@@ -616,7 +616,9 @@ const buildVNModeBlock = (
     const digBlock = isDigDeeperOn(styleConfig) && digEntry !== null ? `${digEntry}\n` : '';
     const observeBlock = isObserveOn(char) ? buildObserveBlock(char) : '';
     const sceneText = (sceneBlock || '').trim();
-    const sceneSection = sceneText ? `### 实时处境\n${sceneText}\n` : '';
+    // 线下时间感知关闭 = 见面脱离现实时间线（types.ts dateTimeAwarenessEnabled 的文档意图），
+    // 实时处境整块跟着时间线一起撤掉——与上面的 Time 行同一个开关、同一个谓词。
+    const sceneSection = dateTimeOn && sceneText ? `### 实时处境\n${sceneText}\n` : '';
     return `### [Visual Novel Mode: 视觉小说脚本模式]
 你正在与用户进行**面对面**的互动。这不是聊天，是一场真实的见面。
 
@@ -712,7 +714,8 @@ export const DatePrompts = {
         const preset = getStylePreset(char.dateStyleConfig);
         const extraBlock = buildExtraStyleBlock(char.dateStyleConfig);
         const sceneText = (input.sceneBlock || '').trim();
-        const sceneSection = sceneText ? `\n### 实时处境\n${sceneText}` : '';
+        // 同 buildVNModeBlock：线下时间感知关闭时实时处境整块撤掉（纯架空见面不该再看到真实时间/行踪）。
+        const sceneSection = dateTimeOn && sceneText ? `\n### 实时处境\n${sceneText}` : '';
 
         // 根据时间间隔选择合适的分隔符
         const contextSeparator = gapHint
