@@ -4,6 +4,9 @@ import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
 import { CharacterProfile, Message, DateState, AppID } from '../types';
 import { DatePrompts, ApiMessage } from '../utils/datePrompts';
+import { listAirpEventsByChar } from '../utils/airp/eventStore';
+import { renderSceneBlock } from '../utils/airp/projection';
+import { resolveCharTimeZone } from '../utils/timezone';
 import { processNewMessagesWithAutoArchive } from '../utils/memoryPalace/autoArchive';
 import type { PipelineResult } from '../utils/memoryPalace/pipeline';
 import { incrementDigestRound, runCognitiveDigestion } from '../utils/memoryPalace';
@@ -334,12 +337,20 @@ const DateApp: React.FC = () => {
             const msgs = await DB.getRecentMessagesByCharId(c.id, getDateContextFetchLimit(c), true);
             const preparedMsgs = await materializeVisionDescriptions(msgs, apiConfig.visionApi);
             const emojis = await DB.getEmojis();
+            const sceneMovements = (await listAirpEventsByChar(c.id)).filter(e => e.type === 'movement');
+            const sceneBlock = renderSceneBlock({
+                now: Date.now(),
+                tzId: resolveCharTimeZone(c) || '',
+                locationLabel: c.location?.city,
+                movements: sceneMovements,
+            });
             const { messages } = DatePrompts.buildPeekPayload({
                 char: c,
                 userProfile,
                 allMsgs: preparedMsgs,
                 emojis,
                 useVisionDescriptions: apiConfig.visionApi?.enabled === true,
+                sceneBlock,
             });
             const content = await callLLM(messages, apiConfig.temperature ?? 0.85);
             setPeekStatus(content);
@@ -445,6 +456,13 @@ const DateApp: React.FC = () => {
         const modelText = isContinueTurn
             ? buildInPersonContinueInstruction(userProfile?.name, char.name)
             : text;
+        const sceneMovements = (await listAirpEventsByChar(char.id)).filter(e => e.type === 'movement');
+        const sceneBlock = renderSceneBlock({
+            now: Date.now(),
+            tzId: resolveCharTimeZone(char) || '',
+            locationLabel: char.location?.city,
+            movements: sceneMovements,
+        });
         const { messages } = await DatePrompts.buildSessionPayload({
             char,
             userProfile,
@@ -453,6 +471,7 @@ const DateApp: React.FC = () => {
             userText: modelText,
             variant: 'send',
             useVisionDescriptions: apiConfig.visionApi?.enabled === true,
+            sceneBlock,
         });
         const content = await callLLM(messages, apiConfig.temperature ?? 0.85);
 
@@ -480,6 +499,13 @@ const DateApp: React.FC = () => {
         const validMsgs = allMsgs.filter(m => m.id !== lastMsg.id);
         const preparedValidMsgs = await materializeVisionDescriptions(validMsgs, apiConfig.visionApi);
         const emojis = await DB.getEmojis();
+        const sceneMovements = (await listAirpEventsByChar(char.id)).filter(e => e.type === 'movement');
+        const sceneBlock = renderSceneBlock({
+            now: Date.now(),
+            tzId: resolveCharTimeZone(char) || '',
+            locationLabel: char.location?.city,
+            movements: sceneMovements,
+        });
 
         // 重掷的是开场白（isOpening 锚点消息）：走感知同款 payload 重新生成开场。
         // 不能走下面的普通 reroll 路径——开场白前面没有触发它的 user 消息。旧逻辑会
@@ -493,6 +519,7 @@ const DateApp: React.FC = () => {
                 allMsgs: preparedValidMsgs,
                 emojis,
                 useVisionDescriptions: apiConfig.visionApi?.enabled === true,
+                sceneBlock,
             });
             const content = await callLLM(messages, Math.max(apiConfig.temperature ?? 0.85, 0.9));
             // 生成成功后才动库：先删旧开场、再带 isOpening 落新开场，请求失败时原剧情不丢
@@ -523,6 +550,7 @@ const DateApp: React.FC = () => {
             userText: lastUserMsg.content,
             variant: 'reroll',
             useVisionDescriptions: apiConfig.visionApi?.enabled === true,
+            sceneBlock,
         });
         // Reroll 略调高温度求多样性，但绝不低于用户配置的基线。
         const content = await callLLM(messages, Math.max(apiConfig.temperature ?? 0.85, 0.9));

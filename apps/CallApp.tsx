@@ -15,6 +15,8 @@ import { CANTONESE_VOICE_SUPPORT_NOTE, VOICE_LANGUAGE_OPTIONS, voiceLanguageProm
 import { startStt, isSttSupported, type SttSession } from '../utils/speechToText';
 import { ContextBuilder } from '../utils/context';
 import { resolveCharTimeZone } from '../utils/timezone';
+import { listAirpEventsByChar } from '../utils/airp/eventStore';
+import { renderSceneBlock } from '../utils/airp/projection';
 import {
   injectMemoryPalace,
 } from '../utils/memoryPalace/pipeline';
@@ -403,6 +405,8 @@ const buildCallPrompt = (
   voiceLang?: string,
   mode: CallMode = 'voice',
   tz?: string,
+  // AIRP 实时处境块（renderSceneBlock 的输出）；缺省 / 空串整段不出现。
+  sceneBlock?: string,
 ) => {
   const resolvedCharName = charName || '你的角色';
   // 电话里角色说的「现在几点 / 今天什么日子」是 ta 那边的时间，跟角色自定义时区走
@@ -501,7 +505,9 @@ ${currentVoiceActingGuide()}
 - <语音> 里只写会被朗读的文字；演出标记继续遵守上方「当前引擎规则」，不要混用其它引擎语法，也不要写中文舞台旁白
 - 每条消息只有一个 <语音> 标签，emotion 属性可选；情绪不强就别加
 - 中文部分和 <语音> 部分表达的意思要一致` : '';
-  return [coreContext, timeContext, callPrompt, voiceLangPrompt].filter(Boolean).join('\n\n');
+  const sceneText = (sceneBlock || '').trim();
+  const sceneSection = sceneText ? `### 实时处境\n${sceneText}` : '';
+  return [coreContext, sceneSection, timeContext, callPrompt, voiceLangPrompt].filter(Boolean).join('\n\n');
 };
 const CallApp: React.FC = () => {
   const { closeApp, openApp, characters, activeCharacterId, addToast, apiConfig, userProfile, customThemes, suspendCall, suspendedCall, clearSuspendedCall, updateCharacter, characterGroups, groups, realtimeConfig, memoryPalaceConfig } = useOS();
@@ -1884,6 +1890,14 @@ ${sentencePlan}`;
       const callMsgs = await DB.getMessagesByCharId(selectedChar.id);
       await injectMemoryPalace(selectedChar, callMsgs);
     }
+    const sceneBlock = selectedChar
+      ? renderSceneBlock({
+          now: Date.now(),
+          tzId: resolveCharTimeZone(selectedChar) || '',
+          locationLabel: selectedChar.location?.city,
+          movements: (await listAirpEventsByChar(selectedChar.id)).filter(e => e.type === 'movement'),
+        })
+      : '';
     const baseCallPrompt = selectedChar
       ? buildCallPrompt(
           userName,
@@ -1893,6 +1907,7 @@ ${sentencePlan}`;
           voiceLang || undefined,
           callMode,
           resolveCharTimeZone(selectedChar),
+          sceneBlock,
         )
       : buildCallPrompt(userName, undefined, undefined, voiceLang || undefined, callMode);
     const thinkingPrompt = selectedChar?.showThinkingChain

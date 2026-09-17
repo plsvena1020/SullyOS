@@ -119,6 +119,25 @@ describe('DatePrompts.buildSessionPayload', () => {
         expect(sys).toContain('你们现在**面对面**。');
         expect(sys).not.toContain('**面对面**，在');
     });
+
+    it('sceneBlock 非空时插在场景上下文区、观测块之前；缺省/空串逐字节不变', async () => {
+        const scene = '时间：2026-01-02 11:04（Asia/Shanghai）\n地点：公司楼下咖啡店\n近期行踪：\n- 刚从公司出来';
+        // 关掉时间感知：system 里没有会随时钟漂移的行，字节比对才确定性
+        const char = makeChar({ dateTimeAwarenessEnabled: false, dateObserve: { enabled: true } });
+        const withScene = await DatePrompts.buildSessionPayload({ ...baseInput(char), sceneBlock: scene });
+        const sys = sysOf(withScene.messages);
+        expect(sys).toContain('### 实时处境');
+        expect(sys).toContain(scene);
+        expect(sys.indexOf('### 实时处境')).toBeGreaterThan(sys.indexOf('### 场景上下文'));
+        expect(sys.indexOf('### 实时处境')).toBeLessThan(sys.indexOf('观测协议'));
+
+        const absent = sysOf((await DatePrompts.buildSessionPayload(baseInput(char))).messages);
+        const empty = sysOf((await DatePrompts.buildSessionPayload({ ...baseInput(char), sceneBlock: '' })).messages);
+        const blank = sysOf((await DatePrompts.buildSessionPayload({ ...baseInput(char), sceneBlock: '  \n ' })).messages);
+        expect(empty).toBe(absent);
+        expect(blank).toBe(absent);
+        expect(sys).not.toBe(absent);
+    });
 });
 
 describe('OBSERVE 观测协议', () => {
@@ -362,6 +381,24 @@ describe('DatePrompts.buildPeekPayload', () => {
         const userMsg = messages[messages.length - 1].content as string;
         expect(userMsg).not.toContain(rawHtml);
         expect(userMsg).toContain('一张卡片');
+    });
+
+    it('sceneBlock 非空时进入「场景：感知」区；缺省/空串逐字节不变', () => {
+        const scene = '时间：2026-01-02 11:04（Asia/Shanghai）\n地点：公司楼下咖啡店';
+        // 关掉线下时间感知 + 固定消息时间戳：整条 messages 才可做确定性字节比对
+        const char = makeChar({ dateTimeAwarenessEnabled: false });
+        const msgs = [makeMsg({ timestamp: 1700000000000 })];
+        const withScene = DatePrompts.buildPeekPayload({ char, userProfile: user, allMsgs: msgs, emojis: [], sceneBlock: scene });
+        const userMsg = withScene.messages[withScene.messages.length - 1].content as string;
+        expect(userMsg).toContain('### 实时处境');
+        expect(userMsg).toContain(scene);
+        expect(userMsg.indexOf('### 实时处境')).toBeGreaterThan(userMsg.indexOf('### 场景：感知'));
+        expect(userMsg.indexOf('### 实时处境')).toBeLessThan(userMsg.indexOf('### 任务'));
+
+        const absent = DatePrompts.buildPeekPayload({ char, userProfile: user, allMsgs: msgs, emojis: [] });
+        const empty = DatePrompts.buildPeekPayload({ char, userProfile: user, allMsgs: msgs, emojis: [], sceneBlock: '' });
+        expect(JSON.stringify(empty.messages)).toBe(JSON.stringify(absent.messages));
+        expect(JSON.stringify(withScene.messages)).not.toBe(JSON.stringify(absent.messages));
     });
 });
 

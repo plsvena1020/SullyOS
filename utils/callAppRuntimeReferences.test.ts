@@ -252,4 +252,15 @@ describe('CallApp runtime references', () => {
     expect(warningSource).toContain('并不是本次版本的开发重点');
     expect(warningSource).toContain('可能存在各种 Bug');
   });
+
+  it('feeds the AIRP live scene block into the call base prompt after core context', () => {
+    const source = readFileSync(path.resolve(__dirname, '../apps/CallApp.tsx'), 'utf8');
+
+    expect(source).toContain("import { listAirpEventsByChar } from '../utils/airp/eventStore'");
+    expect(source).toContain("import { renderSceneBlock } from '../utils/airp/projection'");
+    expect(source).toContain("movements: (await listAirpEventsByChar(selectedChar.id)).filter(e => e.type === 'movement')");
+    // 场景块紧跟 coreContext 之后、timeContext 之前（option ①：纯环境语境）
+    expect(source).toContain('[coreContext, sceneSection, timeContext, callPrompt, voiceLangPrompt]');
+    expect(source).toContain('const sceneSection = sceneText ? `### 实时处境');
+  });
 });

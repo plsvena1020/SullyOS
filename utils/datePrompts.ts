@@ -600,6 +600,8 @@ const buildVNModeBlock = (
     userName: string,
     // 真实地点：角色所在城市 + 约会子集清单（buildSessionPayload 里取好传进来）。
     geo?: { cityName?: string; placeBlock?: string },
+    // AIRP 实时处境块（DateApp 用 renderSceneBlock 组好传入）；缺省 / 空串整段不出现。
+    sceneBlock?: string,
 ): string => {
     const dateTimeOn = isDateTimeAwarenessOn(char);
     const timeLine = dateTimeOn ? `1. **Time**: 当前时间 ${getRealTimeStr(resolveCharTimeZone(char))}。\n` : '';
@@ -613,6 +615,8 @@ const buildVNModeBlock = (
     const digEntry = resolveManagedPromptSync('date.digDeeper', DIG_DEEPER_BLOCK);
     const digBlock = isDigDeeperOn(styleConfig) && digEntry !== null ? `${digEntry}\n` : '';
     const observeBlock = isObserveOn(char) ? buildObserveBlock(char) : '';
+    const sceneText = (sceneBlock || '').trim();
+    const sceneSection = sceneText ? `### 实时处境\n${sceneText}\n` : '';
     return `### [Visual Novel Mode: 视觉小说脚本模式]
 你正在与用户进行**面对面**的互动。这不是聊天，是一场真实的见面。
 
@@ -628,7 +632,7 @@ ${preset.block}
  ${digBlock}${povBlock}${extraBlock}### 场景上下文
 ${timeLine}- **Location**: 你们现在**面对面**${geo?.cityName ? `，在「${geo.cityName}」` : ''}。
 ${geo?.placeBlock ? `${geo.placeBlock}\n约会地点优先从上面清单里选（名字照抄，别改字）；没有合适的才用同城真实存在的地方——**严禁编造听起来像真名的假地点**。\n` : ''}- **Context**: 参考历史记录。如果刚刚才看到开场白（Opening），请自然接话。
-${observeBlock}`;
+${sceneSection}${observeBlock}`;
 };
 
 /**
@@ -675,6 +679,8 @@ export const DatePrompts = {
         allMsgs: Message[];
         emojis: Emoji[];
         useVisionDescriptions?: boolean;
+        /** AIRP 实时处境块（DateApp 用 renderSceneBlock 组好传入）；缺省 / 空串整段不出现。 */
+        sceneBlock?: string;
     }): { messages: ApiMessage[] } => {
         const { char, userProfile, allMsgs, emojis } = input;
         const charTz = resolveCharTimeZone(char);
@@ -705,6 +711,8 @@ export const DatePrompts = {
         // 第三人称旁观镜头（用户还没"走过去"），人称指令只影响 session 内叙述
         const preset = getStylePreset(char.dateStyleConfig);
         const extraBlock = buildExtraStyleBlock(char.dateStyleConfig);
+        const sceneText = (input.sceneBlock || '').trim();
+        const sceneSection = sceneText ? `\n### 实时处境\n${sceneText}` : '';
 
         // 根据时间间隔选择合适的分隔符
         const contextSeparator = gapHint
@@ -713,7 +721,7 @@ export const DatePrompts = {
 
         const peekInstructions = `
 ### 场景：感知 (Sense Presence)
-${dateTimeOn ? `当前时间: ${timeStr}\n` : ''}时间上下文: ${gapHint}
+${dateTimeOn ? `当前时间: ${timeStr}\n` : ''}时间上下文: ${gapHint}${sceneSection}
 
 ### 任务
 你现在并不在和用户直接对话。用户正在悄悄靠近你所在的地点。
@@ -747,6 +755,8 @@ ${extraBlock ? `\n${extraBlock}` : ''}${isObserveOn(char) ? `\n${buildObserveBlo
         userText: string;
         variant: 'send' | 'reroll';
         useVisionDescriptions?: boolean;
+        /** AIRP 实时处境块（DateApp 用 renderSceneBlock 组好传入）；缺省 / 空串整段不出现。 */
+        sceneBlock?: string;
     }): Promise<{ messages: ApiMessage[] }> => {
         const { char, userProfile, allMsgs, emojis, userText, variant } = input;
 
@@ -772,7 +782,7 @@ ${extraBlock ? `\n${extraBlock}` : ''}${isObserveOn(char) ? `\n${buildObserveBlo
             ? { cityName: placeLib.city, placeBlock: renderPlaceLibraryDating(placeLib) }
             : ((char.location?.city || '').trim() ? { cityName: (char.location?.city || '').trim() } : undefined);
         const systemPrompt = ContextBuilder.buildCoreContext(char, userProfile, true, undefined, undefined, { skipTimeAwareness: !isDateTimeAwarenessOn(char), conversational: true })
-            + buildVNModeBlock(char, userProfile?.name || '', geo);
+            + buildVNModeBlock(char, userProfile?.name || '', geo, input.sceneBlock);
 
         // 每轮轮换的聚焦线索：把注意力推向不同的具体方向，相邻回复天然有差异
         const focusLine = isDigDeeperOn(char.dateStyleConfig) ? ` 本轮线索：${pickFocusHint()}。` : '';
