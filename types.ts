@@ -1155,6 +1155,8 @@ export interface PhoneEvidence {
     /** 人际关系系统：本条记录归属的联系人（phoneState.contacts 里的 id） */
     contactId?: string;
     linkedBankTxnId?: string; // 购买记录对应的银行流水 id（BankTransaction.id、可空）
+    /** AIRP 事件投影锚点：本条记录引用的世界事件 id（无素材的老记录无此字段） */
+    airpEventIds?: string[];
 }
 
 /**

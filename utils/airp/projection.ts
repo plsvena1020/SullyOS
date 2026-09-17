@@ -131,6 +131,63 @@ export function selectMomentsMaterial(
   return takeLimit(sortByAtDesc(eligible), limit);
 }
 
+/** 查手机素材上限：一次刷新最多喂 5 条事件（记录是短线索，多了反而把明细摊薄）。 */
+export const CHECK_PHONE_MATERIAL_LIMIT = 5;
+
+/**
+ * 查手机记录类型 → AIRP 事件类型的锁定映射（Task 28 裁决，不得随手扩）：
+ * - chat → relationship：「和谁来往过」的对话痕迹。
+ * - order / delivery → activity：下单、点外卖都属于活动。
+ * - social → social_trace：动态/浏览痕迹。
+ * - call → 不映射：没有诚实的 movement→通话 对应，通话记录维持原样。
+ * - contacts → 不映射：通讯录是「建立联系人」，不是痕迹证据。
+ * - 自定义 App（任意 app.id，走 customPrompt）→ 不映射：提示词由用户定，类型不可预测。
+ * 未映射返回 undefined → 素材为空 → prompt 与记录逐字节保持旧行为。
+ */
+const CHECK_PHONE_EVENT_TYPE: Readonly<Record<string, AirpCommittedEvent['type']>> = {
+  chat: 'relationship',
+  order: 'activity',
+  delivery: 'activity',
+  social: 'social_trace',
+};
+
+/** 查手机素材的诚实约束：事件摘要里没写的具体信息一律不得虚构（否则模型会补出假收据）。 */
+const CHECK_PHONE_HONESTY_RULE =
+  '以上是真实发生过的事，只能依据这些写，不得编造与之冲突的新事实；' +
+  '事件里没提到的具体信息（金额、商家、链接等）一律不得虚构，宁缺勿造。';
+
+/**
+ * 挑出这类查手机记录该用的 AIRP 事件素材：按锁定映射取对应类型、剔除已投影 id、
+ * 按 at 倒序取最多 limit 条（默认 5）。类型未映射时返回 []（调用方保持旧行为）。
+ * 纯函数、不碰数据库；不 clone 事件对象。
+ */
+export function selectCheckPhoneMaterial(
+  events: readonly AirpCommittedEvent[],
+  projectedIds: ReadonlySet<string> | readonly string[],
+  type: string,
+  limit: number = CHECK_PHONE_MATERIAL_LIMIT,
+): AirpCommittedEvent[] {
+  if (!Array.isArray(events)) return [];
+  const eventType = CHECK_PHONE_EVENT_TYPE[type];
+  if (!eventType) return [];
+  return takeLimit(
+    selectUnprojectedEvents(selectEventsByType(events, eventType), projectedIds),
+    limit,
+  );
+}
+
+/**
+ * 渲染查手机素材块：每条一行 `- {summary}` + 诚实约束。空素材返回 ''，
+ * 调用方插入 prompt 时逐字节等同旧 prompt。
+ */
+export function renderCheckPhoneMaterialSection(
+  events: readonly AirpCommittedEvent[],
+): string {
+  if (!Array.isArray(events) || events.length === 0) return '';
+  const lines = events.map((event) => `- ${event.summary}`);
+  return `\n\n### 最近真实发生过的事 (Recent Events)\n${lines.join('\n')}\n${CHECK_PHONE_HONESTY_RULE}`;
+}
+
 export interface AirpSceneInput {
   now: number;
   tzId: string;

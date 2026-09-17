@@ -6,6 +6,8 @@ import {
   selectEventsByType,
   selectUnprojectedEvents,
   selectMomentsMaterial,
+  selectCheckPhoneMaterial,
+  renderCheckPhoneMaterialSection,
   renderSceneBlock,
   type AirpEventVisibility,
 } from './projection';
@@ -298,6 +300,93 @@ describe('selectMomentsMaterial', () => {
     const picked = selectMomentsMaterial(events, []);
     expect(events.map((e) => e.id)).toEqual(snapshot);
     expect(picked[0]).toBe(events[1]);
+  });
+});
+
+describe('selectCheckPhoneMaterial', () => {
+  const rel = (at: number, id: string, extra: Partial<AirpCommittedEvent> = {}) =>
+    makeEvent({ id, at, type: 'relationship', impact: 'minor', ...extra });
+  const act = (at: number, id: string) => makeEvent({ id, at, type: 'activity', impact: 'minor' });
+  const social = (at: number, id: string) =>
+    makeEvent({ id, at, type: 'social_trace', impact: 'trace' });
+
+  it('maps each CheckPhone record type to its locked event type', () => {
+    const events = [
+      rel(100, 'r'),
+      act(200, 'a'),
+      social(300, 's'),
+      makeEvent({ id: 'm', at: 400, type: 'movement', impact: 'trace' }),
+    ];
+    expect(selectCheckPhoneMaterial(events, [], 'chat').map((e) => e.id)).toEqual(['r']);
+    expect(selectCheckPhoneMaterial(events, [], 'order').map((e) => e.id)).toEqual(['a']);
+    expect(selectCheckPhoneMaterial(events, [], 'delivery').map((e) => e.id)).toEqual(['a']);
+    expect(selectCheckPhoneMaterial(events, [], 'social').map((e) => e.id)).toEqual(['s']);
+  });
+
+  it('skips unmapped record types (call / contacts / custom app ids) entirely', () => {
+    const events = [rel(100, 'r'), act(200, 'a')];
+    for (const type of ['call', 'contacts', 'weibo', '']) {
+      expect(selectCheckPhoneMaterial(events, [], type)).toEqual([]);
+    }
+    expect(
+      selectCheckPhoneMaterial(events, [], undefined as unknown as string),
+    ).toEqual([]);
+  });
+
+  it('drops events that were already projected (Set and array forms)', () => {
+    const events = [rel(100, 'a'), rel(200, 'b')];
+    expect(selectCheckPhoneMaterial(events, ['b'], 'chat').map((e) => e.id)).toEqual(['a']);
+    expect(selectCheckPhoneMaterial(events, new Set(['a']), 'chat').map((e) => e.id)).toEqual(['b']);
+  });
+
+  it('re-sorts at-desc and caps at 5 newest', () => {
+    const events = [1, 2, 3, 4, 5, 6, 7].map((n) => rel(n * 100, `e${n}`));
+    expect(selectCheckPhoneMaterial(events, [], 'chat').map((e) => e.id)).toEqual([
+      'e7',
+      'e6',
+      'e5',
+      'e4',
+      'e3',
+    ]);
+  });
+
+  it('honours a custom limit and returns [] for limit <= 0', () => {
+    const events = [1, 2, 3].map((n) => act(n * 100, `e${n}`));
+    expect(selectCheckPhoneMaterial(events, [], 'order', 2).map((e) => e.id)).toEqual(['e3', 'e2']);
+    expect(selectCheckPhoneMaterial(events, [], 'order', 0)).toEqual([]);
+    expect(selectCheckPhoneMaterial(events, [], 'order', -1)).toEqual([]);
+  });
+
+  it('returns [] for empty / missing events and never mutates or clones', () => {
+    expect(selectCheckPhoneMaterial([], [], 'chat')).toEqual([]);
+    expect(
+      selectCheckPhoneMaterial(undefined as unknown as AirpCommittedEvent[], [], 'chat'),
+    ).toEqual([]);
+    const events = [rel(100, 'a'), rel(200, 'b')];
+    const snapshot = events.map((e) => e.id);
+    const picked = selectCheckPhoneMaterial(events, [], 'chat');
+    expect(events.map((e) => e.id)).toEqual(snapshot);
+    expect(picked[0]).toBe(events[1]);
+  });
+});
+
+describe('renderCheckPhoneMaterialSection', () => {
+  it('returns an empty string for empty / missing events (prompt stays byte-identical)', () => {
+    expect(renderCheckPhoneMaterialSection([])).toBe('');
+    expect(
+      renderCheckPhoneMaterialSection(undefined as unknown as AirpCommittedEvent[]),
+    ).toBe('');
+  });
+
+  it('renders one "- {summary}" line per event plus the honesty rule', () => {
+    const block = renderCheckPhoneMaterialSection([
+      makeEvent({ id: 'r', at: 100, type: 'relationship', summary: '和阿禾聊了搬家的事' }),
+      makeEvent({ id: 'a', at: 200, type: 'activity', summary: '下单了一个机械键盘' }),
+    ]);
+    expect(block).toContain('### 最近真实发生过的事 (Recent Events)');
+    expect(block).toContain('- 和阿禾聊了搬家的事\n- 下单了一个机械键盘');
+    expect(block).toContain('不得虚构');
+    expect(block.startsWith('\n\n')).toBe(true);
   });
 });
 

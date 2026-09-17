@@ -10,6 +10,8 @@ import { useBlobRefUrl } from '../utils/blobRef';
 import { useWheelPager } from '../utils/wheelPager';
 import { safeResponseJson, extractContent, extractJson } from '../utils/safeApi';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
+import { listAirpEventsByChar } from '../utils/airp/eventStore';
+import { renderCheckPhoneMaterialSection, selectCheckPhoneMaterial } from '../utils/airp/projection';
 import {
     runRealConversation, runNpcConversation, upsertContact, matchRealChar,
     clampAffinity, normName, flipTranscript, parseTranscript, serializeTurns, appendLearned,
@@ -893,13 +895,31 @@ ${realCharRule}
             }
             promptInstruction += `\n\n**JSON 字段类型硬约束**：每条记录的 "title"、"detail"、"value" 只能是字符串（value 可省略），绝不能返回对象或数组；标签、阅读进度、摘录、批注等结构请先整理成 detail 中的普通文本。`;
 
+            // AIRP 事件投影（查手机）：按记录类型挑该角色最近真实发生、还没投影过的事件当素材。
+            // 类型映射锁定（Task 28）：chat→relationship、order/delivery→activity、social→social_trace；
+            // call（没有诚实的 movement→通话 对应）、contacts（是「建立联系人」而非痕迹证据）、
+            // 自定义 App（提示词由用户定、type 是 app.id 不可预测）一律 SKIP —— 它们不喂素材，
+            // prompt 与记录逐字节等同旧行为。去重是无状态的：扫该角色现有 phoneState.records
+            // 上的 airpEventIds 求并集。
+            const projectedEventIds = new Set<string>(
+                (targetChar.phoneState?.records || []).flatMap(r => r.airpEventIds ?? []),
+            );
+            const airpMaterial = customPrompt
+                ? []
+                : selectCheckPhoneMaterial(
+                    await listAirpEventsByChar(targetChar.id),
+                    projectedEventIds,
+                    type,
+                );
+            const airpMaterialSection = renderCheckPhoneMaterialSection(airpMaterial);
+
             const perspectiveLock = `### [视角锁定 · 极重要]
 接下来要生成的是**你（${targetChar.name}）自己手机里的东西**——你自己的生活、社交、记录。
 - 完全用**你（${targetChar.name}）的第一人称视角**：这些是**你的**联系人、**你自己的**社交圈、**你对他们的**印象和备注。
 - **绝不是用户「${userProfile.name}」的社交关系**：不要生成用户的人脉圈，也不要从用户的角度/口吻写备注。
 - 用户「${userProfile.name}」只是在偷看你的手机，TA **不是**你的联系人、**不进**你的通讯录（下面「和用户的最近聊天」只是背景参考，不是要生成的对象，也别把用户的熟人搬进来）。`;
 
-            const fullPrompt = `${context}\n\n### [你和用户「${userProfile.name}」的最近聊天（仅背景参考）]\n${recentMsgs}\n\n${perspectiveLock}\n\n### [Task]\n${promptInstruction}\n请结合上面的「当前时间 / 距离上次联系」和人设调整生成内容的时间戳和情绪。如果很久没联系，记录可能是近期的独处状态；如果刚聊过，记录可能与聊天内容相关。`;
+            const fullPrompt = `${context}\n\n### [你和用户「${userProfile.name}」的最近聊天（仅背景参考）]\n${recentMsgs}\n\n${perspectiveLock}\n\n### [Task]\n${promptInstruction}${airpMaterialSection}\n请结合上面的「当前时间 / 距离上次联系」和人设调整生成内容的时间戳和情绪。如果很久没联系，记录可能是近期的独处状态；如果刚聊过，记录可能与聊天内容相关。`;
 
             const response = await fetch(`${effectiveApiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
                 method: 'POST',
@@ -1007,6 +1027,16 @@ ${realCharRule}
                 }
             }
 
+            // AIRP 投影锚点 + 时间戳：这批记录若来自上面的事件素材，就带上事件 id（下次无状态去重），
+            // 并把时间戳对齐到事件 at（修掉「全堆在写入时刻」的时间聚集）。空素材/零记录时不动任何字段。
+            if (airpMaterial.length > 0) {
+                const airpEventIds = airpMaterial.map(event => event.id);
+                newRecordsToAdd.forEach((record, index) => {
+                    record.airpEventIds = airpEventIds;
+                    record.timestamp = airpMaterial[Math.min(index, airpMaterial.length - 1)].at;
+                });
+            }
+
             // 基于最新状态合并：生成是异步的，期间若有演出落库 simLogs，
             // 用过期的 targetChar 快照覆盖会把 simLogs 等字段抹掉。
             updateCharacter(targetChar.id, (cur) => ({
@@ -1087,7 +1117,18 @@ ${realCharRule}
                 },
             );
             const perspective = `These records belong to ${targetChar.name}'s own phone (first-person view). The user "${userProfile.name}" is only peeking; do not include the user as a contact.`;
-            const fullPrompt = `${context}\n\n### [Recent chats with user (background only)]\n${recentMsgs}\n\n${perspective}\n\n### [Task]\n${simPrompt}`;
+            // AIRP 事件投影（查手机 · 购买记录）：order/delivery → activity 事件（下单/点外卖属于活动）。
+            // 同样的无状态去重 + 素材为空即逐字节不变；银行流水链路（appendCharPurchaseTxn）参数一律不动。
+            const projectedEventIds = new Set<string>(
+                (targetChar.phoneState?.records || []).flatMap(r => r.airpEventIds ?? []),
+            );
+            const airpMaterial = selectCheckPhoneMaterial(
+                await listAirpEventsByChar(targetChar.id),
+                projectedEventIds,
+                kind,
+            );
+            const airpMaterialSection = renderCheckPhoneMaterialSection(airpMaterial);
+            const fullPrompt = `${context}\n\n### [Recent chats with user (background only)]\n${recentMsgs}\n\n${perspective}\n\n### [Task]\n${simPrompt}${airpMaterialSection}`;
             const raw = await callLLM(fullPrompt);
             const sims = parsePurchaseGenJson(raw, currentDate);
             if (!sims.length) throw new Error('empty purchase records');
@@ -1137,6 +1178,15 @@ ${realCharRule}
                     linkedBankTxnId,
                 });
                 await new Promise(r => setTimeout(r, 50));
+            }
+            // AIRP 投影锚点 + 时间戳（与 handleGenerate 同口径）：只动查手机记录，
+            // 不碰 appendCharPurchaseTxn 的银行流水（它的 timestamp 仍是模拟时间 ts）。
+            if (airpMaterial.length > 0) {
+                const airpEventIds = airpMaterial.map(event => event.id);
+                newRecordsToAdd.forEach((record, index) => {
+                    record.airpEventIds = airpEventIds;
+                    record.timestamp = airpMaterial[Math.min(index, airpMaterial.length - 1)].at;
+                });
             }
             updateCharacter(targetChar.id, (cur) => ({
                 phoneState: {

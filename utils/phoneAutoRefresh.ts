@@ -17,6 +17,8 @@ import { extractContent, extractJson, safeResponseJson } from './safeApi';
 import { injectMemoryPalace } from './memoryPalace/pipeline';
 import { upsertContact, matchRealChar, normName } from './relationshipChat';
 import { phoneFieldToText } from './phoneEvidence';
+import { listAirpEventsByChar } from './airp/eventStore';
+import { renderCheckPhoneMaterialSection, selectCheckPhoneMaterial } from './airp/projection';
 
 /** 自动刷新 API 配置（与 relationshipGen 同构） */
 export interface PhoneAutoApiConfig {
@@ -102,6 +104,19 @@ ${rosterInfo}
 - **关系必须贴合上面每个真实角色的设定与已知关系，别凭空安成「同事/老友」**。不认识就别硬塞进通讯录。
 - "identity" 写**机主对 TA 的称呼 / 关系备注**（如「学长」「前任」「彼方网友」），要具体贴合来历。${fictionRule}`;
 
+        // AIRP 事件投影（查手机 · 自动刷新）：自动刷新只产 chat 记录，按锁定映射取
+        // relationship 事件当素材。去重是无状态的——扫该角色现有 phoneState.records 上的
+        // airpEventIds 求并集。没有未投影素材时素材块为空串，prompt 与记录逐字节等同旧行为。
+        const projectedEventIds = new Set<string>(
+            (char.phoneState?.records || []).flatMap(r => r.airpEventIds ?? []),
+        );
+        const airpMaterial = selectCheckPhoneMaterial(
+            await listAirpEventsByChar(char.id),
+            projectedEventIds,
+            'chat',
+        );
+        const airpMaterialSection = renderCheckPhoneMaterialSection(airpMaterial);
+
         const prompt = `${context}
 
 ### [你和用户「${user.name}」的最近聊天（仅背景参考）]
@@ -113,7 +128,7 @@ ${recentMsgs}
 ### [Task · 自动生活更新]
 时间静静流逝，你的生活在继续。生成 3 个**你（${char.name}）自己**手机聊天软件里的**对话片段**（你和你自己联系人的对话，第一人称视角，不是用户的社交）。
 
-${realCharRule}
+${realCharRule}${airpMaterialSection}
 
 要求：
 1. **联系人**: 真实角色按上面的设定与关系来；其余可按人设虚构合理的人。不要用"User"。
@@ -172,6 +187,16 @@ ${realCharRule}
                 detail,
                 timestamp: Date.now(),
                 contactId,
+            });
+        }
+
+        // AIRP 投影锚点 + 时间戳：这批记录若来自上面的事件素材，就带上事件 id（下次无状态去重）
+        // 并把时间戳对齐到事件 at（修掉「全堆在写入时刻」的时间聚集）。空素材/零记录时一个字段不动。
+        if (airpMaterial.length > 0) {
+            const airpEventIds = airpMaterial.map(event => event.id);
+            newRecords.forEach((record, index) => {
+                record.airpEventIds = airpEventIds;
+                record.timestamp = airpMaterial[Math.min(index, airpMaterial.length - 1)].at;
             });
         }
 
