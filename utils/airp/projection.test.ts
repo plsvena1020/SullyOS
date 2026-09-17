@@ -295,6 +295,12 @@ describe('selectMomentsMaterial', () => {
     expect(selectMomentsMaterial([makeEvent({ at: 1 })], [])).toEqual([]);
   });
 
+  it('tolerates a missing events array (defensive guard)', () => {
+    expect(
+      selectMomentsMaterial(undefined as unknown as AirpCommittedEvent[], []),
+    ).toEqual([]);
+  });
+
   it('does not mutate the input and keeps the original event objects', () => {
     const events = [told(100, 'a'), told(200, 'b')];
     const snapshot = events.map((e) => e.id);
@@ -428,9 +434,10 @@ describe('renderSceneBlock', () => {
   const NOW = Date.UTC(2026, 0, 2, 3, 4, 5);
 
   it('renders the time line with the directorPrompt wall-clock format', () => {
-    // Vector duplicated from utils/airp/directorPrompt.test.ts:124
-    // (`- 时间：2026-01-02 11:04（Asia/Shanghai）`). Hardcoded on purpose: this
-    // leaf module must not import directorPrompt, but the two clocks must match.
+    // Timestamp substring duplicated from utils/airp/directorPrompt.test.ts:124:
+    // that assertion checks the whole bullet line `- 时间：2026-01-02 11:04（Asia/Shanghai）`,
+    // while this test checks the timestamp part only (no leading `- `). Hardcoded on
+    // purpose: this leaf module must not import directorPrompt, but the clocks must match.
     const block = renderSceneBlock({ now: NOW, tzId: 'Asia/Shanghai', movements: [] });
     expect(block).toBe('时间：2026-01-02 11:04（Asia/Shanghai）');
   });
@@ -574,18 +581,27 @@ describe('renderSceneBlock', () => {
 });
 
 describe('module purity (leaf stays worker-safe)', () => {
-  it('only type-imports ./types and ./commit', () => {
-    const source = readFileSync(new URL('./projection.ts', import.meta.url), 'utf8');
-    const importLines = source
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line.startsWith('import '));
+  // 模块头注释里也出现 import/export 字样，先剥掉注释再扫代码，避免注释误判。
+  const code = readFileSync(new URL('./projection.ts', import.meta.url), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/[^\n]*/g, '');
 
-    expect(importLines.length).toBeGreaterThan(0);
-    for (const line of importLines) {
-      expect(line.startsWith('import type ')).toBe(true);
-      const specifier = line.match(/from '([^']+)'/)?.[1];
-      expect(['./types', './commit']).toContain(specifier);
+  it('has no side-effect imports, re-exports, dynamic imports or requires', () => {
+    // 运行时依赖的每一种隐蔽写法都要被这条挡住（旧版只看以 import 开头的行）。
+    expect(code).not.toMatch(/\bimport\s*['"]/); // 副作用导入 import './x'
+    expect(code).not.toMatch(/\bexport\b[\s\S]*?\bfrom\s*['"]/); // 再导出 export ... from './x'
+    expect(code).not.toMatch(/\brequire\s*\(/);
+    expect(code).not.toMatch(/\bimport\s*\(/); // 动态 import('./x')
+  });
+
+  it('only type-imports ./commit (multiline-safe; ./types is not imported)', () => {
+    // 多行 import 也要整条取到 specifier：旧写法逐行匹配，多行声明会取不到 from 而假绿。
+    const statements = code.match(/\bimport\s[\s\S]*?\bfrom\s*['"][^'"]+['"]/g) ?? [];
+    expect(statements.length).toBeGreaterThan(0);
+    for (const statement of statements) {
+      expect(statement.startsWith('import type')).toBe(true);
+      const specifier = statement.match(/from\s*['"]([^'"]+)['"]$/)?.[1];
+      expect(specifier).toBe('./commit');
     }
   });
 });

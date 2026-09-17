@@ -645,6 +645,11 @@ ${charContexts}
             });
             // AIRP 投影锚点：这次发帖喂过素材的角色帖才写 airpEventIds（没用素材的帖子保持缺省，
             // 与老帖子数据逐字节一致），供下次刷新扫 feed 去重。
+            // offered-anchoring（评审 Important 已裁决为有意设计，勿改成窄匹配）：锚定粒度就是「这次
+            // 喂给模型的整批事件」，标题/正文是否逐字引用一概不查。这与 retell 的 told-semantics 一致
+            // （给过且可见即视为消费）；反过来做窄匹配（拿正文子串反查是哪个事件）永远追不上模型的
+            // 改写与省略，同一批事件每次刷新都会被重新喂 → prompt 无限膨胀，且看起来像功能坏了。
+            // 宁可少喂，不重复喂。
             for (const post of newPosts) {
                 const usedEventIds = post.authorCharId ? momentsEventIdsByChar.get(post.authorCharId) : undefined;
                 if (usedEventIds && usedEventIds.length > 0) post.airpEventIds = usedEventIds;

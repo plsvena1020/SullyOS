@@ -572,6 +572,13 @@ Structure:
             const updatedEntry = { ...currentEntry, charPage };
             // AIRP 投影锚点：记下这次回复用掉了哪些事件，下次投影靠全扫这些 id 去重（无状态）。
             // 没用素材时两个字段保持缺省（不是 false / []），与老日记逐字节一致。
+            // offered-vs-used（评审认可的既有语义）：锚定的是**这次喂进 prompt 的事件**，不是模型
+            // 真的引用了的事件——这条链路拿不到可用的「使用信号」，按 retell 的 told-semantics
+            // 「给过且可见即视为消费」处理，宁可少喂、不重复喂。
+            // rewrite-releases-batch（重写语义，评审确认为可接受）：重写时本篇旧锚点也计入
+            // projectedEventIds（旧批次不会再被喂）；若这次拿到新批次，下面的赋值会用新 id **覆盖**
+            // 旧数组 → 旧批次随之解除锚定。理由：正文已被新正文替换，旧锚点不再代表「已写进日记」，
+            // 解除后这些事件仍可被后续回复重新采用；没有新批次时保留旧锚点（不写也不释放）。
             if (unprojectedEvents.length > 0) {
                 updatedEntry.airpEventIds = unprojectedEvents.map(event => event.id);
                 updatedEntry.isPrivate = unprojectedEvents.some(
