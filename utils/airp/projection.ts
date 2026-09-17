@@ -243,10 +243,21 @@ export function renderSceneBlock(input: AirpSceneInput): string {
   const lines: string[] = [];
 
   if (isPresentNumber(input.now)) {
-    const wall = isPresentText(input.tzId) ? wallClockText(input.tzId, input.now) : null;
+    // 未设自定义时区的角色（绝大多数）跟随设备：取设备时区渲染墙钟，与 VN/通话的
+    // 本地时间线保持一致。设备时区解析失败时受保护地回落，仍走下面的 ISO/UTC 分支；
+    // 非法自定义 tzId 同理（wallClockText 抛错 → null → ISO/UTC）。
+    let tzId = input.tzId;
+    if (!isPresentText(tzId)) {
+      try {
+        tzId = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+      } catch {
+        tzId = '';
+      }
+    }
+    const wall = isPresentText(tzId) ? wallClockText(tzId, input.now) : null;
     lines.push(
       wall
-        ? `时间：${wall}（${input.tzId}）`
+        ? `时间：${wall}（${tzId}）`
         : `时间：${new Date(input.now).toISOString()}（UTC）`,
     );
   }

@@ -521,9 +521,18 @@ describe('renderSceneBlock', () => {
     expect(block).not.toContain('undefined');
   });
 
-  it('falls back to ISO/UTC for an empty tzId without rendering "undefined"', () => {
+  it('resolves the device time zone when tzId is absent/blank (non-UTC wall line)', () => {
+    const deviceTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: deviceTz, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false, hourCycle: 'h23',
+    }).formatToParts(new Date(NOW));
+    const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
+    const expectedWall = `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}`;
+
     const block = renderSceneBlock({ now: NOW, tzId: '', movements: [] });
-    expect(block).toContain('（UTC）');
+    expect(block).toBe(`时间：${expectedWall}（${deviceTz}）`);
+    if (deviceTz !== 'UTC') expect(block).not.toContain('（UTC）');
     expect(block).not.toContain('undefined');
   });
 
