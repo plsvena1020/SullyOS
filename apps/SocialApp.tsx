@@ -11,6 +11,8 @@ import { safeResponseJson } from '../utils/safeApi';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 import { House, User, Package, Warning } from '@phosphor-icons/react';
 import { mergeSocialComments, prependUniqueSocialPosts, updateSocialPost } from '../utils/socialFeedMerge';
+import { listAirpEventsByChar } from '../utils/airp/eventStore';
+import { selectMomentsMaterial } from '../utils/airp/projection';
 import {
     DoubanGroup, addHiddenDoubanId, doubanImgUrl,
     fetchDoubanComments, fetchDoubanTopicDetail, fetchDoubanTopics,
@@ -505,6 +507,8 @@ const SocialApp: React.FC = () => {
             // Build Character Map with Multiple Handles Info
             let charContexts = "";
             let identityMap = "### 角色身份表 (Identities)\n";
+            // 本角色这次用掉的 AIRP 事件 id，落到角色帖的 airpEventIds 上做去重锚点。
+            const momentsEventIdsByChar = new Map<string, string[]>();
 
             for (const char of selectedChars) {
                 const coreContext = ContextBuilder.buildCoreContext(char, userProfile, false);
@@ -515,7 +519,28 @@ const SocialApp: React.FC = () => {
                 const handleList = handles.map(h => `- 网名: "${h.handle}" (备注: ${h.note})`).join('\n');
                 
                 identityMap += `\n角色 [${char.name}] 可用账号:\n${handleList}\n`;
-                charContexts += `\n<<< 角色档案: ${char.name} >>>\n${coreContext}\n${recentStatus}\n<<< 档案结束 >>>\n`;
+
+                // AIRP 事件投影（朋友圈）：把该角色最近真实发生、公开且已对用户交代过的事件当素材喂给这次发帖。
+                // 私密/痕迹事件永不进入朋友圈（selectMomentsMaterial 按 public+disclosed 过滤，即使已交代也不放行）。
+                // 去重是无状态的：feedRef 在 App 打开时已由 DB.getSocialPosts() 全量载入（见上方 useEffect），
+                // 直接扫内存里该角色的帖子收 airpEventIds 求并集，零额外读。没有素材时该角色 prompt 段逐字节不变。
+                const projectedEventIds = new Set<string>(
+                    feedRef.current
+                        .filter(post => post.authorCharId === char.id)
+                        .flatMap(post => post.airpEventIds ?? []),
+                );
+                const momentsEvents = selectMomentsMaterial(
+                    await listAirpEventsByChar(char.id),
+                    projectedEventIds,
+                );
+                const momentsMaterialSection = momentsEvents.length > 0
+                    ? `\n\n### 最近真实发生过的事 (Recent Events)\n${momentsEvents.map(event => `- ${event.summary}`).join('\n')}\n以上是她真实发生过的事，只能依据这些写，不得编造与之冲突的新事实。`
+                    : '';
+                if (momentsEvents.length > 0) {
+                    momentsEventIdsByChar.set(char.id, momentsEvents.map(event => event.id));
+                }
+
+                charContexts += `\n<<< 角色档案: ${char.name} >>>\n${coreContext}\n${recentStatus}${momentsMaterialSection}\n<<< 档案结束 >>>\n`;
             }
 
             const prompt = `### 任务: 模拟社交APP "Spark" 的推荐流
@@ -618,6 +643,12 @@ ${charContexts}
                     authorCharId: matchedChar?.id,
                 };
             });
+            // AIRP 投影锚点：这次发帖喂过素材的角色帖才写 airpEventIds（没用素材的帖子保持缺省，
+            // 与老帖子数据逐字节一致），供下次刷新扫 feed 去重。
+            for (const post of newPosts) {
+                const usedEventIds = post.authorCharId ? momentsEventIdsByChar.get(post.authorCharId) : undefined;
+                if (usedEventIds && usedEventIds.length > 0) post.airpEventIds = usedEventIds;
+            }
             prependPostsToFeed(newPosts);
             addToast('首页已刷新: 冲浪模式开启', 'success');
         } catch (e: any) {

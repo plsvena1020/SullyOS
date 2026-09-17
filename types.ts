@@ -4047,6 +4047,8 @@ export interface SocialPost {
     groupTitle?: string;
     /** 小组 slug，用于回跳拉取 */
     groupId?: string;
+    /** 投影来源 AIRP 事件 id（去重锚点）；非投影帖无此字段 */
+    airpEventIds?: string[];
 }
 
 export interface SubAccount {
