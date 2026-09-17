@@ -195,7 +195,7 @@ ${realCharRule}${airpMaterialSection}
         if (airpMaterial.length > 0) {
             const airpEventIds = airpMaterial.map(event => event.id);
             newRecords.forEach((record, index) => {
-                record.airpEventIds = airpEventIds;
+                record.airpEventIds = [...airpEventIds];
                 record.timestamp = airpMaterial[Math.min(index, airpMaterial.length - 1)].at;
             });
         }

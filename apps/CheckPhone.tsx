@@ -11,7 +11,7 @@ import { useWheelPager } from '../utils/wheelPager';
 import { safeResponseJson, extractContent, extractJson } from '../utils/safeApi';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
 import { listAirpEventsByChar } from '../utils/airp/eventStore';
-import { renderCheckPhoneMaterialSection, selectCheckPhoneMaterial } from '../utils/airp/projection';
+import { renderCheckPhoneMaterialSection, selectCheckPhoneMaterial, CHECK_PHONE_PURCHASE_DISCIPLINE } from '../utils/airp/projection';
 import {
     runRealConversation, runNpcConversation, upsertContact, matchRealChar,
     clampAffinity, normName, flipTranscript, parseTranscript, serializeTurns, appendLearned,
@@ -1032,7 +1032,7 @@ ${realCharRule}
             if (airpMaterial.length > 0) {
                 const airpEventIds = airpMaterial.map(event => event.id);
                 newRecordsToAdd.forEach((record, index) => {
-                    record.airpEventIds = airpEventIds;
+                    record.airpEventIds = [...airpEventIds];
                     record.timestamp = airpMaterial[Math.min(index, airpMaterial.length - 1)].at;
                 });
             }
@@ -1127,7 +1127,11 @@ ${realCharRule}
                 projectedEventIds,
                 kind,
             );
-            const airpMaterialSection = renderCheckPhoneMaterialSection(airpMaterial);
+            // 购买链路用兼容版约束：这条链路本身就要生成金额/商家（buildPurchaseGenPrompt），
+            // 严格版「金额一律不得虚构」会与模拟规则打架 —— 素材只锁事实与时间，明细仍走模拟。
+            const airpMaterialSection = renderCheckPhoneMaterialSection(airpMaterial, {
+                discipline: CHECK_PHONE_PURCHASE_DISCIPLINE,
+            });
             const fullPrompt = `${context}\n\n### [Recent chats with user (background only)]\n${recentMsgs}\n\n${perspective}\n\n### [Task]\n${simPrompt}${airpMaterialSection}`;
             const raw = await callLLM(fullPrompt);
             const sims = parsePurchaseGenJson(raw, currentDate);
@@ -1184,7 +1188,7 @@ ${realCharRule}
             if (airpMaterial.length > 0) {
                 const airpEventIds = airpMaterial.map(event => event.id);
                 newRecordsToAdd.forEach((record, index) => {
-                    record.airpEventIds = airpEventIds;
+                    record.airpEventIds = [...airpEventIds];
                     record.timestamp = airpMaterial[Math.min(index, airpMaterial.length - 1)].at;
                 });
             }

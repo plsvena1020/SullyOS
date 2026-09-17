@@ -8,6 +8,7 @@ import {
   selectMomentsMaterial,
   selectCheckPhoneMaterial,
   renderCheckPhoneMaterialSection,
+  CHECK_PHONE_PURCHASE_DISCIPLINE,
   renderSceneBlock,
   type AirpEventVisibility,
 } from './projection';
@@ -387,6 +388,39 @@ describe('renderCheckPhoneMaterialSection', () => {
     expect(block).toContain('- 和阿禾聊了搬家的事\n- 下单了一个机械键盘');
     expect(block).toContain('不得虚构');
     expect(block.startsWith('\n\n')).toBe(true);
+  });
+
+  it('omitting options keeps the strict honesty rule byte-identical', () => {
+    const events = [makeEvent({ id: 'r', at: 100, type: 'relationship', summary: '和阿禾聊了搬家' })];
+    expect(renderCheckPhoneMaterialSection(events)).toBe(
+      renderCheckPhoneMaterialSection(events, {}),
+    );
+    expect(renderCheckPhoneMaterialSection(events)).toBe(
+      renderCheckPhoneMaterialSection(events, { discipline: undefined }),
+    );
+    expect(renderCheckPhoneMaterialSection(events)).toContain('一律不得虚构，宁缺勿造');
+    expect(renderCheckPhoneMaterialSection(events)).not.toContain('按原有模拟规则生成');
+  });
+
+  it('accepts a custom discipline (purchases seam uses the sim-compatible variant)', () => {
+    const events = [makeEvent({ id: 'a', at: 200, type: 'activity', summary: '下单了一个机械键盘' })];
+    const block = renderCheckPhoneMaterialSection(events, {
+      discipline: CHECK_PHONE_PURCHASE_DISCIPLINE,
+    });
+    expect(block).toContain('### 最近真实发生过的事 (Recent Events)');
+    expect(block).toContain('- 下单了一个机械键盘');
+    expect(block).toContain('买的东西和时间以此为准');
+    expect(block).toContain('金额、商家等明细按原有模拟规则生成，但不得与这些事实冲突');
+    expect(block).not.toContain('一律不得虚构，宁缺勿造');
+  });
+
+  it('keeps the empty-material hinge (byte-identical prompt) with a custom discipline', () => {
+    expect(renderCheckPhoneMaterialSection([], { discipline: CHECK_PHONE_PURCHASE_DISCIPLINE })).toBe('');
+    expect(
+      renderCheckPhoneMaterialSection(undefined as unknown as AirpCommittedEvent[], {
+        discipline: CHECK_PHONE_PURCHASE_DISCIPLINE,
+      }),
+    ).toBe('');
   });
 });
 

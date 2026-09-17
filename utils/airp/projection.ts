@@ -157,6 +157,15 @@ const CHECK_PHONE_HONESTY_RULE =
   '事件里没提到的具体信息（金额、商家、链接等）一律不得虚构，宁缺勿造。';
 
 /**
+ * 购买记录（order/delivery）专用的兼容版约束：这条链路本身就有「金额/商家/商品」模拟生成规则
+ * （`buildPurchaseGenPrompt`），严格版的「金额一律不得虚构」会与模拟规则打架。改用这版后，
+ * 素材只锁「买的东西和时间」不与事实冲突，明细仍按原有模拟规则生成。仅购买 seam 传入。
+ */
+export const CHECK_PHONE_PURCHASE_DISCIPLINE =
+  '以上是真实发生过的事，买的东西和时间以此为准；' +
+  '金额、商家等明细按原有模拟规则生成，但不得与这些事实冲突。';
+
+/**
  * 挑出这类查手机记录该用的 AIRP 事件素材：按锁定映射取对应类型、剔除已投影 id、
  * 按 at 倒序取最多 limit 条（默认 5）。类型未映射时返回 []（调用方保持旧行为）。
  * 纯函数、不碰数据库；不 clone 事件对象。
@@ -176,16 +185,26 @@ export function selectCheckPhoneMaterial(
   );
 }
 
+export interface CheckPhoneMaterialRenderOptions {
+  /** 诚实约束文案；不传用默认的严格版 `CHECK_PHONE_HONESTY_RULE`。 */
+  discipline?: string;
+}
+
 /**
  * 渲染查手机素材块：每条一行 `- {summary}` + 诚实约束。空素材返回 ''，
  * 调用方插入 prompt 时逐字节等同旧 prompt。
+ *
+ * `options.discipline` 供购买记录这类**有自己模拟明细规则**的 seam 传入兼容版约束
+ * （见 `CHECK_PHONE_PURCHASE_DISCIPLINE`）；不传即严格版，渲染结果与旧版逐字节一致。
  */
 export function renderCheckPhoneMaterialSection(
   events: readonly AirpCommittedEvent[],
+  options?: CheckPhoneMaterialRenderOptions,
 ): string {
   if (!Array.isArray(events) || events.length === 0) return '';
   const lines = events.map((event) => `- ${event.summary}`);
-  return `\n\n### 最近真实发生过的事 (Recent Events)\n${lines.join('\n')}\n${CHECK_PHONE_HONESTY_RULE}`;
+  const discipline = options?.discipline ?? CHECK_PHONE_HONESTY_RULE;
+  return `\n\n### 最近真实发生过的事 (Recent Events)\n${lines.join('\n')}\n${discipline}`;
 }
 
 export interface AirpSceneInput {

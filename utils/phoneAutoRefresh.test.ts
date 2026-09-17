@@ -136,6 +136,23 @@ describe("maybeAutoRefreshPhone · AIRP 事件投影", () => {
     expect(promptOf(fetchMock)).toContain("- 新事\n- 旧事");
   });
 
+  it("gives each record its own anchor array (no shared-reference aliasing)", async () => {
+    const charProfile = buildChar({ records: [] });
+    stubLlm([
+      { title: "阿禾", kind: "npc", detail: "对方: 一" },
+      { title: "小林", kind: "npc", detail: "对方: 二" },
+    ]);
+    const { state } = await runAutoRefresh(charProfile, [
+      makeEvent({ id: "e-old", at: 1000, summary: "旧事" }),
+      makeEvent({ id: "e-new", at: 3000, summary: "新事" }),
+    ]);
+
+    const records = recordsOf(state);
+    expect(records[0].airpEventIds).not.toBe(records[1].airpEventIds);
+    records[0].airpEventIds!.push("mutated");
+    expect(records[1].airpEventIds).toEqual(["e-new", "e-old"]);
+  });
+
   it("drops already-projected events and keeps the old prompt / record shape", async () => {
     const charProfile = buildChar({
       records: [{ id: "old", type: "chat", title: "旧", detail: "旧", timestamp: 1, airpEventIds: ["ev-1"] }],
