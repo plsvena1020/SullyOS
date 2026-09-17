@@ -490,7 +490,7 @@ const JournalApp: React.FC = () => {
 
 ### 最近真实发生过的事 (Recent Events)
 ${airpMaterialLines.join('\n')}
-以上是她真实发生过的事，只能依据这些写，不得编造与之冲突的新事实。`
+以上是真实发生过的事，只能依据这些写，不得编造与之冲突的新事实。`
                 : '';
 
             systemPrompt += `### [Exchange Diary Mode Instructions]
