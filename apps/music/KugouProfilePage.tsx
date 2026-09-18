@@ -28,19 +28,24 @@ interface KugouPlaylist {
   name: string;
   pic: string;
   count: number;
+  /** 酷狗「默认收藏」（即我喜欢），实测 is_def=1、name 为「默认收藏」，listid 数字小 */
+  isDef: boolean;
 }
 
-/** CALIBRATE: /user/playlist 列表项 → KugouPlaylist（首次真机登录后按实际响应校准 key） */
+/** CALIBRATE（2026-09-18 线上探针实测）：/user/playlist 的 data.info[] 项 → KugouPlaylist */
 const mapKugouPlaylistItem = (it: any): KugouPlaylist => ({
   listid: String(it?.listid || it?.id || it?.global_collection_id || ''),
   name: it?.name || it?.specialname || '',
   pic: it?.pic || it?.picurl || it?.imgurl || it?.img || '',
   count: Number(it?.count || it?.trackcount || it?.sourcecount || 0),
+  isDef: it?.is_def === 1,
 });
 
-/** CALIBRATE: 各列表端点的歌曲数组取数（info/lists/songs/data 逐一兜底） */
+/** CALIBRATE（2026-09-18 线上探针实测）：各列表端点的歌曲数组取数
+ * user/playlit.list: data.info（歌单词条） / track/all: data.songs / track/all/new: data.info
+ * everyday/fm: data.song_list / lastest: data.songs */
 const pickSongArray = (r: any): any[] =>
-  r?.data?.info || r?.data?.lists || r?.data?.songs || (Array.isArray(r?.data) ? r.data : []) || [];
+  r?.data?.song_list || r?.data?.songs || r?.data?.info || r?.data?.lists || (Array.isArray(r?.data) ? r.data : []) || [];
 
 const toSongRows = (arr: any[]): Song[] =>
   arr
@@ -81,11 +86,12 @@ const KugouProfilePage: React.FC<Props> = ({ onBack, onOpenPlayer, onOpenSearch,
         kugouApi.everydayRecommend(cfg).catch(() => null),
         kugouApi.lastestSongsListen(cfg).catch(() => null),
       ]);
-      setNickname((detail && (detail.data?.nickname || detail.data?.uname || detail.data?.username)) || '酷狗用户');
-      setAvatar((detail && (detail.data?.avatar || detail.data?.user_avatar || detail.data?.head)) || '');
+  setNickname((detail && (detail.data?.nickname || detail.data?.uname || detail.data?.username)) || '酷狗用户');
+      setAvatar((detail && (detail.data?.pic || detail.data?.avatar || detail.data?.user_avatar || detail.data?.head)) || '');
       setIsVipUser(!!(vip && (vip.data?.is_vip === 1 || vip.data?.vip_type > 0)));
       const items: KugouPlaylist[] = (pl?.data?.data || pl?.data?.info || pl?.data?.lists || []).map(mapKugouPlaylistItem);
-      const likePl = items.find(p => /我喜欢/.test(p.name)) || null;
+      // 我喜欢 = 用户的「默认收藏」（实测 is_def=1，name 为「默认收藏」）
+      const likePl = items.find(p => /我喜欢/.test(p.name) || /默认收藏/.test(p.name) || p.isDef) || null;
       setLikes(likePl);
       setPlaylists(items.filter(p => p.listid && p !== likePl));
       setEverydaySongs(toSongRows(pickSongArray(everyday)));

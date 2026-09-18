@@ -26,18 +26,22 @@ export const hashToId = (hash: string): number => {
  */
 export const mapKugouSearchItem = (s: any): Song => {
   const hash: string = s?.FileHash || s?.fileHash || s?.hash || '';
-  const albumAudioId = Number(s?.AlbumAudioID || s?.albumAudioId || s?.album_audio_id || 0) || 0;
-  const mixId = Number(s?.mixSongID || s?.mixsongid || s?.MixSongID || 0) || 0;
-  const dur = Number(s?.Duration || s?.duration || 0) || 0;
+  const albumAudioId = Number(s?.AlbumAudioID || s?.albumAudioId || s?.album_audio_id || s?.Audioid || s?.audio_id || 0) || 0;
+  const mixId = Number(s?.mixSongID || s?.MixSongID || s?.mixsongid || 0) || 0;
+  const dur = Number(s?.Duration || s?.duration || s?.timelen || 0) || 0;
+  const singerArr = (Array.isArray(s?.singerinfo) ? s.singerinfo : Array.isArray(s?.Singers) ? s.Singers : [])
+    .map((x: any) => x?.name).filter(Boolean);
   const vip = s?.is_vip === 1
     || s?.trans_param?.pay_block === 1
-    || (s?.pay_type && (s.pay_type.sval === 1 || s.pay_type.listen_fragment === 1));
+    || (s?.pay_type && (s.pay_type.sval === 1 || s.pay_type.listen_fragment === 1))
+    || Number(s?.Price ?? s?.price ?? 0) > 0; // 实测：酷狗把付费曲标 Price（晴天 Price=200）
+  const rawName = s?.SongName || s?.official_songname || s?.songname || s?.name || s?.filename || '';
   return {
     id: albumAudioId || mixId || hashToId(hash),
-    name: s?.SongName || s?.name || s?.filename || '',
-    artists: s?.SingerName || s?.singername || s?.author_name || '',
-    album: s?.AlbumName || s?.albumname || s?.album_name || '',
-    albumPic: s?.Image || s?.image || (Array.isArray(s?.sizable_cover) ? s.sizable_cover[0] : '') || '',
+    name: String(rawName).replace(/\.(mp3|flac|ogg|m4a|wav|ape)$/i, ''), // track/new 等接口的 name 自带 .mp3 后缀
+    artists: s?.SingerName || s?.singername || s?.author_name || singerArr.join(' / ') || '',
+    album: s?.AlbumName || s?.albumname || s?.album_name || s?.albuminfo?.name || '',
+    albumPic: kugouCover(s?.Image || s?.image || s?.cover || s?.trans_param?.union_cover || (Array.isArray(s?.sizable_cover) ? s.sizable_cover[0] : '') || ''),
     duration: dur > 10000 ? Math.round(dur / 1000) : dur,
     fee: vip ? 1 : 0,
     source: 'kugou',
@@ -47,12 +51,17 @@ export const mapKugouSearchItem = (s: any): Song => {
   };
 };
 
-/** 登录后把 token/userid/dfid/auth 拼成 X-Kugou-Cookie 头的值（KuGouMusicApi 的 cookie 串格式） */
+/** 酷狗封面模板 URL（如 trans_param.union_cover）里的 {size} 占位替换成实际尺寸 */
+export const kugouCover = (url: string): string => (url || '').replace(/{size}/gi, '480');
+
+/** 登录后把 token/userid/dfid/auth 拼成 X-Kugou-Cookie 头的值（KuGouMusicApi 的 cookie 串格式）。
+ * 注意：用 ';' 无空格拼接——上游 cookieToJson 解析时不对 key 做 trim，'; ' 里的
+ * 空格会让 ' userid'/' dfid' 等键带前导空格而被丢掉，导致登录态在服务端失效（2026-09-18 实测）。 */
 export const composeKugouCookie = (p: { token?: string; userid?: string | number; dfid?: string; auth?: string }): string =>
   (['token', 'userid', 'dfid', 'auth'] as const)
     .map(k => (p[k] != null && p[k] !== '' ? `${k}=${p[k]}` : ''))
     .filter(Boolean)
-    .join('; ');
+    .join(';');
 
 /** 从 KuGouMusicApi 响应里按多 key 兜底取值（data 内优先，顶层其次） */
 export const pickKugouField = (j: any, ...keys: string[]): string => {

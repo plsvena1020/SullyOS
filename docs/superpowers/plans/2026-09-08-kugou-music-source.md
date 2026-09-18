@@ -1591,9 +1591,27 @@ git commit -m "docs: kugou music source notes and worker address record"
   4. 真机：手机 设置 → 网络代理 = `https://sully-proxy.plasmavendorlia.workers.dev`；音乐 齿轮 → 服务地址留空
   5. 真机全链路：音源默认酷狗 → 登录扫码（概念版 App）→ 搜歌播放歌词 → 我喜欢/歌单/每日推荐/最近在听 → 诊断按钮（酷狗）→ 切回网易云搜「晴天」播放回归 → 网易云登录态/歌单不受影响
 
-## 探针记录（Task 0 已完成本地实测，2026-09-08）
+## 真机校准记录（2026-09-18 bug 修复：登录成功但我的页全空）
 
-> 实测环境：本地 `node app.js`（platform=lite，端口 37123，临时目录 `Temp\opencode\kugou-api`）。Vercel 地址待用户部署后填入；上线前 worker 用同一份代码，响应形态一致。
+**Bug A（前端 cookie 拼接空格）**：`composeKugouCookie` 用 `; ` 带空格拼接，上游 `cookieToJson` 不 trim → ` userid`/` dfid` 键失配 → 所有登录态接口失败。对照实验：带空格 cookie 走 502 / 无空格 200。修复：`join(';')` 无空格拼接 + `_raw` 读入时 `\s*;\s*` 归一化（老登录态免重扫）。
+
+**Bug B（Vercel 冷启动设备指纹漂移 + 播放 URL 20028「需要验证」）**：上游 server.js 的 `ensureCookie` 中间件每实例随机生成 guid→mid/webgl 等设备指纹；登录时 token 与当时 mid 绑定，后续请求落别的实例 mid 漂移 → 20010/20018/20028（`generateSimulate(mid,userid,dfid,webglHash)` 挑战过不了）。修复（零代码）：Vercel 项目 `kugou-music-api`（prj_pq05）加 env（production）：`KUGOU_API_GUID`=20cadc29-942b-4195-8ce0-4400c5c51bb3、`KUGOU_API_DEV`=SULLYOSKGDEV01、`KUGOU_API_MAC`=02:00:00:00:00:00、`KUGOU_API_WEBGL`=9102984751029348571 → redeploy。之后登录态（旧 token 仍有效）全线 200：verify(detail/playlist/search/track/song-url)。
+  - GUID/DEV/MAC/WEBGL 值长期不变；用户重登录换来 auth 后即可开 VIP 音质。
+
+**字段校准结论（均已落实代码 + fixture）**：
+- 搜索项：`FileHash/SongName/SingerName/AlbumName/AlbumID/FileName` ✓；`MixSongID` 大写 M、`Audioid`/`audio_id` 兜底；无 Image → `trans_param.union_cover`（`{size}`→480）；`Price>0` 即 VIP 角标
+- track/all 项：`hash/name(.mp3 后缀要剥)/timelen(毫秒)/singerinfo[]/albuminfo.name/cover/audio_id/mixsongid`
+- everyday/fm 项：`song_list[]`，`songname/author_name/album_name/hash/album_audio_id/mixsongid`
+- lastest：`data.songs[]`
+- 歌单项：listid/name/pic/count/is_def（我喜欢 =「默认收藏」is_def=1）
+- user/detail：nickname/pic 直读；user/vip/detail：is_vip/vip_type（busi_vip 是过期赠 VIP，不看）
+- search/lyric：**candidates 在顶层**（不在 data 内），kugouApi.lyric 已改
+- song/url：**url/backupUrl 在顶层数组**（取首个），playSong 已改 first()
+- login/qr/key 一步返回 `data.qrcode`(key) + `data.qrcode_img`(data URI)；check 状态 `data.status`（0/1/2/4）
+
+触碰文件：`utils/kugouCore.ts(+test)`、`context/MusicContext.tsx`、`apps/music/KugouProfilePage.tsx`、`apps/music/KugouLoginPanel.tsx`、本附录。
+
+## 探针记录（Task 0 已完成本地实测，2026-09-08）> 实测环境：本地 `node app.js`（platform=lite，端口 37123，临时目录 `Temp\opencode\kugou-api`）。Vercel 地址待用户部署后填入；上线前 worker 用同一份代码，响应形态一致。
 
 - KuGouMusicApi Vercel 地址：**https://kugou-music-api-chi.vercel.app**（账号 plsvena-1020，项目 kugou-music-api prj_pq050FFBMjy9UEkWA4HGPfwSg0tA，env `platform=lite` @production，2026-09-18 部署验证：register/dev 出 dfid、匿名 search 152、别名稳定）
 - `/register/dev` 响应：`{"status":1,"data":{"dfid":"3498Xq0d5pW62a0Nod1YjV82"},"error_code":0}` —— **dfid 在 `data.dfid`**

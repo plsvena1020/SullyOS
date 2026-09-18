@@ -32,13 +32,15 @@ const KugouLoginPanel: React.FC<Props> = ({ onBack, onLoggedIn }) => {
     try {
       const reg = await kugouApi.registerDev({ ...cfg, kugouCookie: baseCookie });
       dfid = pickKugouField(reg, 'dfid');
-    } catch { /* 拿不到就留空，song/url 的 merge 接口会自动生成随机 dfid */ }
+      if (!dfid) addToast('dfid 获取为空，高音质可能不可用', 'info');
+    } catch { addToast('dfid 获取失败，将按匿名设备播放（VIP 歌曲可能不可用）', 'info'); }
     try {
       const verify = await kugouApi.userVerify({ ...cfg, kugouCookie: composeKugouCookie({ token, userid, dfid }) });
       auth = pickKugouField(verify, 'auth');
-    } catch { /* 拿不到 auth 只影响 VIP 音质，免费歌不受影响 */ }
+      if (!auth) addToast('auth 获取为空，建议重登一次再播 VIP 歌', 'info');
+    } catch { addToast('auth 获取失败：可能需重试登录才能播 VIP 歌', 'info'); }
     return composeKugouCookie({ token, userid, dfid, auth });
-  }, [cfg]);
+  }, [cfg, addToast]);
 
   /* ── 扫码 ── */
   const [qrImg, setQrImg] = useState('');

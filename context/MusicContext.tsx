@@ -335,7 +335,8 @@ export const musicApi = {
 export const kugouApi = {
   async _raw(cfg: MusicCfg, path: string, body: any = {}) {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    const cookie = (cfg.kugouCookie || '').trim();
+    // 存量登录态可能是老版本拼的 '; ' 带空格串，上游 cookieToJson 不 trim，这里读入时归一化
+    const cookie = (cfg.kugouCookie || '').trim().replace(/\s*;\s*/g, ';');
     if (cookie) headers['X-Kugou-Cookie'] = cookie;
     const url = `${resolveMusicWorkerUrl(cfg)}/kugou${path.startsWith('/') ? path : '/' + path}`;
     const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body || {}) });
@@ -357,9 +358,10 @@ export const kugouApi = {
     return kugouApi.call(cfg, '/lyric', { id, accesskey, fmt: 'lrc', decode: true });
   },
   // 两步歌词链：hash → id+accesskey → LRC 文本；拿不到返回 null
+  // 注意 /search/lyric 的 candidates 数组在响应顶层，不在 data 里
   async lyric(cfg: MusicCfg, song: Song) {
     const hit = await kugouApi.searchLyric(cfg, song.hash || '');
-    const c = hit?.data?.candidates?.[0] || (Array.isArray(hit?.data) ? hit.data[0] : null);
+    const c = hit?.candidates?.[0] || hit?.data?.candidates?.[0] || (Array.isArray(hit?.data) ? hit.data[0] : null);
     if (!c?.id || !c?.accesskey) return null;
     return kugouApi.lyricById(cfg, c.id, c.accesskey);
   },
@@ -835,7 +837,9 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           kugouApi.lyric(cfgRef.current, song).catch(() => null),
         ]);
         const d: any = Array.isArray(urlRes?.data) ? urlRes.data[0] : (urlRes?.data || urlRes || {});
-        const url: string | null = d?.url || d?.backupUrl || null;
+        // auth/merge 版的上游把 url/backupUrl 放在顶层，且是数组（取首个）
+        const first = (v: any): string | null => (Array.isArray(v) ? v[0] : v) || null;
+        const url: string | null = first(d?.url) || first(d?.backupUrl);
         if (!url) {
           toast(cfgRef.current.kugouCookie ? '该歌曲需要酷狗 VIP 或暂无可用音源' : '需要登录酷狗（我的 → 登录酷狗）', 'error');
           return;
