@@ -12,6 +12,7 @@ import React, {
   useMemo, useRef, useState,
 } from 'react';
 import { cachedCall as _cachedCall, invalidate as _invalidateCache, clearAll as _clearAllCache } from '../utils/musicCache';
+import { kugouQuality } from '../utils/kugouCore';
 import { DB } from '../utils/db';
 import { getProxyWorkerUrl, DEFAULT_PROXY_WORKER, PROXY_WORKER_CHANGED_EVENT } from '../utils/proxyWorker';
 import type { PostProcessMusicHooks } from '../utils/applyAssistantPostProcessing';
@@ -19,11 +20,17 @@ import { resolveRefToDataUrl } from '../utils/blobRef';
 
 /* ───────────── 类型 ───────────── */
 export type MusicQuality = 'standard' | 'higher' | 'exhigh' | 'lossless' | 'hires';
+export type MusicSource = 'kugou' | 'netease';
 
 export interface MusicCfg {
   workerUrl: string;
+  /** 网易云登录态 */
   cookie: string;
   quality: MusicQuality;
+  /** 音源；缺省 = 'kugou'（2026-09 用户选定酷狗默认，网易保留可切换） */
+  source?: MusicSource;
+  /** 酷狗登录态: token=..;userid=..;dfid=..;auth=..（KugouLoginPanel 生成） */
+  kugouCookie?: string;
 }
 
 export interface Song {
@@ -49,6 +56,15 @@ export interface Song {
   localLyrics?: string;
   /** Manual timestamps (seconds) per visible lyric line — overrides auto distribution. */
   lyricLineTimings?: number[];
+  // ── Kugou-source extensions（source 缺省 = 'netease'，存量数据零迁移） ──
+  /** 歌曲来源 */
+  source?: MusicSource;
+  /** 酷狗歌曲 hash（换播放 URL 必需） */
+  hash?: string;
+  /** 酷狗专辑 id（换 URL 时传，提高命中率） */
+  kugouAlbumId?: string;
+  /** 酷狗专辑音频 id（作 Song.id 主来源） */
+  albumAudioId?: number;
 }
 
 export interface LyricLine { t: number; text: string; }
@@ -91,6 +107,7 @@ export const MUSIC_DEFAULT_CFG: MusicCfg = {
   workerUrl: '',
   cookie: '',
   quality: 'exhigh',
+  source: 'kugou',
 };
 
 /* ───────────── 工具 ───────────── */
@@ -310,6 +327,71 @@ export const musicApi = {
   logout(cfg: MusicCfg) {
     return musicApi.call(cfg, '/logout', {});
   },
+};
+
+/* ───────────── 酷狗概念版 API ───────────── */
+// 与 musicApi 平行的酷狗来源：同款 _raw/call 结构，复用 _cachedCall（cookie 盐取 kugouCookie）。
+// worker 契约与探针实测见 docs/superpowers/plans/2026-09-08-kugou-music-source.md。
+export const kugouApi = {
+  async _raw(cfg: MusicCfg, path: string, body: any = {}) {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const cookie = (cfg.kugouCookie || '').trim();
+    if (cookie) headers['X-Kugou-Cookie'] = cookie;
+    const url = `${resolveMusicWorkerUrl(cfg)}/kugou${path.startsWith('/') ? path : '/' + path}`;
+    const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body || {}) });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(j?.error || j?.message || `HTTP ${res.status}`);
+    return j;
+  },
+  // 对外：与 musicApi 同款 TTL 缓存 + in-flight 去重（与网易同名 path 不冲突：盐与 body 形态都不同）
+  async call(cfg: MusicCfg, path: string, body: any = {}) {
+    return _cachedCall(path, body, cfg.kugouCookie, () => kugouApi._raw(cfg, path, body));
+  },
+  search(cfg: MusicCfg, keyword: string, offset = 0) {
+    return kugouApi.call(cfg, '/search', { keywords: keyword, page: Math.floor(offset / 30) + 1, pagesize: 30 });
+  },
+  searchLyric(cfg: MusicCfg, hash: string) {
+    return kugouApi.call(cfg, '/search/lyric', { hash, fmt: 'lrc' });
+  },
+  lyricById(cfg: MusicCfg, id: string | number, accesskey: string) {
+    return kugouApi.call(cfg, '/lyric', { id, accesskey, fmt: 'lrc', decode: true });
+  },
+  // 两步歌词链：hash → id+accesskey → LRC 文本；拿不到返回 null
+  async lyric(cfg: MusicCfg, song: Song) {
+    const hit = await kugouApi.searchLyric(cfg, song.hash || '');
+    const c = hit?.data?.candidates?.[0] || (Array.isArray(hit?.data) ? hit.data[0] : null);
+    if (!c?.id || !c?.accesskey) return null;
+    return kugouApi.lyricById(cfg, c.id, c.accesskey);
+  },
+  songUrl(cfg: MusicCfg, song: Song) {
+    return kugouApi.call(cfg, '/song/url', {
+      hash: song.hash || '',
+      album_id: song.kugouAlbumId || '',
+      album_audio_id: song.albumAudioId || 0,
+      quality: kugouQuality(cfg.quality),
+    });
+  },
+  registerDev(cfg: MusicCfg) { return kugouApi.call(cfg, '/register/dev', {}); },
+  userVerify(cfg: MusicCfg) { return kugouApi.call(cfg, '/user/verify', {}); },
+  userDetail(cfg: MusicCfg) { return kugouApi.call(cfg, '/user/detail', {}); },
+  userVipDetail(cfg: MusicCfg) { return kugouApi.call(cfg, '/user/vip/detail', {}); },
+  userPlaylist(cfg: MusicCfg) { return kugouApi.call(cfg, '/user/playlist', { page: 1, pagesize: 60 }); },
+  playlistTrackAllNew(cfg: MusicCfg, listid: string | number, page = 1, pagesize = 30) {
+    return kugouApi.call(cfg, '/playlist/track/all/new', { listid, page, pagesize });
+  },
+  playlistTrackAll(cfg: MusicCfg, id: string | number, page = 1, pagesize = 30) {
+    return kugouApi.call(cfg, '/playlist/track/all', { id, page, pagesize });
+  },
+  everydayRecommend(cfg: MusicCfg) { return kugouApi.call(cfg, '/everyday/recommend', {}); },
+  personalFm(cfg: MusicCfg) { return kugouApi.call(cfg, '/personal/fm', {}); },
+  userListen(cfg: MusicCfg) { return kugouApi.call(cfg, '/user/listen', {}); },
+  lastestSongsListen(cfg: MusicCfg) { return kugouApi.call(cfg, '/lastest/songs/listen', {}); },
+  loginQrKey(cfg: MusicCfg) { return kugouApi.call(cfg, '/login/qr/key', {}); },
+  loginQrCreate(cfg: MusicCfg, key: string) { return kugouApi.call(cfg, '/login/qr/create', { key, qrimg: true }); },
+  loginQrCheck(cfg: MusicCfg, key: string) { return kugouApi.call(cfg, '/login/qr/check', { key }); },
+  captchaSent(cfg: MusicCfg, mobile: string) { return kugouApi.call(cfg, '/captcha/sent', { mobile }); },
+  loginCellphone(cfg: MusicCfg, mobile: string, code: string) { return kugouApi.call(cfg, '/login/cellphone', { mobile, code }); },
+  refreshLogin(cfg: MusicCfg) { return kugouApi.call(cfg, '/refresh/login', {}); },
 };
 
 /* ───────────── Context 定义 ───────────── */
@@ -739,6 +821,46 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           } catch {}
         }
         setLoadingSong(false);
+        return;
+      }
+
+      // ── Kugou branch ── 酷狗概念版：hash 换 URL（auth 聚合版），两步取 LRC 歌词
+      if (song.source === 'kugou') {
+        if (!song.hash) {
+          toast('歌曲数据缺少 hash，无法播放', 'error');
+          return;
+        }
+        const [urlRes, lyricRes] = await Promise.all([
+          kugouApi.songUrl(cfgRef.current, song),
+          kugouApi.lyric(cfgRef.current, song).catch(() => null),
+        ]);
+        const d: any = Array.isArray(urlRes?.data) ? urlRes.data[0] : (urlRes?.data || urlRes || {});
+        const url: string | null = d?.url || d?.backupUrl || null;
+        if (!url) {
+          toast(cfgRef.current.kugouCookie ? '该歌曲需要酷狗 VIP 或暂无可用音源' : '需要登录酷狗（我的 → 登录酷狗）', 'error');
+          return;
+        }
+        const a = audioRef.current!;
+        a.src = url.replace(/^http:\/\//i, 'https://');
+        a.play().catch(() => {});
+        const lrcText: string = lyricRes?.body?.decodeContent || lyricRes?.body?.content || '';
+        setLyric(parseLyric(lrcText));
+        setTlyric([]); // 酷狗无翻译歌词
+        // 媒体会话（锁屏 / 通知栏）— 与网易分支同款，封面走 resolveRefToDataUrl
+        if ('mediaSession' in navigator) {
+          try {
+            const artworkSrc = song.albumPic ? await resolveRefToDataUrl(song.albumPic) : '';
+            (navigator as any).mediaSession.metadata = new (window as any).MediaMetadata({
+              title: song.name,
+              artist: song.artists,
+              album: song.album,
+              artwork: artworkSrc ? [
+                { src: artworkSrc, sizes: '300x300', type: 'image/jpeg' },
+                { src: artworkSrc, sizes: '512x512', type: 'image/jpeg' },
+              ] : [],
+            });
+          } catch {}
+        }
         return;
       }
 

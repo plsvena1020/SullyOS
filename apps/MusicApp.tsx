@@ -1,7 +1,9 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useOS } from '../context/OSContext';
-import { useMusic, musicApi, normalizeCookie, toHttps, Song } from '../context/MusicContext';
+import { useMusic, musicApi, kugouApi, normalizeCookie, toHttps, Song } from '../context/MusicContext';
+import { mapKugouSearchItem } from '../utils/kugouCore';
+import KugouProfilePage from './music/KugouProfilePage';
 import { DB } from '../utils/db';
 import { Gear, User as UserIcon, Crosshair, Play as PlayIcon, Pause as PauseIcon } from '@phosphor-icons/react';
 import {
@@ -120,19 +122,32 @@ const MusicApp: React.FC = () => {
     const kw = keyword.trim(); if (!kw) return;
     setSearching(true);
     try {
-      const r = await musicApi.search(cfg, kw);
-      const songs: Song[] = (r?.result?.songs || []).map((s: any) => ({
-        id: s.id, name: s.name,
-        artists: (s.ar || s.artists || []).map((a: any) => a.name).join(' / '),
-        album: s.al?.name || s.album?.name || '',
-        albumPic: toHttps(s.al?.picUrl || s.album?.picUrl || ''),
-        duration: (s.dt || s.duration || 0) / 1000,
-        fee: s.fee ?? 0,
-      }));
-      setResults(songs);
-      if (!songs.length) {
-        const hint = r?.msg || r?.message || (r?.code != null ? `code=${r.code}` : '') || '无数据';
-        addToast(`没找到: ${hint}`, 'info');
+      if (cfg.source === 'netease') {
+        const r = await musicApi.search(cfg, kw);
+        const songs: Song[] = (r?.result?.songs || []).map((s: any) => ({
+          id: s.id, name: s.name,
+          artists: (s.ar || s.artists || []).map((a: any) => a.name).join(' / '),
+          album: s.al?.name || s.album?.name || '',
+          albumPic: toHttps(s.al?.picUrl || s.album?.picUrl || ''),
+          duration: (s.dt || s.duration || 0) / 1000,
+          fee: s.fee ?? 0,
+        }));
+        setResults(songs);
+        if (!songs.length) {
+          const hint = r?.msg || r?.message || (r?.code != null ? `code=${r.code}` : '') || '无数据';
+          addToast(`没找到: ${hint}`, 'info');
+        }
+      } else {
+        const r = await kugouApi.search(cfg, kw);
+        const songs: Song[] = (r?.data?.lists || r?.data?.info || [])
+          .map(mapKugouSearchItem)
+          .filter((s: Song) => s.hash)
+          .map((s: Song) => ({ ...s, albumPic: toHttps(s.albumPic) }));
+        setResults(songs);
+        if (!songs.length) {
+          const hint = r?.error || (r?.error_code != null ? `error_code=${r.error_code}` : '') || '无数据';
+          addToast(String(hint).includes('152') ? '酷狗搜索需要先登录（我的 → 登录酷狗）' : `没找到: ${hint}`, 'info');
+        }
       }
     } catch (e: any) {
       addToast(`搜索失败：${e.message}`, 'error');
@@ -186,7 +201,7 @@ const MusicApp: React.FC = () => {
           </button>
         </div>
       )}
-      {!cfg.cookie && (
+      {cfg.source === 'netease' && !cfg.cookie && (
         <div className="px-5 -mt-1 mb-1.5 relative z-10">
           <button
             onClick={() => setView('profile')}
@@ -194,6 +209,17 @@ const MusicApp: React.FC = () => {
             style={{ background: `${C.vip}18`, color: C.vip, border: `1px solid ${C.vip}30` }}
           >
             未登录 — 点击登录网易云
+          </button>
+        </div>
+      )}
+      {cfg.source === 'kugou' && !cfg.kugouCookie && (
+        <div className="px-5 -mt-1 mb-1.5 relative z-10">
+          <button
+            onClick={() => setView('profile')}
+            className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] cursor-pointer"
+            style={{ background: `${C.vip}18`, color: C.vip, border: `1px solid ${C.vip}30` }}
+          >
+            未登录 — 点击登录酷狗
           </button>
         </div>
       )}
@@ -461,6 +487,28 @@ const MusicApp: React.FC = () => {
         <MizuHeader title="设置" onBack={() => setView('search')} />
         <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5 text-sm relative z-10 shizuku-scrollbar">
           <div className="rounded-2xl p-3.5 shizuku-glass" style={{ boxShadow: `0 2px 16px ${C.glow}08` }}>
+            <div className="text-[10px] mb-2 tracking-wider flex items-center gap-1.5" style={{ color: C.muted }}>
+              <Sparkle size={6} color={C.primary} delay={0} /> 音源
+            </div>
+            <div className="grid grid-cols-2 gap-1.5">
+              {(['kugou', 'netease'] as const).map(src => (
+                <button key={src} onClick={() => setDraft({ source: src })}
+                  className="py-2 rounded-xl text-[10px] transition-all"
+                  style={{
+                    background: (cfg.source === src) ? `linear-gradient(135deg, ${C.primary}, ${C.accent})` : C.glass,
+                    color: (cfg.source === src) ? 'white' : C.muted,
+                    border: (cfg.source === src) ? '1px solid transparent' : `1px solid rgba(255,255,255,0.3)`,
+                    boxShadow: (cfg.source === src) ? `0 2px 12px ${C.glow}30` : 'none',
+                    backdropFilter: 'blur(8px)',
+                  }}
+                >{src === 'kugou' ? '酷狗概念版' : '网易云'}</button>
+              ))}
+            </div>
+            <div className="text-[9px] mt-1.5 italic" style={{ color: C.faint }}>
+              {cfg.source === 'kugou' ? '默认酷狗概念版 · 网易云保留可切换' : '已切回网易云'}
+            </div>
+          </div>
+          <div className="rounded-2xl p-3.5 shizuku-glass" style={{ boxShadow: `0 2px 16px ${C.glow}08` }}>
             <div className="text-[10px] mb-2 tracking-wider flex items-center justify-between" style={{ color: C.muted }}>
               <span className="flex items-center gap-1.5"><Sparkle size={6} color={C.glow} delay={0} /> 服务地址</span>
               {!followsCentral && (
@@ -479,13 +527,19 @@ const MusicApp: React.FC = () => {
           </div>
           <div className="rounded-2xl p-3.5 shizuku-glass" style={{ boxShadow: `0 2px 16px ${C.glow}08` }}>
             <div className="text-[10px] mb-2 tracking-wider flex items-center gap-1.5" style={{ color: C.muted }}>
-              <Sparkle size={6} color={C.sakura} delay={0.5} /> 会员 Cookie
+              <Sparkle size={6} color={C.sakura} delay={0.5} /> {cfg.source === 'kugou' ? '酷狗登录态' : '会员 Cookie'}
             </div>
-            <textarea className="w-full rounded-xl px-3 py-2 outline-none text-[10px] shizuku-glass" rows={3} value={cfg.cookie}
-              onChange={e => setDraft({ cookie: e.target.value })} placeholder="MUSIC_U=xxx 或直接粘贴值..."
+            <textarea className="w-full rounded-xl px-3 py-2 outline-none text-[10px] shizuku-glass" rows={3}
+              value={cfg.source === 'kugou' ? (cfg.kugouCookie || '') : cfg.cookie}
+              onChange={e => setDraft(cfg.source === 'kugou' ? { kugouCookie: e.target.value } : { cookie: e.target.value })}
+              placeholder={cfg.source === 'kugou'
+                ? 'token=..;userid=..;dfid=..;auth=..（我的页扫码 / 验证码登录自动填入）'
+                : 'MUSIC_U=xxx 或直接粘贴值...'}
               style={{ color: C.text, fontFamily: 'monospace', resize: 'none' }} />
             <div className="text-[9px] mt-1.5 italic" style={{ color: C.faint }}>
-              也可以在「我的」页面里扫码 / 手机号登录，自动填入 cookie
+              {cfg.source === 'kugou'
+                ? '在「我的」页面里扫码 / 手机验证码登录酷狗，自动填入登录态'
+                : '也可以在「我的」页面里扫码 / 手机号登录，自动填入 cookie'}
             </div>
           </div>
           <div className="rounded-2xl p-3.5 shizuku-glass" style={{ boxShadow: `0 2px 16px ${C.glow}08` }}>
@@ -506,23 +560,35 @@ const MusicApp: React.FC = () => {
                 >{q}</button>
               ))}
             </div>
-            <div className="text-[9px] mt-1.5 italic" style={{ color: C.faint }}>lossless / hires 需要黑胶 SVIP</div>
+            <div className="text-[9px] mt-1.5 italic" style={{ color: C.faint }}>
+              {cfg.source === 'kugou' ? 'lossless / hires 需要酷狗 VIP 权益' : 'lossless / hires 需要黑胶 SVIP'}
+            </div>
           </div>
           <div className="space-y-3 pt-1">
             <button
               onClick={async () => {
                 const lines: string[] = [];
-                const ck = normalizeCookie(cfg.cookie);
+                const isKg = cfg.source === 'kugou';
+                const ck = isKg ? (cfg.kugouCookie || '').trim() : normalizeCookie(cfg.cookie);
                 lines.push(`Worker: ${effectiveWorkerUrl}${followsCentral ? '（跟随中心）' : '（音乐单独设的）'}`);
+                lines.push(`音源: ${isKg ? '酷狗概念版' : '网易云'}`);
                 lines.push(`Cookie: ${ck ? ck.slice(0, 18) + '...(' + ck.length + 'c)' : '(未填)'}`);
                 try {
-                  const res = await fetch(`${effectiveWorkerUrl}/netease/search`, {
-                    method: 'POST', headers: { 'Content-Type': 'application/json', ...(ck ? { 'X-Netease-Cookie': ck } : {}) },
-                    body: JSON.stringify({ keyword: '晴天', limit: 3 }),
-                  });
+                  const res = await fetch(
+                    `${effectiveWorkerUrl}${isKg ? '/kugou/search' : '/netease/search'}`,
+                    {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json', ...(ck ? (isKg ? { 'X-Kugou-Cookie': ck } : { 'X-Netease-Cookie': ck }) : {}) },
+                      body: JSON.stringify(isKg ? { keywords: '晴天', pagesize: 3 } : { keyword: '晴天', limit: 3 }),
+                    },
+                  );
                   lines.push(`HTTP ${res.status}`);
                   const txt = await res.text(); lines.push(txt.slice(0, 800));
-                  try { const j = JSON.parse(txt); lines.push(`---\ncode=${j.code}  songs=${j?.result?.songs?.length ?? 'N/A'}`); } catch {}
+                  try {
+                    const j = JSON.parse(txt);
+                    if (isKg) lines.push(`---\nstatus=${j.status}  lists=${j?.data?.lists?.length ?? 'N/A'}`);
+                    else lines.push(`---\ncode=${j.code}  songs=${j?.result?.songs?.length ?? 'N/A'}`);
+                  } catch {}
                 } catch (e: any) { lines.push(`异常: ${e.message}`); }
                 alert(lines.join('\n'));
               }}
@@ -551,13 +617,23 @@ const MusicApp: React.FC = () => {
       {view === 'settings' && <div key="settings" className="absolute inset-0 animate-fade-soft">{renderSettings()}</div>}
       {view === 'profile' && (
         <div key="profile" className="absolute inset-0 animate-fade-soft">
-        <NeteaseProfilePage
-          onBack={closeApp}
-          onOpenPlayer={() => setView('player')}
-          onOpenSearch={() => setView('search')}
-          onOpenSettings={() => setView('settings')}
-          onVisitChar={id => { setVisitCharId(id); setView('visit_char');  }}
-        />
+        {cfg.source === 'kugou' ? (
+          <KugouProfilePage
+            onBack={closeApp}
+            onOpenPlayer={() => setView('player')}
+            onOpenSearch={() => setView('search')}
+            onOpenSettings={() => setView('settings')}
+            onVisitChar={id => { setVisitCharId(id); setView('visit_char');  }}
+          />
+        ) : (
+          <NeteaseProfilePage
+            onBack={closeApp}
+            onOpenPlayer={() => setView('player')}
+            onOpenSearch={() => setView('search')}
+            onOpenSettings={() => setView('settings')}
+            onVisitChar={id => { setVisitCharId(id); setView('visit_char');  }}
+          />
+        )}
         </div>
       )}
       {/* 手动对轴 modal — 全屏覆盖，不开新 view */}
