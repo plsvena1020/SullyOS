@@ -12,7 +12,7 @@ import React, {
   useMemo, useRef, useState,
 } from 'react';
 import { cachedCall as _cachedCall, invalidate as _invalidateCache, clearAll as _clearAllCache } from '../utils/musicCache';
-import { kugouQuality, kugouUrlErrorText } from '../utils/kugouCore';
+import { kugouQuality, kugouUrlErrorText, parseKugouCookie, composeKugouCookie, pickKugouField } from '../utils/kugouCore';
 import { DB } from '../utils/db';
 import { getProxyWorkerUrl, DEFAULT_PROXY_WORKER, PROXY_WORKER_CHANGED_EVENT } from '../utils/proxyWorker';
 import type { PostProcessMusicHooks } from '../utils/applyAssistantPostProcessing';
@@ -833,7 +833,19 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           return;
         }
         const cfgNow = cfgRef.current;
-        const fetchUrl = (q: MusicQuality) => kugouApi.songUrl({ ...cfgNow, quality: q }, song);
+        // merge 链的 /v1/authorization 稳定要求显式用户 auth：每次播放现取现验，
+        // 登录态里有没有 auth 字段都行（老登录态 parse 后无空格，直接能用）
+        let auth = '';
+        try {
+          const verify = await kugouApi.userVerify({ ...cfgNow, kugouCookie: composeKugouCookie(parseKugouCookie(cfgNow.kugouCookie || '')) });
+          auth = pickKugouField(verify, 'auth');
+        } catch { auth = ''; }
+        if (!auth) {
+          toast('播放地址需要登录态：请重新扫码登录酷狗', 'error');
+          return;
+        }
+        const cfgAuth: MusicCfg = { ...cfgNow, kugouCookie: composeKugouCookie({ ...parseKugouCookie(cfgNow.kugouCookie || ''), auth }) };
+        const fetchUrl = (q: MusicQuality) => kugouApi.songUrl(cfgAuth, song);
         const readUrl = (r: any): string | null => {
           const v: any = Array.isArray(r?.data) ? r.data[0] : (r?.data || r || {});
           const first = (x: any): string | null => (Array.isArray(x) ? x[0] : x) || null;

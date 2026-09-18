@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { kugouQuality, hashToId, mapKugouSearchItem, composeKugouCookie, pickKugouField, kugouUrlErrorText } from './kugouCore';
+import { kugouQuality, hashToId, mapKugouSearchItem, composeKugouCookie, pickKugouField, kugouUrlErrorText, parseKugouCookie } from './kugouCore';
 
 describe('kugouQuality', () => {
   it('五档映射到酷狗 quality 参数', () => {
@@ -105,6 +105,15 @@ describe('pickKugouField', () => {
     expect(pickKugouField({ data: { token: 'T' } }, 'token', 'qrcode')).toBe('T');
     expect(pickKugouField({ dfid: 'D' }, 'token', 'dfid')).toBe('D');
     expect(pickKugouField({}, 'token')).toBe('');
+  });
+});
+
+describe('parseKugouCookie', () => {
+  it('解析带空格的老串与无空格新串，key 两侧 trim', () => {
+    expect(parseKugouCookie('token=t; userid=7; dfid=d; auth=a')).toEqual({ token: 't', userid: '7', dfid: 'd', auth: 'a' });
+    expect(parseKugouCookie('token=t;userid=7')).toEqual({ token: 't', userid: '7' });
+    expect(parseKugouCookie('')).toEqual({});
+    expect(parseKugouCookie('foo=1;bar')).toEqual({});
   });
 });
 

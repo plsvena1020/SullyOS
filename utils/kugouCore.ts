@@ -72,6 +72,19 @@ export const pickKugouField = (j: any, ...keys: string[]): string => {
   return '';
 };
 
+/** 解析 kugouCookie 串（';' 分隔，key 两侧空格一律 trim——老登录态带空格也不怕） */
+export const parseKugouCookie = (cookie: string): { token?: string; userid?: string; dfid?: string; auth?: string } => {
+  const out: Record<string, string> = {};
+  for (const part of (cookie || '').split(';')) {
+    const i = part.indexOf('=');
+    if (i < 0) continue;
+    const k = part.slice(0, i).trim();
+    const v = part.slice(i + 1).trim();
+    if (k && v && (k === 'token' || k === 'userid' || k === 'dfid' || k === 'auth')) out[k] = v;
+  }
+  return out;
+};
+
 /**
  * 换播放 URL 失败时的用户文案（worker 已把酷狗真实 errcode 透传回来）。
  * 实测码：152 须登录 / 20010·20018 登录失效 / 20028 上游验证 / 20031 需 VIP。
