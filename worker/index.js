@@ -792,7 +792,7 @@ function buildNeteaseUpstream(action, body, cookie) {
 // 使用"虚拟" URL 作为 Cache API 的 key。只包含业务参数（action + 过滤后的 body），
 // 故意剔除 cookie / realIP / timestamp / level(cookie 桶代替) 等不稳定参数。
 // 这样同一个 action 的相同查询跨 PoP / 多上游 都能命中同一个缓存条目。
-function buildCacheKey(action, body, cookieBucket) {
+function buildCacheKey(namespace, action, body, cookieBucket) {
   const p = new URLSearchParams();
   const skip = new Set(['timestamp', 'realIP', 'cookie', '_']);
   for (const [k, v] of Object.entries(body || {})) {
@@ -804,7 +804,7 @@ function buildCacheKey(action, body, cookieBucket) {
   const sorted = [...p.entries()].sort(([a], [b]) => a.localeCompare(b));
   const qs = sorted.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
   return new Request(
-    `https://sully-netease-cache.internal/${action}/${cookieBucket}?${qs}`,
+    `https://sully-music-cache.internal/${namespace}/${action}/${cookieBucket}?${qs}`,
     { method: 'GET' }
   );
 }
@@ -821,8 +821,8 @@ function shuffleCopy(arr) {
   return a;
 }
 
-async function fetchFromAnyUpstream(upstreamPath, timeoutMs = 8000) {
-  const order = shuffleCopy(NETEASE_UPSTREAMS);
+async function fetchFromAnyUpstream(upstreams, upstreamPath, timeoutMs = 8000) {
+  const order = shuffleCopy(upstreams);
   const errors = [];
   for (const base of order) {
     const upstreamUrl = base.replace(/\/+$/, '') + upstreamPath;
@@ -858,6 +858,64 @@ async function fetchFromAnyUpstream(upstreamPath, timeoutMs = 8000) {
     }
   }
   return { text: '', status: 502, upstream: '', error: errors.join(' | ') };
+}
+
+
+// ================================================================
+//  酷狗概念版音乐代理（上游 = 用户自部署的 MakcRe/KuGouMusicApi）
+//  上游项目: https://github.com/MakcRe/KuGouMusicApi
+//  部署: fork → Vercel, 环境变量 platform=lite（概念版，token 与标准版不通用）
+//  契约见 docs/superpowers/specs/2026-09-08-kugou-music-source-design.md
+// ================================================================
+const KUGOU_UPSTREAMS = [
+  // "https://你的KuGouMusicApi.vercel.app",  // ← 粘贴到这里，或在 CF 面板配 env KUGOU_UPSTREAMS（优先）
+];
+
+// 边缘缓存 TTL(秒)。不在表内 = 不缓存（登录/验证码/用户实时数据）。
+const KUGOU_CACHE_TTL = {
+  'lyric':                    7 * 24 * 3600, // 7天 (LRC 歌词几乎不变)
+  'search/lyric':             7 * 24 * 3600,
+  'search':                           600,   // 10分
+  'playlist/track/all':               600,
+  'playlist/track/all/new':           600,
+  'user/playlist':                    600,
+  'song/url':                         180,   // 3分 (酷狗 URL 有效期短, 留余量)
+  'everyday/recommend':               300,   // 5分 (每日推荐一天内基本不变)
+};
+
+// action → 上游路径特例（其余 action 名 = 上游路径）
+const KUGOU_ACTION_REWRITE = {
+  "song/url": "/song/url/auth/merge",  // 聚合版: 自动串 /song/auth, 登录后按 VIP 权益出 URL
+};
+
+// action 白名单 — 只放行 KuGouMusicApi 已知接口（防止被当开放代理）
+const KUGOU_ACTION_ALLOWED = new Set([
+  ...Object.keys(KUGOU_ACTION_REWRITE),
+  "search", "search/lyric", "lyric",
+  "user/verify", "user/detail", "user/vip/detail",
+  "user/playlist", "playlist/track/all", "playlist/track/all/new",
+  "everyday/recommend", "personal/fm",
+  "user/listen", "lastest/songs/listen",
+  "register/dev", "refresh/login",
+  "login/qr/key", "login/qr/create", "login/qr/check",
+  "login/cellphone", "captcha/sent",
+]);
+
+function buildKugouUpstream(action, body, cookie) {
+  if (!KUGOU_ACTION_ALLOWED.has(action)) return null;
+
+  const p = new URLSearchParams();
+  if (cookie && cookie.trim()) p.set("cookie", cookie.trim());
+  // KuGouMusicApi 按 URL 做了 2 分钟缓存, timestamp 防止 URL 级缓存（登录态/验证码必须实时）
+  p.set("timestamp", Date.now().toString());
+  // 通用透传: 全部业务参数进 query
+  for (const [k, v] of Object.entries(body || {})) {
+    if (v == null) continue;
+    if (Array.isArray(v)) p.set(k, v.join(","));
+    else p.set(k, String(v));
+  }
+  const upstream = KUGOU_ACTION_REWRITE[action] || `/${action}`;
+  return `${upstream}?${p}`;
 }
 
 
@@ -2427,6 +2485,7 @@ const XHSLite = (() => {
 
 // 供 Node 验证用（Worker 运行时忽略多余的具名导出）。见 worker/xhs-lite/test/verify.mjs
 export const __xhsLiteTest = XHSLite.__test;
+export const __kugouProxyTest = { buildKugouUpstream, KUGOU_ACTION_ALLOWED, KUGOU_CACHE_TTL };
 
 export default {
   async fetch(request, env, ctx) {
@@ -4609,7 +4668,7 @@ export default {
       const ttl = NETEASE_CACHE_TTL[action] || 0;
       // song/url 受 VIP cookie 影响 → 用 has-cookie 分桶; 其余公共接口 cookie 不影响结果
       const cookieBucket = (action === 'song/url' && cookie) ? 'vip' : 'anon';
-      const cacheKey = ttl > 0 ? buildCacheKey(action, body, cookieBucket) : null;
+      const cacheKey = ttl > 0 ? buildCacheKey('netease', action, body, cookieBucket) : null;
       if (cacheKey) {
         const cached = await caches.default.match(cacheKey);
         if (cached) {
@@ -4626,7 +4685,7 @@ export default {
       }
 
       // ── 多上游 + 容灾: 随机打乱后依次尝试, 任意一个成功就返回 ──
-      const { text, status, upstream, error } = await fetchFromAnyUpstream(upstreamPath);
+      const { text, status, upstream, error } = await fetchFromAnyUpstream(NETEASE_UPSTREAMS, upstreamPath);
       if (error) {
         return jsonResponse({
           error: "netease upstream fetch failed (all sources)",
@@ -4663,6 +4722,95 @@ export default {
       }
 
       return response;
+    }
+
+    // ========== 酷狗概念版音乐代理 (转发到 KuGouMusicApi, 带边缘缓存 + 多上游容灾) ==========
+    // 前端 POST /kugou/<action> { ...body }, Header: X-Kugou-Cookie: token=..;userid=..;dfid=..;auth=..
+    // Worker 翻译成 KuGouMusicApi 的 GET 参数形式并转发
+    if (url.pathname.startsWith('/kugou/')) {
+      const kugouUpstreams = (env && env.KUGOU_UPSTREAMS
+        ? String(env.KUGOU_UPSTREAMS).split(',').map((s) => s.trim()).filter(Boolean)
+        : []).concat(KUGOU_UPSTREAMS);
+      if (kugouUpstreams.length === 0) {
+        return jsonResponse({
+          error: "Worker 里 KUGOU_UPSTREAMS 还没配置",
+          hint: "fork MakcRe/KuGouMusicApi 部署到 Vercel(env: platform=lite), 在 CF 面板给本 Worker 配环境变量 KUGOU_UPSTREAMS=你的vercel地址, 或粘贴进 worker/index.js 的 KUGOU_UPSTREAMS 数组后重新部署"
+        }, { status: 500, origin });
+      }
+
+      const action = url.pathname.replace('/kugou/', '');
+      const kugouCookie = request.headers.get("X-Kugou-Cookie") || "";
+      let body = {};
+      if (request.method === 'POST') {
+        body = await request.json().catch(() => ({}));
+      } else if (request.method === 'GET') {
+        body = Object.fromEntries(url.searchParams.entries());
+      }
+
+      const kugouUpstreamPath = buildKugouUpstream(action, body, kugouCookie);
+      if (!kugouUpstreamPath) {
+        return jsonResponse({
+          error: "Unknown or unallowed kugou action",
+          hint: "支持: search, search/lyric, lyric, song/url, user/verify, user/detail, user/vip/detail, user/playlist, playlist/track/all, playlist/track/all/new, everyday/recommend, personal/fm, user/listen, lastest/songs/listen, register/dev, refresh/login, login/qr/key, login/qr/create, login/qr/check, login/cellphone, captcha/sent"
+        }, { status: 404, origin });
+      }
+
+      // ── 边缘缓存: 公共数据命中直接返回; 带 cookie 的请求分 user 桶 ──
+      const kgTtl = KUGOU_CACHE_TTL[action] || 0;
+      const kgBucket = kugouCookie ? 'user' : 'anon';
+      const kgCacheKey = kgTtl > 0 ? buildCacheKey('kugou', action, body, kgBucket) : null;
+      if (kgCacheKey) {
+        const cached = await caches.default.match(kgCacheKey);
+        if (cached) {
+          const text = await cached.text();
+          return new Response(text, {
+            status: cached.status,
+            headers: {
+              'Content-Type': 'application/json; charset=utf-8',
+              'X-Sully-Cache': 'HIT',
+              ...corsHeaders(origin),
+            }
+          });
+        }
+      }
+
+      // ── 多上游 + 容灾 ──
+      const kgRes = await fetchFromAnyUpstream(kugouUpstreams, kugouUpstreamPath);
+      if (kgRes.error) {
+        return jsonResponse({
+          error: "kugou upstream fetch failed (all sources)",
+          detail: kgRes.error,
+          tried: kugouUpstreams.length,
+        }, { status: 502, origin });
+      }
+
+      const kgResponse = new Response(kgRes.text, {
+        status: kgRes.status,
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          'X-Sully-Cache': 'MISS',
+          'X-Sully-Upstream': kgRes.upstream,
+          ...corsHeaders(origin),
+        }
+      });
+
+      // ── 写回缓存 (异步, 不阻塞响应) ──
+      if (kgCacheKey && kgRes.status >= 200 && kgRes.status < 400) {
+        const kgCacheResp = new Response(kgRes.text, {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': `public, max-age=${kgTtl}`,
+          }
+        });
+        if (ctx && typeof ctx.waitUntil === 'function') {
+          ctx.waitUntil(caches.default.put(kgCacheKey, kgCacheResp));
+        } else {
+          caches.default.put(kgCacheKey, kgCacheResp).catch(() => {});
+        }
+      }
+
+      return kgResponse;
     }
 
     // ========== Brave Search 代理 ==========
