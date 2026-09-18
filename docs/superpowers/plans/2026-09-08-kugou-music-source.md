@@ -1595,7 +1595,7 @@ git commit -m "docs: kugou music source notes and worker address record"
 
 > 实测环境：本地 `node app.js`（platform=lite，端口 37123，临时目录 `Temp\opencode\kugou-api`）。Vercel 地址待用户部署后填入；上线前 worker 用同一份代码，响应形态一致。
 
-- KuGouMusicApi Vercel 地址：_（待用户 fork 部署后填；本地探针已用 git clone @Temp\opencode\kugou-api 完成）_
+- KuGouMusicApi Vercel 地址：**https://kugou-music-api-chi.vercel.app**（账号 plsvena-1020，项目 kugou-music-api prj_pq050FFBMjy9UEkWA4HGPfwSg0tA，env `platform=lite` @production，2026-09-18 部署验证：register/dev 出 dfid、匿名 search 152、别名稳定）
 - `/register/dev` 响应：`{"status":1,"data":{"dfid":"3498Xq0d5pW62a0Nod1YjV82"},"error_code":0}` —— **dfid 在 `data.dfid`**
 - `/login/qr/key` 响应：`{"data":{"qrcode":"<key字符串>","qrcode_img":"data:image/png;base64,..."},"status":1,"error_code":0}` —— **一步返回 key（qrcode）与渲染好的二维码图（qrcode_img，自带 data: 前缀），登录面板无需再调 /login/qr/create**
 - `/login/qr/check` 响应（未扫时）：`{"data":{"status":1},"status":1,"error_code":0}` —— 状态码在 `data.status`
