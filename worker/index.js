@@ -824,6 +824,9 @@ function shuffleCopy(arr) {
 async function fetchFromAnyUpstream(upstreams, upstreamPath, timeoutMs = 8000) {
   const order = shuffleCopy(upstreams);
   const errors = [];
+  // 上游可达但返回非 2xx（带业务错误正文）时的最后一次响应——kugou 路由会原样透传给前端，
+  // 以便读到酷狗真实的 error_code；纯网络失败时这两项为空，维持旧语义。
+  let lastText = '', lastStatus = 0;
   for (const base of order) {
     const upstreamUrl = base.replace(/\/+$/, '') + upstreamPath;
     try {
@@ -840,6 +843,7 @@ async function fetchFromAnyUpstream(upstreams, upstreamPath, timeoutMs = 8000) {
       // HTTP 层挂了直接换下一个
       if (!res.ok) {
         errors.push(`${new URL(base).host} HTTP ${res.status}`);
+        lastText = text; lastStatus = res.status;
         continue;
       }
       // 应用层风控: 尝试识别 -460/-7 等明显失败码, 这种情况下换个上游可能成功
@@ -852,12 +856,12 @@ async function fetchFromAnyUpstream(upstreams, upstreamPath, timeoutMs = 8000) {
         errors.push(`${new URL(base).host} risk-control (code=-460/-7)`);
         continue;
       }
-      return { text, status: res.status, upstream: new URL(base).host, error: null };
+      return { text, status: res.status, upstream: new URL(base).host, error: null, lastText: '', lastStatus: 0 };
     } catch (e) {
       errors.push(`${new URL(base).host} ${e.name === 'AbortError' ? 'timeout' : e.message}`);
     }
   }
-  return { text: '', status: 502, upstream: '', error: errors.join(' | ') };
+  return { text: '', status: 502, upstream: '', error: errors.join(' | '), lastText, lastStatus };
 }
 
 
@@ -4777,6 +4781,19 @@ export default {
       // ── 多上游 + 容灾 ──
       const kgRes = await fetchFromAnyUpstream(kugouUpstreams, kugouUpstreamPath);
       if (kgRes.error) {
+        // 上游可达并返回了错误正文（含酷狗 error_code/error_msg）：原样透传 status+正文，
+        // 前端可读真实原因（VIP/重登/需验证），不再塌缩成一句话。纯网络失败才用兜底。
+        if (kgRes.lastText) {
+          return new Response(kgRes.lastText, {
+            status: kgRes.lastStatus || 502,
+            headers: {
+              'Content-Type': 'application/json; charset=utf-8',
+              'X-Sully-Cache': 'MISS',
+              'X-Sully-Upstream': 'kugou-upstream',
+              ...corsHeaders(origin),
+            }
+          });
+        }
         return jsonResponse({
           error: "kugou upstream fetch failed (all sources)",
           detail: kgRes.error,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { kugouQuality, hashToId, mapKugouSearchItem, composeKugouCookie, pickKugouField } from './kugouCore';
+import { kugouQuality, hashToId, mapKugouSearchItem, composeKugouCookie, pickKugouField, kugouUrlErrorText } from './kugouCore';
 
 describe('kugouQuality', () => {
   it('五档映射到酷狗 quality 参数', () => {
@@ -105,5 +105,17 @@ describe('pickKugouField', () => {
     expect(pickKugouField({ data: { token: 'T' } }, 'token', 'qrcode')).toBe('T');
     expect(pickKugouField({ dfid: 'D' }, 'token', 'dfid')).toBe('D');
     expect(pickKugouField({}, 'token')).toBe('');
+  });
+});
+
+describe('kugouUrlErrorText', () => {
+  it('实测 errcode 映射', () => {
+    expect(kugouUrlErrorText(152, true)).toBe('需要登录酷狗（我的 → 登录酷狗）');
+    expect(kugouUrlErrorText(20010, true)).toBe('酷狗登录失效，请重新扫码登录');
+    expect(kugouUrlErrorText(20018, true)).toBe('酷狗登录失效，请重新扫码登录');
+    expect(kugouUrlErrorText(20028, true)).toBe('酷狗要求验证（更换网络/重试）');
+    expect(kugouUrlErrorText(20031, true)).toBe('这首歌需要酷狗 VIP');
+    expect(kugouUrlErrorText(null, true)).toBe('这首歌暂无可用音源（可能需 VIP）');
+    expect(kugouUrlErrorText(null, false)).toBe('需要登录酷狗（我的 → 登录酷狗）');
   });
 });

@@ -71,3 +71,16 @@ export const pickKugouField = (j: any, ...keys: string[]): string => {
   }
   return '';
 };
+
+/**
+ * 换播放 URL 失败时的用户文案（worker 已把酷狗真实 errcode 透传回来）。
+ * 实测码：152 须登录 / 20010·20018 登录失效 / 20028 上游验证 / 20031 需 VIP。
+ */
+export const kugouUrlErrorText = (code: number | null, hasCookie: boolean): string => {
+  if (code === 152) return '需要登录酷狗（我的 → 登录酷狗）';
+  if (code === 20010 || code === 20018) return '酷狗登录失效，请重新扫码登录';
+  if (code === 20028) return '酷狗要求验证（更换网络/重试）';
+  if (code === 20031) return '这首歌需要酷狗 VIP';
+  if (hasCookie) return '这首歌暂无可用音源（可能需 VIP）';
+  return '需要登录酷狗（我的 → 登录酷狗）';
+};

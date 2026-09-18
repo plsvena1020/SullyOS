@@ -104,3 +104,24 @@ describe('/kugou route', () => {
     expect(res2.headers.get('X-Sully-Cache')).toBe('HIT');
   });
 });
+
+describe('/kugou 上游错误透传（不吞酷狗真实 errcode）', () => {
+  it('上游 502 带业务错误正文时，原样回 status+正文而非 fetch-failed 兜底', async () => {
+    stubCaches();
+    stubUpstream(502, JSON.stringify({ status: 0, errcode: 20031, error: 'need vip' }));
+    const res = await callKugou('/kugou/song/url', { hash: 'h' });
+    expect(res.status).toBe(502);
+    const j = (await res.json()) as any;
+    expect(j.errcode).toBe(20031);
+    expect(res.headers.get('X-Sully-Cache')).toBe('MISS');
+  });
+
+  it('上游无响应正文（空 502）仍走 fetch-failed 兜底', async () => {
+    stubCaches();
+    stubUpstream(502, '');
+    const res = await callKugou('/kugou/user/detail', {});
+    expect(res.status).toBe(502);
+    const j = (await res.json()) as any;
+    expect(j.error).toContain('kugou upstream fetch failed');
+  });
+});

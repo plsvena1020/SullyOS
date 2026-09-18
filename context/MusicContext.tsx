@@ -12,7 +12,7 @@ import React, {
   useMemo, useRef, useState,
 } from 'react';
 import { cachedCall as _cachedCall, invalidate as _invalidateCache, clearAll as _clearAllCache } from '../utils/musicCache';
-import { kugouQuality } from '../utils/kugouCore';
+import { kugouQuality, kugouUrlErrorText } from '../utils/kugouCore';
 import { DB } from '../utils/db';
 import { getProxyWorkerUrl, DEFAULT_PROXY_WORKER, PROXY_WORKER_CHANGED_EVENT } from '../utils/proxyWorker';
 import type { PostProcessMusicHooks } from '../utils/applyAssistantPostProcessing';
@@ -832,16 +832,32 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           toast('歌曲数据缺少 hash，无法播放', 'error');
           return;
         }
-        const [urlRes, lyricRes] = await Promise.all([
-          kugouApi.songUrl(cfgRef.current, song),
-          kugouApi.lyric(cfgRef.current, song).catch(() => null),
-        ]);
-        const d: any = Array.isArray(urlRes?.data) ? urlRes.data[0] : (urlRes?.data || urlRes || {});
-        // auth/merge 版的上游把 url/backupUrl 放在顶层，且是数组（取首个）
-        const first = (v: any): string | null => (Array.isArray(v) ? v[0] : v) || null;
-        const url: string | null = first(d?.url) || first(d?.backupUrl);
+        const cfgNow = cfgRef.current;
+        const fetchUrl = (q: MusicQuality) => kugouApi.songUrl({ ...cfgNow, quality: q }, song);
+        const readUrl = (r: any): string | null => {
+          const v: any = Array.isArray(r?.data) ? r.data[0] : (r?.data || r || {});
+          const first = (x: any): string | null => (Array.isArray(x) ? x[0] : x) || null;
+          return first(v?.url) || first(v?.backupUrl);
+        };
+        let urlRes: any = null;
+        let lyricRes: any = null;
+        try {
+          [urlRes, lyricRes] = await Promise.all([
+            fetchUrl(cfgNow.quality),
+            kugouApi.lyric(cfgNow, song).catch(() => null),
+          ]);
+        } catch { urlRes = null; }
+        let url = readUrl(urlRes);
+        // 一次降级重试：高音质换不到就降到 128（VIP 曲常有 128 可播版）
+        if (!url && cfgNow.quality !== 'standard') {
+          try {
+            urlRes = await fetchUrl('standard');
+            url = readUrl(urlRes);
+          } catch { urlRes = null; }
+        }
         if (!url) {
-          toast(cfgRef.current.kugouCookie ? '该歌曲需要酷狗 VIP 或暂无可用音源' : '需要登录酷狗（我的 → 登录酷狗）', 'error');
+          const code = Number(urlRes?.errcode ?? urlRes?.error_code ?? NaN);
+          toast(kugouUrlErrorText(Number.isFinite(code) ? code : null, !!cfgNow.kugouCookie), 'error');
           return;
         }
         const a = audioRef.current!;
