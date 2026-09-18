@@ -84,3 +84,27 @@ Vercel 的 Hobby 免费计划:
 | `/netease/login/status` | `{}` | 当前 cookie 登录状态 |
 | `/netease/user/playlist` | `{ uid }` | 用户歌单 |
 | `/netease/playlist/detail` | `{ id }` | 歌单详情 |
+
+## 酷狗概念版来源（2026-09-08 起，默认音源）
+
+第二条音源链路，与网易段完全平行（新增路由，网易零改动）：
+
+```
+浏览器  POST /kugou/<action> + Header X-Kugou-Cookie: token=..;userid=..;dfid=..;auth=..
+   ▼
+sully-proxy Worker  (worker/index.js 的 /kugou/* 路由, 白名单+边缘缓存+多上游)
+   ▼
+KuGouMusicApi  (用户自部署 MakcRe/KuGouMusicApi 到 Vercel, 环境变量 platform=lite)
+   ▼
+酷狗服务器
+```
+
+- **上游项目**：https://github.com/MakcRe/KuGouMusicApi （仿 NeteaseCloudMusicApi 风格；`platform=lite` = 概念版，token 与标准版不通用，扫码必须用概念版 App）。
+- **上游地址配置**：CF env `KUGOU_UPSTREAMS`（逗号分隔，优先）或 worker/index.js 里的 `KUGOU_UPSTREAMS` 常量。
+- **action 白名单**：search、search/lyric、lyric、song/url（→ `/song/url/auth/merge`）、user/verify、user/detail、user/vip/detail、user/playlist、playlist/track/all(/new)、everyday/recommend、personal/fm、user/listen、lastest/songs/listen、register/dev、refresh/login、login/qr/key|create|check、login/cellphone、captcha/sent。
+- **实测结论（本地探针，platform=lite）**：`/register/dev` dfid 在 `data.dfid`；`/login/qr/key` 一步返回 `data.qrcode`(key) + `data.qrcode_img`(自带 data: 前缀的 base64 PNG)，无需再调 create；`/login/qr/check` 状态在 `data.status`（0 过期 1 等待 2 已扫 4 成功返 token）；**匿名搜索（仅 dfid cookie）返回 error_code:152**——酷狗强制登录态搜索，未登录时 UI 提示先登录。
+- **歌曲标识**：酷狗用 hash（32 位 hex）+ album_id/album_audio_id 换播放 URL；`Song.source==='kugou'` + `hash` 字段，`Song.id` 用 albumAudioId 兜底。
+- **音质**：standard→128、higher/exhigh→320、lossless→flac、hires→high（VIP 权益决定实际能否取到）。
+- **歌词**：两步链 `/search/lyric?hash=` → `/lyric?id&accesskey&fmt=lrc&decode=true` 返回 `body.decodeContent`（LRC 明文）；无翻译歌词（tlyric 置空）。
+- **登录不会挤掉手机**：验证码登录带 `support_multi:1` 多登录态并存；设备列表/踢下线（get_dev/dev_logout）是独立显式接口。
+- 前端纯函数层 `utils/kugouCore.ts`、API 对象 `context/MusicContext.tsx` 的 `kugouApi`；设计与执行计划见 `docs/superpowers/specs|plans/2026-09-08-kugou-music-source.md`。
