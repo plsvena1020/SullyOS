@@ -534,7 +534,7 @@ const SocialApp: React.FC = () => {
                     projectedEventIds,
                 );
                 const momentsMaterialSection = momentsEvents.length > 0
-                    ? `\n\n### 最近真实发生过的事 (Recent Events)\n${momentsEvents.map(event => `- ${event.summary}`).join('\n')}\n以上是她真实发生过的事，只能依据这些写，不得编造与之冲突的新事实。`
+                    ? `\n\n### 最近真实发生过的事 (Recent Events)\n${momentsEvents.map(event => `- ${event.summary}`).join('\n')}\n以上是真实发生过的事，只能依据这些写，不得编造与之冲突的新事实。`
                     : '';
                 if (momentsEvents.length > 0) {
                     momentsEventIdsByChar.set(char.id, momentsEvents.map(event => event.id));
@@ -652,7 +652,7 @@ ${charContexts}
             // 宁可少喂，不重复喂。
             for (const post of newPosts) {
                 const usedEventIds = post.authorCharId ? momentsEventIdsByChar.get(post.authorCharId) : undefined;
-                if (usedEventIds && usedEventIds.length > 0) post.airpEventIds = usedEventIds;
+                if (usedEventIds && usedEventIds.length > 0) post.airpEventIds = [...usedEventIds];
             }
             prependPostsToFeed(newPosts);
             addToast('首页已刷新: 冲浪模式开启', 'success');
