@@ -1598,8 +1598,7 @@ git commit -m "docs: kugou music source notes and worker address record"
 **Bug B（Vercel 冷启动设备指纹漂移 + 播放 URL 20028「需要验证」）**：上游 server.js 的 `ensureCookie` 中间件每实例随机生成 guid→mid/webgl 等设备指纹；登录时 token 与当时 mid 绑定，后续请求落别的实例 mid 漂移 → 20010/20018/20028（`generateSimulate(mid,userid,dfid,webglHash)` 挑战过不了）。修复（零代码）：Vercel 项目 `kugou-music-api`（prj_pq05）加 env（production）：`KUGOU_API_GUID`=20cadc29-942b-4195-8ce0-4400c5c51bb3、`KUGOU_API_DEV`=SULLYOSKGDEV01、`KUGOU_API_MAC`=02:00:00:00:00:00、`KUGOU_API_WEBGL`=9102984751029348571 → redeploy。之后登录态（旧 token 仍有效）全线 200：verify(detail/playlist/search/track/song-url)。
   - GUID/DEV/MAC/WEBGL 值长期不变；用户重登录换来 auth 后即可开 VIP 音质。
 
-**字段校准结论（均已落实代码 + fixture）**：
-- 搜索项：`FileHash/SongName/SingerName/AlbumName/AlbumID/FileName` ✓；`MixSongID` 大写 M、`Audioid`/`audio_id` 兜底；无 Image → `trans_param.union_cover`（`{size}`→480）；`Price>0` 即 VIP 角标
+**字段校准结论（均已落实代码 + fixture）**：- 搜索项：`FileHash/SongName/SingerName/AlbumName/AlbumID/FileName` ✓；`MixSongID` 大写 M、`Audioid`/`audio_id` 兜底；无 Image → `trans_param.union_cover`（`{size}`→480）；`Price>0` 即 VIP 角标
 - track/all 项：`hash/name(.mp3 后缀要剥)/timelen(毫秒)/singerinfo[]/albuminfo.name/cover/audio_id/mixsongid`
 - everyday/fm 项：`song_list[]`，`songname/author_name/album_name/hash/album_audio_id/mixsongid`
 - lastest：`data.songs[]`
@@ -1610,6 +1609,12 @@ git commit -m "docs: kugou music source notes and worker address record"
 - login/qr/key 一步返回 `data.qrcode`(key) + `data.qrcode_img`(data URI)；check 状态 `data.status`（0/1/2/4）
 
 触碰文件：`utils/kugouCore.ts(+test)`、`context/MusicContext.tsx`、`apps/music/KugouProfilePage.tsx`、`apps/music/KugouLoginPanel.tsx`、本附录。
+
+**播放链路回归（2026-09-18 晚）**：
+- 播放失败时 worker 把上游一切失败塌缩成「fetch failed (all sources)」看不出真因 → worker kugou 分支**上游错误透传**（有正文原样回 status+正文）+ 前端 `kugouUrlErrorText` 常见码映射 + 320 换不到自动降 128 重试
+- 进一步实锤：`/song/url/auth/merge` 聚合链周期性挂（trackercdngz 35002 / Vercel 层裸 502），而原生 `/song/url` 连续稳定 → `KUGOU_ACTION_REWRITE` 去掉 merge 映射，`song/url` 直通原生模块（顶层 url/backupUrl 数组形态与 merge 一致，前端 readUrl 无需动）
+- 线上冒烟：sully-proxy 与 proxy.ethernet-vps.bot.cd 两个入口连续 4 次全部 200 出真实播放地址；worker 已重新部署，两端自动生效
+- Vercel env（GUID/DEV/MAC/WEBGL）保留，auth 仍随每次播放现取现验（merge 在前端不再用，但登录态完整保留）
 
 ## 探针记录（Task 0 已完成本地实测，2026-09-08）> 实测环境：本地 `node app.js`（platform=lite，端口 37123，临时目录 `Temp\opencode\kugou-api`）。Vercel 地址待用户部署后填入；上线前 worker 用同一份代码，响应形态一致。
 
