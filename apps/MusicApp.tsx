@@ -14,6 +14,7 @@ import {
 import NeteaseProfilePage from './music/NeteaseProfilePage';
 import CharVisitPage from './music/CharVisitPage';
 import { shareOrDownloadBlob } from '../utils/shareExport';
+import { APP_VERSION } from '../utils/buildInfo';
 
 // ------------------------- 工具 -------------------------
 const fmtTime = (s: number) => {
@@ -570,6 +571,7 @@ const MusicApp: React.FC = () => {
                 const lines: string[] = [];
                 const isKg = cfg.source === 'kugou';
                 const ck = isKg ? (cfg.kugouCookie || '').trim() : normalizeCookie(cfg.cookie);
+                lines.push(`App: ${APP_VERSION}`);
                 lines.push(`Worker: ${effectiveWorkerUrl}${followsCentral ? '（跟随中心）' : '（音乐单独设的）'}`);
                 lines.push(`音源: ${isKg ? '酷狗概念版' : '网易云'}`);
                 lines.push(`Cookie: ${ck ? ck.slice(0, 18) + '...(' + ck.length + 'c)' : '(未填)'}`);
@@ -584,11 +586,51 @@ const MusicApp: React.FC = () => {
                   );
                   lines.push(`HTTP ${res.status}`);
                   const txt = await res.text(); lines.push(txt.slice(0, 800));
+                  let first: any = null;
                   try {
                     const j = JSON.parse(txt);
-                    if (isKg) lines.push(`---\nstatus=${j.status}  lists=${j?.data?.lists?.length ?? 'N/A'}`);
-                    else lines.push(`---\ncode=${j.code}  songs=${j?.result?.songs?.length ?? 'N/A'}`);
+                    if (isKg) {
+                      const lists = j?.data?.lists || [];
+                      first = lists[0] || null;
+                      lines.push(`---\nstatus=${j.status}  lists=${lists.length ?? 'N/A'}`);
+                    } else {
+                      lines.push(`---\ncode=${j.code}  songs=${j?.result?.songs?.length ?? 'N/A'}`);
+                    }
                   } catch {}
+                  // ── 酷狗追加：换播放地址全链路探针（verify → /kugou/song/url），就是点歌那一步 ──
+                  if (isKg && first) {
+                    try {
+                      const h0 = first.FileHash || first.hash || '';
+                      const a0 = String(first.AlbumID || first.album_id || '');
+                      const aid0 = Number(first.Audioid || first.album_audio_id || first.albumAudioId || 0) || 0;
+                      lines.push(`搜索首项: name=${first.SongName || first.name}  hash=${h0.slice(0, 10)}...`);
+                      const ckN = ck.replace(/\s*;\s*/g, ';');
+                      const vRes = await fetch(`${effectiveWorkerUrl}/kugou/user/verify`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', ...(ckN ? { 'X-Kugou-Cookie': ckN } : {}) },
+                        body: JSON.stringify({}),
+                      });
+                      const vTxt = await vRes.text();
+                      lines.push(`verify: HTTP ${vRes.status}  ${vTxt.slice(0, 120)}`);
+                      let auth = '';
+                      try { auth = JSON.parse(vTxt)?.data?.auth || ''; } catch {}
+                      const ckAuth = auth ? `${ckN};auth=${auth}` : ckN;
+                      const uRes = await fetch(`${effectiveWorkerUrl}/kugou/song/url`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', ...(ckAuth ? { 'X-Kugou-Cookie': ckAuth } : {}) },
+                        body: JSON.stringify({ hash: h0, album_id: a0, album_audio_id: aid0, quality: '320' }),
+                      });
+                      const uTxt = await uRes.text();
+                      let uUrl = 'NONE';
+                      try {
+                        const uj = JSON.parse(uTxt);
+                        const uv = uj?.url;
+                        uUrl = (Array.isArray(uv) ? uv[0] : uv) || (Array.isArray(uj?.backupUrl) ? uj.backupUrl[0] : uj?.backupUrl) || 'NONE';
+                        lines.push(`song/url: HTTP ${uRes.status}  errcode=${uj?.errcode ?? 'N/A'}`);
+                      } catch { lines.push(`song/url: HTTP ${uRes.status}`); }
+                      lines.push(`播放地址: ${String(uUrl).slice(0, 90)}`);
+                    } catch (e: any) { lines.push(`song/url 探针异常: ${e.message}`); }
+                  }
                 } catch (e: any) { lines.push(`异常: ${e.message}`); }
                 alert(lines.join('\n'));
               }}
