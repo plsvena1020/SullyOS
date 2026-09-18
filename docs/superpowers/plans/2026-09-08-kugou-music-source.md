@@ -1615,8 +1615,7 @@ git commit -m "docs: kugou music source notes and worker address record"
 - 进一步实锤：`/song/url/auth/merge` 聚合链周期性挂（trackercdngz 35002 / Vercel 层裸 502），而原生 `/song/url` 连续稳定 → `KUGOU_ACTION_REWRITE` 去掉 merge 映射，`song/url` 直通原生模块（顶层 url/backupUrl 数组形态与 merge 一致，前端 readUrl 无需动）
 - 线上冒烟：sully-proxy 与 proxy.ethernet-vps.bot.cd 两个入口连续 4 次全部 200 出真实播放地址；worker 已重新部署，两端自动生效
 - Vercel env（GUID/DEV/MAC/WEBGL）保留，auth 仍随每次播放现取现验（merge 在前端不再用，但登录态完整保留）
-
-## 探针记录（Task 0 已完成本地实测，2026-09-08）> 实测环境：本地 `node app.js`（platform=lite，端口 37123，临时目录 `Temp\opencode\kugou-api`）。Vercel 地址待用户部署后填入；上线前 worker 用同一份代码，响应形态一致。
+- **最后一环修复**：酷狗音频 CDN（fs.youthandroid*.kugou.com）证书域不匹配、无有效 HTTPS——playSong 禁止 http→https 强转（a.src 原样用 http），全局 onErr toast 带音频错误码；https 页面部署时需另加 worker 音频代理中转，本期不做## 探针记录（Task 0 已完成本地实测，2026-09-08）> 实测环境：本地 `node app.js`（platform=lite，端口 37123，临时目录 `Temp\opencode\kugou-api`）。Vercel 地址待用户部署后填入；上线前 worker 用同一份代码，响应形态一致。
 
 - KuGouMusicApi Vercel 地址：**https://kugou-music-api-chi.vercel.app**（账号 plsvena-1020，项目 kugou-music-api prj_pq050FFBMjy9UEkWA4HGPfwSg0tA，env `platform=lite` @production，2026-09-18 部署验证：register/dev 出 dfid、匿名 search 152、别名稳定）
 - `/register/dev` 响应：`{"status":1,"data":{"dfid":"3498Xq0d5pW62a0Nod1YjV82"},"error_code":0}` —— **dfid 在 `data.dfid`**

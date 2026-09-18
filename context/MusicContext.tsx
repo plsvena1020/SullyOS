@@ -703,7 +703,8 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const onTime = () => setProgress(a.currentTime);
     const onMeta = () => setDuration(a.duration || 0);
     // 播放出错 → 清掉 playing 状态 + 清掉"一起听"伙伴（防止 UI 卡在残留状态）
-    const onErr = () => { setPlaying(false); setListeningTogetherWith([]); toast('播放失败', 'error'); };
+    // toast 带音频错误码用于排查（2=MEDIA_ERR_NETWORK 网络，3=MEDIA_ERR_DECODE 解码，4=MEDIA_ERR_SRC_NOT_SUPPORTED 地址不支持）
+    const onErr = () => { setPlaying(false); setListeningTogetherWith([]); toast(`播放失败（音频加载错误 code=${a.error?.code ?? '?'})`, 'error'); };
     const onEnd = () => { endedHandlerRef.current(); };
 
     a.addEventListener('play', onPlay);
@@ -873,7 +874,10 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           return;
         }
         const a = audioRef.current!;
-        a.src = url.replace(/^http:\/\//i, 'https://');
+        // 酷狗音频 CDN（fs.youthandroid*.kugou.com）没有有效 HTTPS 证书（2026-09-18 实测证书域不匹配），
+        // 所以禁止照搬网易分支的 http→https 强转。localhost(http) 页面直接播原 http 地址即可；
+        // 将来 https 页面部署时需要 worker 音频代理中转（见计划附录），不要在这里强转。
+        a.src = url;
         a.play().catch(() => {});
         const lrcText: string = lyricRes?.body?.decodeContent || lyricRes?.body?.content || '';
         setLyric(parseLyric(lrcText));
