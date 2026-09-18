@@ -58,9 +58,9 @@ describe('buildKugouUpstream', () => {
     expect(u.searchParams.get('timestamp')).toBeTruthy();
   });
 
-  it('song/url 重写为 /song/url/auth/merge', () => {
+  it('song/url 保持 KuGouMusicApi 原生模块（不走不稳定的 auth/merge 聚合链）', () => {
     const u = new URL(`https://x${buildKugouUpstream('song/url', { hash: 'h1', album_id: 'a1', quality: '320' }, '')}`);
-    expect(u.pathname).toBe('/song/url/auth/merge');
+    expect(u.pathname).toBe('/song/url');
     expect(u.searchParams.get('hash')).toBe('h1');
     expect(u.searchParams.get('quality')).toBe('320');
   });

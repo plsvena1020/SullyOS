@@ -887,15 +887,16 @@ const KUGOU_CACHE_TTL = {
   'everyday/recommend':               300,   // 5分 (每日推荐一天内基本不变)
 };
 
-// action → 上游路径特例（其余 action 名 = 上游路径）
+// action → 上游路径特例。song/url 保持 KuGouMusicApi 原生模块（单次调用，顶层 url/backupUrl 数组）；
+// 备注：/song/url/auth/merge 聚合链在 2026-09-18 实测期间周期性挂掉（上游 trackercdngz 返回 35002 /
+// Vercel 层裸 502），切到原生模块后三个用例连续稳定。出问题再考虑切回 merge。
 const KUGOU_ACTION_REWRITE = {
-  "song/url": "/song/url/auth/merge",  // 聚合版: 自动串 /song/auth, 登录后按 VIP 权益出 URL
 };
 
 // action 白名单 — 只放行 KuGouMusicApi 已知接口（防止被当开放代理）
 const KUGOU_ACTION_ALLOWED = new Set([
   ...Object.keys(KUGOU_ACTION_REWRITE),
-  "search", "search/lyric", "lyric",
+  "search", "search/lyric", "lyric", "song/url",
   "user/verify", "user/detail", "user/vip/detail",
   "user/playlist", "playlist/track/all", "playlist/track/all/new",
   "everyday/recommend", "personal/fm",
