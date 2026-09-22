@@ -4,6 +4,8 @@
 // 产出: public/shopping/shops.json / dishes.json
 // 用法: node scripts/gen-shopping-data.mjs
 import fs from 'node:fs';
+import { dedupShoppingDataset } from './dedup-shopping-json.mjs';
+import { assignDishCat } from './assign-dish-cat.mjs';
 
 const RAW = 'public/shopping/shops-raw.json';
 const OFF = 'public/shopping/off-products.json';
@@ -179,7 +181,7 @@ for (const s of raw) {
   if (brand && BRAND_SKUS[brand]) {
     // 品牌店 → 品牌 SKU（确定性抖动 ±8%）
     for (const [name, base] of BRAND_SKUS[brand]) {
-      pushDish(shop.id, name, Math.round(base * jitter(s.id + name, 0.08) * 10) / 10, '招牌推荐');
+      pushDish(shop.id, name, Math.round(base * jitter(s.id + name, 0.08) * 10) / 10, assignDishCat(s.cat, name, '招牌推荐'));
     }
   } else if (s.cat === '超市便利' && offProducts.length > 0) {
     // 超市便利 → OFF 真实商品轮转池（每店 12-18 件真实条码商品）
@@ -187,7 +189,7 @@ for (const s of raw) {
     for (let i = 0; i < per; i++) {
       const p = offProducts[(h + i * 97) % offProducts.length];
       const base = 3.5 + (hash32(p.code) % 2200) / 100; // 3.5-25.5 元锚点
-      const d = { id: 'd' + (++dishSeq), shopId: shop.id, name: p.name, price: Math.round(base * 10) / 10, cat: p.cat || '休闲零食' };
+      const d = { id: 'd' + (++dishSeq), shopId: shop.id, name: p.name, price: Math.round(base * 10) / 10, cat: assignDishCat(s.cat, p.name, p.cat || '休闲零食') };
       // OFF 图存短路径（前缀在 dishImgUrl 里重建），省 ~1.3MB
       // v2: 弃 OFF 实拍图，改用品类 SVG imgKey（GoodsSvg 渲染）
       d.imgKey = FOOD_IMGKEY[p.cat] || 'snack';
@@ -205,16 +207,23 @@ for (const s of raw) {
     }
     const per = Math.min(pool.length, 7 + (h % 4)); // 7-10 件
     for (let i = 0; i < per; i++) {
-      const [name, base] = pool[(h + i * 3) % pool.length];
-      pushDish(shop.id, name, Math.round(base * jitter(s.id + name, 0.12) * 10) / 10, i === 0 ? '招牌推荐' : '热销');
+      // 步长 1（i 递增取池内相邻菜）：步长与池长不互质会只取到 2-3 种菜并重复
+      const [name, base] = pool[(h + i) % pool.length];
+      pushDish(shop.id, name, Math.round(base * jitter(s.id + name, 0.12) * 10) / 10, assignDishCat(s.cat, name, i === 0 ? '招牌推荐' : '热销'));
     }
   }
 }
 
-fs.writeFileSync(OUT_SHOPS, JSON.stringify(shopsOut));
-fs.writeFileSync(OUT_DISHES, JSON.stringify(dishes));
+// ── 同名店面去重：连锁品牌分店归并为一家（规则见 dedup-shopping-json.mjs）──
+const deduped = dedupShoppingDataset(shopsOut, dishes);
+const shopsFinal = deduped.shops;
+const dishesFinal = deduped.dishes;
+console.log(`dedup shops: ${shopsOut.length} -> ${shopsFinal.length}, dishes: ${dishes.length} -> ${dishesFinal.length}`);
+
+fs.writeFileSync(OUT_SHOPS, JSON.stringify(shopsFinal));
+fs.writeFileSync(OUT_DISHES, JSON.stringify(dishesFinal));
 const mb = n => (n / 1024 / 1024).toFixed(2) + 'MB';
-console.log('shops:', shopsOut.length, '->', OUT_SHOPS, mb(fs.statSync(OUT_SHOPS).size));
-console.log('dishes:', dishes.length, '->', OUT_DISHES, mb(fs.statSync(OUT_DISHES).size));
-const realGoods = dishes.filter(d => d.imgKey).length;
+console.log('shops:', shopsFinal.length, '->', OUT_SHOPS, mb(fs.statSync(OUT_SHOPS).size));
+console.log('dishes:', dishesFinal.length, '->', OUT_DISHES, mb(fs.statSync(OUT_DISHES).size));
+const realGoods = dishesFinal.filter(d => d.imgKey).length;
 console.log('dishes with imgKey (SVG):', realGoods);

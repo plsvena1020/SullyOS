@@ -44,6 +44,80 @@ export function dedupDishesByShop<T extends { shopId: string; name: string; pric
   return out;
 }
 
+// ============================================================
+// 同名店面去重 —— 连锁品牌分店（OSM 每个节点一条记录）归并为一家。
+// 规则与 scripts/dedup-shopping-json.mjs 保持一致（两处各一份实现，改规则时同步）：
+//   1) normalizeGoodName 归一：剥括号分店后缀/全角/空白/小写（如「肯德基(五道口店)」→「肯德基」）
+//   2) 品牌精确变体表（CoCo都可/联华超市/可的•KEDI；不用 CoCo 前缀，实测会误伤 Coco Cafe 等独立店）
+//   3) 品牌前缀表：只收录实测出现过变体名的品牌（星巴克咖啡/星巴克Star/星巴克S → 星巴克）
+// 组内只保留一家：原始店名计票取出现最多者，平票取（月销+评分×1000）高者（与排序同分）。
+// ============================================================
+const BRAND_EXACT: Record<string, string> = {
+  'coco都可': 'coco',
+  '联华超市': '联华',
+  '可的•kedi': '可的',
+};
+
+const BRAND_PREFIX: Array<[string, string]> = [
+  ['星巴克', '星巴克'],
+  ['物美', '物美'],
+  ['喜士多', '喜士多'],
+  ['宏状元', '宏状元'],
+  ['快客', '快客'],
+  ['巴依老爷', '巴依老爷'],
+  ['嘉和一品', '嘉和一品'],
+  ['沃尔玛', '沃尔玛'],
+  ['护国寺小吃', '护国寺小吃'],
+  ['世纪联华', '世纪联华'],
+  ['四季民福', '四季民福'],
+  ['好邻居', '好邻居'],
+  ['海王星辰', '海王星辰'],
+  ['沙县小吃', '沙县小吃'],
+  ['超市发', '超市发'],
+];
+
+/** 店面去重键：归一店名 → 品牌变体 → 默认归一店名本身 */
+export function shopDedupKey(name: string): string {
+  const n = normalizeGoodName(name);
+  const exact = BRAND_EXACT[n];
+  if (exact) return exact;
+  for (const [p, canon] of BRAND_PREFIX) {
+    if (n.startsWith(p)) return canon;
+  }
+  return n;
+}
+
+function shopScore(s: { rating?: number; monthlySales?: number }): number {
+  return (s.monthlySales || 0) + (s.rating || 0) * 1000;
+}
+
+/** 同名店面去重：同组只保留一家；输出顺序与输入首现顺序一致（确定性） */
+export function dedupShopsByName<T extends { id: string; name: string; rating?: number; monthlySales?: number }>(shops: T[]): T[] {
+  const groups = new Map<string, T[]>();
+  const order: string[] = [];
+  for (const s of shops) {
+    const k = shopDedupKey(s.name);
+    const g = groups.get(k);
+    if (!g) { groups.set(k, [s]); order.push(k); }
+    else g.push(s);
+  }
+  const out: T[] = [];
+  for (const k of order) {
+    const g = groups.get(k)!;
+    if (g.length === 1) { out.push(g[0]); continue; }
+    const nameCount = new Map<string, number>();
+    for (const s of g) nameCount.set(s.name, (nameCount.get(s.name) || 0) + 1);
+    let best = g[0];
+    for (const s of g) {
+      const cn = nameCount.get(s.name)!;
+      const bn = nameCount.get(best.name)!;
+      if (cn > bn || (cn === bn && shopScore(s) > shopScore(best))) best = s;
+    }
+    out.push(best);
+  }
+  return out;
+}
+
 export function invalidateShoppingDataCache() {
   cache = null;
   loading = null;
@@ -82,7 +156,13 @@ export async function loadShoppingData(): Promise<ShoppingDataset> {
       }
 
     }
-    const ds: ShoppingDataset = { shops, dishes: dedupDishesByShop(dishes) };
+    const keptShops = dedupShopsByName(shops);
+    const keptIds = new Set(keptShops.map(s => s.id));
+    // 被移除分店的菜品直接丢弃：同品牌各店菜单相同（生成脚本按品牌挂 SKU），无需合并
+    const ds: ShoppingDataset = {
+      shops: keptShops,
+      dishes: dedupDishesByShop(dishes.filter(d => keptIds.has(d.shopId))),
+    };
     cache = ds;
     return ds;
   })();
