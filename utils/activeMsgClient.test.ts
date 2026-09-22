@@ -85,6 +85,10 @@ const clientWith = (impl: any) => ({ putClientState: impl } as any);
 beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { vi.useRealTimers(); });
 
+// 在安装假时钟之前抓住真 setTimeout：推进循环每轮拿它真实让路 1ms，
+// 给 crypto.subtle / fetch 这类原生异步一个完成机会。
+const realSetTimeout = globalThis.setTimeout;
+
 /** 起 promise + 持续推进时钟直到它落定，返回 promise 供断言。 */
 const runWithTimers = <T>(promise: Promise<T>): Promise<T> => {
   let settled = false;
@@ -94,11 +98,11 @@ const runWithTimers = <T>(promise: Promise<T>): Promise<T> => {
   );
   // 一次推完 5s 会在「真实异步（crypto / fetch）还没让出控制权」的场景下提前结束，
   // 之后流程再安排的 setTimeout（如退订 settle 等待）就永远等不到。改成循环推进：
-  // 有计时点就推，promise 一落定就停。
+  // 有计时点就推，每轮真实让路 1ms，promise 一落定就停。
   void (async () => {
-    for (let i = 0; i < 50 && !settled; i += 1) {
-      await vi.advanceTimersByTimeAsync(1_000);
-      await Promise.resolve();
+    for (let i = 0; i < 400 && !settled; i += 1) {
+      await vi.advanceTimersByTimeAsync(250);
+      await new Promise((resolve) => realSetTimeout(resolve, 1));
     }
   })();
   return tracked;

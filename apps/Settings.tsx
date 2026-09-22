@@ -44,7 +44,7 @@ import {
     type AvatarModelBackupInventory,
     type AvatarModelBackupProgress,
 } from '../utils/avatarModelBackup';
-import { normalizeApiBaseUrl, normalizeApiCredential, normalizeApiModel } from '../utils/apiConfigNormalize';
+import { hasChatCompletionsSuffix, normalizeApiBaseUrl, normalizeApiCredential, normalizeApiModel } from '../utils/apiConfigNormalize';
 import { configFromPreset, findActivePresetId, type PresetSwitchPatch } from '../utils/apiPresetSwitch';
 import StatusBadge from '../components/StatusBadge';
 import { probeApiConfig, probeAgent, probeBridge, probeAmsgWorker, probeVisionApi, probeCloudBackup, probeRealtime, probeMcpServers, probePerspective } from '../utils/statusPanel';
@@ -1066,6 +1066,9 @@ const Settings: React.FC = () => {
           addToast('预设名称不能为空', 'error');
           return;
       }
+      if (hasChatCompletionsSuffix(editPresetUrl)) {
+          addToast('已自动去掉 Base URL 末尾的 /chat/completions（填到 /v1 即可）', 'info');
+      }
       const nextConfig = {
           ...preset.config,
           baseUrl: normalizeApiBaseUrl(editPresetUrl),
@@ -1120,6 +1123,9 @@ const Settings: React.FC = () => {
           addToast('请输入预设名称', 'error');
           return;
       }
+      if (hasChatCompletionsSuffix(localUrl)) {
+          addToast('已自动去掉 Base URL 末尾的 /chat/completions（填到 /v1 即可）', 'info');
+      }
       addApiPreset(newPresetName, {
         baseUrl: normalizeApiBaseUrl(localUrl),
         apiKey: normalizeApiCredential(localKey),
@@ -1137,6 +1143,9 @@ const Settings: React.FC = () => {
    * 想把改动存回预设，走预设那排的铅笔（弹窗里可一键填入当前配置）。
    */
   const handleSaveApi = () => {
+    if (hasChatCompletionsSuffix(localUrl)) {
+      addToast('已自动去掉 Base URL 末尾的 /chat/completions（填到 /v1 即可）', 'info');
+    }
     const nextConfig = {
       apiKey: normalizeApiCredential(localKey),
       baseUrl: normalizeApiBaseUrl(localUrl),
@@ -1189,6 +1198,9 @@ const Settings: React.FC = () => {
       setTimeout(() => setStatusMsg(''), 2000);
   };
   const handleSaveVisionApi = () => {
+    if (hasChatCompletionsSuffix(localVisionUrl)) {
+      addToast('已自动去掉 Base URL 末尾的 /chat/completions（填到 /v1 即可）', 'info');
+    }
     const nextVisionApi = {
       enabled: localVisionEnabled,
       baseUrl: normalizeApiBaseUrl(localVisionUrl),

@@ -1,4 +1,5 @@
 import { externalFetch } from './externalRequest';
+import { normalizeApiBaseUrl } from './apiConfigNormalize';
 
 const MODEL_ID_KEYS = ['id', 'model', 'name', 'model_name', 'slug'] as const;
 
@@ -56,7 +57,7 @@ export async function fetchChatModelList(
     baseUrl: string,
     apiKey: string,
 ): Promise<string[]> {
-    const base = baseUrl.trim().replace(/\/+$/, '');
+    const base = normalizeApiBaseUrl(baseUrl);
     if (!base) throw new Error('请先填写 URL');
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;

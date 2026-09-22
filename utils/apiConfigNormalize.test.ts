@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  hasChatCompletionsSuffix,
   normalizeApiBaseUrl,
   normalizeApiConfig,
   normalizeApiCredential,
@@ -12,6 +13,27 @@ describe('API config normalization', () => {
 
   it('normalizes the base URL without touching its path', () => {
     expect(normalizeApiBaseUrl('  https://api.example.com/v1///\u200B ')).toBe('https://api.example.com/v1');
+  });
+
+  // Base URL 约定填到 /v1 为止；用户常把端点也填进去，程序再拼 /chat/completions
+  // 或 /models 就必 404（api.example.com/v1/chat/completions/models）。
+  it('strips a trailing /chat/completions mistakenly pasted into the base URL', () => {
+    expect(normalizeApiBaseUrl('https://api.example.com/v1/chat/completions')).toBe('https://api.example.com/v1');
+    expect(normalizeApiBaseUrl(' https://api.example.com/v1/chat/Completions/\u200B ')).toBe('https://api.example.com/v1');
+  });
+
+  it('is idempotent for valid base URLs and only strips the suffix at the end', () => {
+    expect(normalizeApiBaseUrl('https://api.example.com/v1')).toBe('https://api.example.com/v1');
+    expect(normalizeApiBaseUrl('https://api.example.com/chat/completions/v1'))
+      .toBe('https://api.example.com/chat/completions/v1');
+  });
+
+  it('hasChatCompletionsSuffix only fires for the trailing endpoint (case/whitespace tolerant)', () => {
+    expect(hasChatCompletionsSuffix('https://api.example.com/v1/chat/completions')).toBe(true);
+    expect(hasChatCompletionsSuffix('https://api.example.com/v1/chat/completions///\u200B')).toBe(true);
+    expect(hasChatCompletionsSuffix('https://api.example.com/v1/chat/Completions')).toBe(true);
+    expect(hasChatCompletionsSuffix('https://api.example.com/v1')).toBe(false);
+    expect(hasChatCompletionsSuffix('https://api.example.com/chat/completions/v1')).toBe(false);
   });
 
   it('keeps unrelated API settings intact', () => {
