@@ -50,7 +50,7 @@ describe('composePromptPreview', () => {
             expect(b.charEstimate).toBe((b.content || '').length);
             expect(b.tokenEstimate).toBeGreaterThanOrEqual(0);
         }
-        const sum = r.totals.stable + r.totals.volatileState + r.totals.recencyTail;
+        const sum = r.totals.stable + r.totals.volatileState + r.totals.recencyTail + r.totals.history;
         expect(r.totals.all).toBe(sum);
         expect(PROMPT_TOKEN_ESTIMATE_NOTE).toContain('token');
     });

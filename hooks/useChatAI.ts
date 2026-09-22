@@ -1067,6 +1067,23 @@ export const useChatAI = ({
                 max_tokens: 8000,
                 stream: userStream,
             };
+            // 预设套组采样参数（第 3 期）：active 套组配了 generation 就逐项覆盖，
+            // 缺项回退上面的 API 设置。读取失败=无配置，零行为变化。
+            // 思考链分支在下面仍会删采样参数（纪律不变）。
+            try {
+                const { getActivePackGeneration } = await import('../utils/presetKits');
+                const { applyGenerationOverride } = await import('../utils/presetGeneration');
+                const kitGen = await getActivePackGeneration();
+                if (kitGen) {
+                    const genBase: Record<string, number> = {};
+                    for (const k of ['temperature', 'top_p', 'top_k', 'frequency_penalty', 'presence_penalty', 'max_tokens']) {
+                        if (typeof baseReqBody[k] === 'number') genBase[k] = baseReqBody[k];
+                    }
+                    Object.assign(baseReqBody, applyGenerationOverride(genBase, kitGen));
+                }
+            } catch (e) {
+                console.warn('[PresetKit] generation override skipped:', e);
+            }
             // 思考过程展示开启时显式向后端请求 extended thinking。
             // 不同代理认不同入口，全都试一遍，代理不识别的会自动忽略：
             //  - 模型名 -thinking 后缀：packycode / anyrouter 等第三方 Claude 中转的主流约定

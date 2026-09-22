@@ -184,6 +184,12 @@ export interface PromptBuildOptions {
      * scheduleMessageTagEnabled 处的说明。
      */
     timelyByWorker?: boolean;
+    /**
+     * 预设套组场景过滤（Preset Kit tags）。缺省 `['chat']`。
+     * 条目 tags 为空=全场景；非空要求 tags ⊆ activeTags。
+     * 约会传 ['chat','date']、写歌 ['chat','song']、剧场 ['chat','story'] 等。
+     */
+    activeTags?: string[];
 }
 
 // recency 钢印两块的原文已迁入提示词目录（utils/promptPresetCatalog，Preset App
@@ -215,11 +221,14 @@ const resolveSteel = async (sourceKey: string, fallback: string): Promise<string
 /**
  * 组装 recency 钢印两块。占位符在落位时替换：{{char}}=角色名；
  * {{user}} 落「对方」——与旧实现 userProfile.name 缺失时的口径一致。
+ * 宏走 expandPromptMacros（{{char}}/{{user}} 口径与旧 fillIdentity 一致，
+ * 另支持 {{time}}/{{date}} 等套组宏）。
  */
 const makeSteelBlocks = async (charName: string): Promise<{ expression: string | null; yourself: string | null }> => {
     const expression = await resolveSteel('chat.steelExpression', STEEL_EXPRESSION_GUIDE);
     const yourself = await resolveSteel('chat.steelYourself', STEEL_BE_YOURSELF);
-    const fill = (t: string) => fillIdentity(t, charName);
+    const { expandPromptMacros } = await import('./promptMacros');
+    const fill = (t: string) => expandPromptMacros(t, { charName, userName: '对方' });
     return {
         expression: expression === null ? null : fill(expression),
         yourself: yourself === null ? null : fill(yourself),
@@ -321,7 +330,9 @@ export const ChatPrompts = {
             realtimeConfig, evolvedNarrative, userListeningContext, isListeningTogether, musicCfg,
             undefined, promptOptions,
         );
-        return parts.stable + parts.volatileState + parts.recencyTail;
+        return parts.stable + parts.volatileState
+            + (parts.presetAfterHistory ? '\n\n' + parts.presetAfterHistory : '')
+            + parts.recencyTail;
     },
 
     /**
@@ -360,7 +371,7 @@ export const ChatPrompts = {
         // 刚才一起听途中歌被切了（char 还没重新加入）—— 注入"察觉换歌"提示。
         recentTrackSwitch?: { songName: string; artists: string } | null,
         promptOptions?: PromptBuildOptions,
-    ): Promise<{ stable: string; volatileState: string; recencyTail: string }> => {
+    ): Promise<{ stable: string; volatileState: string; recencyTail: string; presetAfterHistory: string; presetAbsolute: { role: string; content: string; depth: number }[] }> => {
         // 主动消息的模板是最后一次聊天时打好、到点才渲染的，凡是「打包这一刻」的状态
         // 到触发时都已经过期，一律不烤进模板。见 PromptBuildOptions 的清单。
         const forFirePack = promptOptions?.forFirePack === true;
@@ -390,23 +401,65 @@ export const ChatPrompts = {
         );
         timings.buildCoreContext = Math.round(performance.now() - coreT0);
 
-        // ── 提示词段落预设（Preset App）──
-        // 启用的段落按 order 排序，拼在角色卡之后、易变状态之前 —— 用户写的「自己人」
-        // 指令应该靠前、不与运行时状态争位置。读取失败 / 无预设时不留痕，零开销路径。
+        // ── 提示词套组预设（Preset App / Preset Kit）──
+        // stable 组拼在角色卡之后、易变状态之前（旧自定义段落的原位置，格式逐字一致）；
+        // afterHistory 组与 absolute 组随返回值带出，由 chatRequestPayload 落位
+        // （历史之后 / 按 depth 插进历史）。forFirePack 整段跳过（维持现状）。
+        let presetAfterHistory = '';
+        let presetAbsolute: { role: string; content: string; depth: number }[] = [];
         try {
-            const presetRows = forFirePack ? [] : await DB.getPromptPresets();
-            // P3：带 sourceKey 的行是内置目录条目（钢印/语音指南…），在各自的
-            // 原生注入点渲染（钢印在 recency 尾部、语音指南在语音功能块里），
-            // 不在通用段重复注入；这里只拼用户自建的自定义段落。
-            const presetBlocks = (presetRows || [])
-                .filter((p) => !p.sourceKey && p.enabled && (p.content || '').trim())
-                .sort((x, y) => (x.order ?? 0) - (y.order ?? 0))
-                .map((p) => `【${p.name}】\n${p.content.trim()}`);
-            if (presetBlocks.length > 0) {
-                baseSystemPrompt += '\n\n' + presetBlocks.join('\n\n');
+            if (!forFirePack) {
+                const { resolveActivePackEntries } = await import('./presetKits');
+                const { expandPromptMacros } = await import('./promptMacros');
+                // 宏上下文：本轮历史尾部的最后 user/assistant 文本 + 用户画像。
+                let lastUser = '';
+                let lastAssistant = '';
+                for (let i = currentMsgs.length - 1; i >= 0; i -= 1) {
+                    const m = currentMsgs[i] as any;
+                    const text = typeof m?.content === 'string' ? m.content : '';
+                    if (!lastUser && m?.role === 'user' && text) lastUser = text;
+                    else if (!lastAssistant && m?.role === 'assistant' && text) lastAssistant = text;
+                    if (lastUser && lastAssistant) break;
+                }
+                const macroCtx = {
+                    charName: char?.name || '',
+                    userName: userProfile?.name || '',
+                    persona: userProfile?.bio || '',
+                    lastUser,
+                    lastAssistant,
+                };
+                const kit = await resolveActivePackEntries(promptOptions?.activeTags ?? ['chat']);
+                // 预设正则 placement=5（仅发给模型）：条目渲染后、拼 stable 前再过一遍。
+                // 无 kit 时零开销（getActiveRegexKit 缓存空命中）。
+                let renderText = (t: string): string => t;
+                try {
+                    const { applyRegexPlacement, getActiveRegexKit } = await import('./presetRegex');
+                    const regexKit = await getActiveRegexKit();
+                    if (regexKit) {
+                        const rxCtx = { charName: char?.name || '', userName: userProfile?.name || '' };
+                        renderText = (t: string) => applyRegexPlacement(t, regexKit, 5, rxCtx);
+                    }
+                } catch (e) {
+                    console.warn('[PresetRegex] prompt stage skipped:', e);
+                }
+                const renderEntry = (p: { name: string; content: string }) =>
+                    `【${p.name}】\n${renderText(expandPromptMacros((p.content || '').trim(), macroCtx))}`;
+                const stableBlocks = kit.stable.map(renderEntry);
+                if (stableBlocks.length > 0) {
+                    baseSystemPrompt += '\n\n' + stableBlocks.join('\n\n');
+                }
+                const afterBlocks = kit.afterHistory.map(renderEntry);
+                if (afterBlocks.length > 0) {
+                    presetAfterHistory = afterBlocks.join('\n\n');
+                }
+                presetAbsolute = kit.absolute.map((p) => ({
+                    role: p.role,
+                    content: renderText(expandPromptMacros((p.content || '').trim(), macroCtx)),
+                    depth: p.injectionDepth,
+                }));
             }
         } catch (e) {
-            console.warn('[PresetPrompt] 预设段落注入失败（忽略）:', e);
+            console.warn('[PresetPrompt] 预设套组注入失败（忽略）:', e);
         }
 
         // ── 易变状态段（volatileState）──
@@ -1242,7 +1295,7 @@ ${(await resolveVoiceActingGuide()) ?? ''}`;
             .join(' ');
         console.log(`⏱ [buildSystemPrompt] total=${perfTotal}ms | stable=${baseSystemPrompt.length}ch volatile=${volatileState.length}ch | ${timingStr}`);
 
-        return { stable: baseSystemPrompt, volatileState, recencyTail };
+        return { stable: baseSystemPrompt, volatileState, recencyTail, presetAfterHistory, presetAbsolute };
     },
 
     // 格式化消息历史

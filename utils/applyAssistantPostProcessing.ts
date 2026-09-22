@@ -750,6 +750,16 @@ export async function applyAssistantPostProcessing(
     // ─── Step 1: 初次粗洗 ───
     let aiContent = replayedTagPrefix ? `${replayedTagPrefix}${rawAiContent}` : rawAiContent;
     aiContent = normalizeAiContent(aiContent);
+    // 预设正则 placement=2（AI 输出）：粗洗之后、消费之前跑。失败回原文，不挡主链路。
+    try {
+        const { applyActiveOutputRegex } = await import('./presetRegex');
+        aiContent = await applyActiveOutputRegex(aiContent, {
+            charName: char?.name,
+            userName: userProfile?.name,
+        });
+    } catch (e) {
+        console.warn('[PresetRegex] output stage skipped:', e);
+    }
     // 先于 lead-in / 二轮渲染消费：否则控制标签会作为普通气泡短暂闪给用户看。
     aiContent = await consumeScheduleChanges(aiContent, utteranceAt);
     // 在任何 lead-in/二轮渲染之前先剥掉仿卡片文本，防止它被 chunkText 拆成灰色普通气泡。

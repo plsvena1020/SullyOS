@@ -189,9 +189,11 @@ export const isWorldbookEntryActive = (
 };
 
 export const expandWorldbookMacros = (content: string, charName: string, userName: string): string => {
+    if (!content || content.indexOf('{{') === -1) return content;
     let expanded = content;
-    if (charName) expanded = expanded.replace(/{{\s*char\s*}}/gi, charName);
-    if (userName) expanded = expanded.replace(/{{\s*user\s*}}/gi, userName);
+    // 口径与 promptMacros 一致：大小写不敏感、花括号内允许空格；char 为空不替换。
+    if (charName) expanded = expanded.replace(/\{\{\s*char\s*\}\}/gi, () => charName);
+    expanded = expanded.replace(/\{\{\s*user\s*\}\}/gi, () => (userName && userName.trim()) || '对方');
     return expanded;
 };
 
@@ -243,31 +245,68 @@ export const formatWorldbookSection = (
     return `${output}\n`;
 };
 
+export interface DepthInjectableMessage {
+    role: string;
+    content: string;
+}
+
+export interface DepthInjectItem {
+    /** 距聊天底部的条数（0=末尾之后，与世界书 depth 同口径）。 */
+    depth: number;
+    /** 同一 depth 落点内的相对顺序（小在前）。 */
+    order: number;
+    role: string;
+    content: string;
+}
+
+/**
+ * 通用 depth 注入：把 items 按 depth 分桶插进 messages 数组。
+ * 世界书 at-depth 条目与预设套组 absolute 条目共用，保证落点口径一致。
+ */
+export const injectDepthEntries = <T extends WorldbookScanMessage>(
+    messages: T[],
+    items: DepthInjectItem[],
+): Array<T | DepthInjectableMessage> => {
+    if (items.length === 0) return [...messages];
+    const buckets = new Map<number, DepthInjectItem[]>();
+    for (const item of items) {
+        const depth = Math.max(0, Math.floor(item.depth ?? 0));
+        const index = Math.max(0, messages.length - depth);
+        const bucket = buckets.get(index) || [];
+        bucket.push(item);
+        buckets.set(index, bucket);
+    }
+    const result: Array<T | DepthInjectableMessage> = [];
+    for (let index = 0; index <= messages.length; index += 1) {
+        const bucket = buckets.get(index) || [];
+        bucket
+            .slice()
+            .sort((a, b) => a.order - b.order)
+            .forEach((item) => {
+                result.push({ role: item.role, content: item.content.trim() });
+            });
+        if (index < messages.length) result.push(messages[index]);
+    }
+    return result;
+};
+
 export const injectWorldbookDepthEntries = <T extends WorldbookScanMessage>(
     messages: T[],
     entries: ResolvedWorldbookEntry[],
 ): Array<T | { role: string; content: string }> => {
     if (entries.length === 0) return [...messages];
-    const buckets = new Map<number, ResolvedWorldbookEntry[]>();
-    for (const entry of entries) {
-        const depth = Math.max(0, Math.floor(entry.book.depth ?? 4));
-        const index = Math.max(0, messages.length - depth);
-        const bucket = buckets.get(index) || [];
-        bucket.push(entry);
-        buckets.set(index, bucket);
-    }
-
-    const result: Array<T | { role: string; content: string }> = [];
-    for (let index = 0; index <= messages.length; index += 1) {
-        const bucket = buckets.get(index) || [];
-        for (const entry of bucket) {
+    return injectDepthEntries(
+        messages,
+        entries.map((entry) => {
             const roleValue = entry.book.role ?? 0;
-            const role = roleValue === 1 ? 'user' : roleValue === 2 ? 'assistant' : 'system';
-            result.push({ role, content: entry.content.trim() });
-        }
-        if (index < messages.length) result.push(messages[index]);
-    }
-    return result;
+            return {
+                depth: entry.book.depth ?? 4,
+                order: entry.order,
+                role: roleValue === 1 ? 'user' : roleValue === 2 ? 'assistant' : 'system',
+                content: entry.content,
+            };
+        }),
+    );
 };
 
 export const serializeStandardWorldbook = (books: WorldbookLike[]): string => {

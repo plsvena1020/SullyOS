@@ -42,7 +42,7 @@ import { RealtimeContextManager, defaultRealtimeConfig, resolveCharCity } from '
 
 // ========== 类型 ==========
 
-export type PromptSegment = 'stable' | 'volatileState' | 'recencyTail';
+export type PromptSegment = 'stable' | 'volatileState' | 'recencyTail' | 'history';
 
 export type PromptBlockRole = 'content' | 'discipline' | 'disabled';
 
@@ -79,7 +79,7 @@ export interface PromptPreviewResult {
     charTimeZone: string;
     blocks: PromptPreviewBlock[];
     /** 各段 token 估算小计（不含 disabled 块与仅标注用途的世界书明细） */
-    totals: { stable: number; volatileState: number; recencyTail: number; all: number };
+    totals: { stable: number; volatileState: number; recencyTail: number; history: number; all: number };
 }
 
 export interface PromptPreviewOptions {
@@ -222,28 +222,35 @@ export const composePromptPreview = async (
         }));
     }
 
-    // 预设段落（自定义 + 内置目录状态标注）
+    // 预设套组条目（当前生效套组，按注入位分组展示；内置目录状态标注不变）
     try {
-        const rows = await DB.getPromptPresets();
-        const customs = (rows || []).filter((p: any) => !p.sourceKey)
-            .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0));
-        for (const p of customs) {
-            const on = !!p.enabled && !!(p.content || '').trim();
-            blocks.push(mkBlock({
-                id: `stable.preset.${p.id}`,
-                segment: 'stable',
-                title: `自定义预设：${p.name}`,
-                sourceType: 'preset',
-                sourceLabel: `自定义预设段落${p.category ? ` · ${p.category}` : ''}`,
-                role: on ? 'content' : 'disabled',
-                enabled: on,
-                order: p.order ?? 0,
-                insertionPoint: '角色卡之后、易变状态之前（按顺序号拼接）',
-                conditionNote: on ? undefined : (p.enabled ? '内容为空，不注入' : '已停用'),
-                content: on ? `【${p.name}】\n${(p.content || '').trim()}` : (p.content || '（空）').slice(0, 800),
-            }));
+        const { resolveActivePackEntries } = await import('./presetKits');
+        const kit = await resolveActivePackEntries(['chat']);
+        const kitGroups: { list: typeof kit.stable; segment: PromptSegment; where: (e: any) => string }[] = [
+            { list: kit.stable, segment: 'stable', where: () => '角色卡之后、易变状态之前（套组顺序）' },
+            { list: kit.afterHistory, segment: 'volatileState', where: () => '历史之后、钢印之前' },
+            { list: kit.absolute, segment: 'history', where: (e) => `聊天历史内（depth=${e.injectionDepth}，距底条数）` },
+        ];
+        for (const g of kitGroups) {
+            for (const p of g.list as any[]) {
+                const on = !!p.enabled && !!(p.content || '').trim();
+                const tagNote = p.tags && p.tags.length > 0 ? ` · tags=${p.tags.join('+')}` : '';
+                blocks.push(mkBlock({
+                    id: `${g.segment}.preset.${p.id}`,
+                    segment: g.segment,
+                    title: `套组预设：${p.name}`,
+                    sourceType: 'preset',
+                    sourceLabel: `预设套组${p.role && p.role !== 'system' ? ` · role=${p.role}` : ''}${tagNote}`,
+                    role: on ? 'content' : 'disabled',
+                    enabled: on,
+                    insertionPoint: g.where(p),
+                    conditionNote: on ? undefined : (p.enabled ? '内容为空，不注入' : '已停用'),
+                    content: on ? `【${p.name}】\n${(p.content || '').trim()}` : (p.content || '（空）').slice(0, 800),
+                }));
+            }
         }
         // 内置目录行状态标注（钢印/语音在对应原生块单独展示；其余标技术模板）
+        const rows = await DB.getPromptPresets().catch(() => [] as any[]);
         for (const p of (rows || []).filter((r: any) => r.sourceKey)) {
             if (p.sourceKey === 'chat.steelExpression' || p.sourceKey === 'chat.steelYourself') continue;
             const isVoice = String(p.sourceKey).startsWith('voice.');
@@ -563,9 +570,10 @@ export const composePromptPreview = async (
         stable: sumTokens('stable'),
         volatileState: sumTokens('volatileState'),
         recencyTail: sumTokens('recencyTail'),
+        history: sumTokens('history'),
         all: 0,
     };
-    totals.all = totals.stable + totals.volatileState + totals.recencyTail;
+    totals.all = totals.stable + totals.volatileState + totals.recencyTail + totals.history;
 
     return {
         charId: char.id,

@@ -98,6 +98,9 @@ const KNOWN: Readonly<Record<string, string>> = {
     med_plans: 'medPlans',
     life_record_settings: 'lifeRecordSettings',
     prompt_presets: 'promptPresets',
+    preset_packs: 'presetPacks',
+    preset_pack_active: 'activePresetPackId',
+    preset_regexes: 'presetRegexes',
 };
 
 /** 单例落法的 store：FullBackupData 里存首条对象/记录而非数组（switch 特判同款语义）。 */

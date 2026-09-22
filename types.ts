@@ -1029,6 +1029,95 @@ export interface PromptPreset {
     category?: string;
     /** 该行内容对应的内置版本号；目录升级内容时可据此提示用户文案有更新。 */
     builtinVersion?: number;
+    /**
+     * 预设套组（Preset Kit）条目控制字段 —— 全可选，老行缺省即旧行为。
+     * ST 风格标识（套组内唯一）；缺省时解析层按 `custom_<id前8>` 对待。
+     */
+    identifier?: string;
+    /** 注入 role；缺省 'system'。 */
+    role?: 'system' | 'user' | 'assistant';
+    /**
+     * 'relative' = 跟随套组 entryIds 顺序注入 stable/历史后；
+     * 'absolute' = 按 injectionDepth 插进聊天历史（距底条数）。
+     * 缺省 'relative'。
+     */
+    injectionPosition?: 'relative' | 'absolute';
+    /** absolute 时距聊天底部的条数（与世界书 depth 同口径）；缺省 0。 */
+    injectionDepth?: number;
+    /** relative 条目在套组内 chatHistory 分界之后 → 注入历史之后（钢印之前）。缺省 false。 */
+    afterChatHistory?: boolean;
+    /** marker 槽位：'chatHistory' = 分界占位，本身不注入。缺省无。 */
+    marker?: 'chatHistory';
+    /**
+     * 场景过滤 tags。空/缺省 = 全场景；非空时要求 tags ⊆ 调用方 activeTags。
+     * 词表：chat / date / story / song / phone / memory。
+     */
+    tags?: string[];
+}
+
+/**
+ * 预设套组（Preset Kit）采样参数 —— 缺项 = 不覆盖，回退 API 设置。
+ * 形态对齐 StoryTheaterPresetDocument.generation。
+ */
+export interface PresetGeneration {
+    temperature?: number;
+    topP?: number;
+    topK?: number;
+    frequencyPenalty?: number;
+    presencePenalty?: number;
+    maxTokens?: number;
+    /** 兼容酒馆高级采样参数报错的接口：true=只发 temperature + maxTokens。 */
+    omitSamplingParams?: boolean;
+}
+
+/**
+ * 预设套组：一套 Prompt 条目 + 顺序 + 采样参数。
+ * entryIds 数组顺序即相对注入顺序（prompt_order 的载体）；PromptPreset.order
+ * 只保留做旧排序兼容，新 UI 只读写 entryIds。
+ */
+export interface PresetPack {
+    /** 'default' = 「默认预设」（迁移生成，不可删）。 */
+    id: string;
+    name: string;
+    entryIds: string[];
+    generation?: PresetGeneration;
+    createdAt: number;
+    updatedAt: number;
+}
+
+/** 当前生效套组指针（preset_pack_active store 单例，id 固定 'active'）。 */
+export interface PresetPackActive {
+    id: 'active';
+    packId: string;
+}
+
+/** 输出正则单条规则（placement 口径对齐参考仓库 RegexRule）。 */
+export interface PresetRegexRule {
+    id: string;
+    scriptName: string;
+    findRegex: string;
+    replaceString: string;
+    /** 1=用户输入 2=AI输出 4=仅显示 5=仅发给模型；缺省 [2]。 */
+    placement: number[];
+    disabled: boolean;
+    /** 只改显示（落库仍是原文）。与 placement 含 4 同义，UI 语义用。 */
+    displayOnly?: boolean;
+    /** 只改发给模型的文本（不改落库）。与 placement 含 5 同义，UI 语义用。 */
+    promptOnly?: boolean;
+    /** 仅对 placement=2 的历史回放生效的深度门（主输出 depth=0）。 */
+    minDepth?: number;
+    maxDepth?: number;
+    tags?: string[];
+}
+
+/** 正则脚本套件（preset_regexes store）。 */
+export interface PresetRegexKit {
+    id: string;
+    name: string;
+    rules: PresetRegexRule[];
+    enabled: boolean;
+    createdAt: number;
+    updatedAt: number;
 }
 
 export interface DailySchedule {
@@ -4421,6 +4510,12 @@ export interface FullBackupData {
     // 提示词段落预设（Preset App / prompt_presets store）。以记录数组形态随包往返，
     // 导入端 clear-and-add 回 prompt_presets store（无图片素材，restoreAssets 无关）。
     promptPresets?: PromptPreset[];
+    // 预设套组（Preset Kit / preset_packs + preset_pack_active store）与
+    // 正则脚本（preset_regexes store），同上 clear-and-add 往返。
+    presetPacks?: PresetPack[];
+    presetRegexes?: PresetRegexKit[];
+    /** 当前生效的预设套组 id（preset_pack_active 单例）；旧包缺省=迁移生成 default。 */
+    activePresetPackId?: string;
 
     // Quiz / Practice Book
     quizSessions?: QuizSession[];

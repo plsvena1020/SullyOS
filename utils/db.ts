@@ -10,6 +10,7 @@ import {
     LifeRecord, MedPlan, LifeRecordSettings, CharacterGroup,
     VRWorldNovel, VRNovelAnnotation, CustomCreatorPart, VRMusicRoomState, VRGuestbookState, VRScript, VRStagedPlay, VRLetter,
     WorldProfile, WorldEpisode, StoryTheaterEntry, StoryTheaterPreset, StoryTheaterMask, PromptPreset,
+    PresetPack, PresetRegexKit,
     AutonomousOutboxEntry, AutonomyHeartbeat
 } from '../types';
 import type { ShoppingOrder } from './shoppingTypes';
@@ -38,7 +39,8 @@ const DB_NAME = 'AetherOS_Data';
 // v75：AIRP 世界事件流（airp_events）。独立 store，随备份动态枚举自动带走。
 // v76：AIRP 世界事实/知识（airp_world）。独立 store，随备份动态枚举自动带走。
 // v77：AIRP 自主生活转述账本 + 心跳（autonomous_outbox / autonomous_heartbeats）。独立 store，随备份动态枚举自动带走。
-const DB_VERSION = 77; // v77: AIRP 自主生活 outbox + 心跳
+// v78：预设套组（preset_packs + preset_pack_active）+ 正则脚本（preset_regexes）。独立 store，随备份动态枚举自动带走。
+const DB_VERSION = 78; // v78: 预设套组 + 正则脚本
 
 const STORE_CHARACTERS = 'characters';
 const STORE_CHAR_GROUPS = 'character_groups'; // 角色分组定义（角色通过 groupId 指向；与群聊 groups 无关）
@@ -87,6 +89,9 @@ const STORE_VR_NOVELS = 'vr_novels';              // 虚拟世界「彼方」全
 const STORE_VR_ANNOTATIONS = 'vr_annotations';    // 虚拟世界小说批注（per-segment per-char，可互相吐槽）
 const STORE_CC_PARTS = 'cc_custom_parts';         // 捏脸系统自定义部件（开发模式追加，注入捏人器）
 const STORE_PROMPT_PRESETS = 'prompt_presets';    // 提示词段落预设（Preset App，order 排序 / enabled 启停）
+const STORE_PRESET_PACKS = 'preset_packs';            // v78: 预设套组（id='default' 为「默认预设」，entryIds 定序）
+const STORE_PRESET_PACK_ACTIVE = 'preset_pack_active'; // v78: 当前套组指针（单例 id='active'）
+const STORE_PRESET_REGEXES = 'preset_regexes';        // v78: 正则脚本套件
 const STORE_VR_MUSIC = 'vr_music';                // 听歌房共享状态（单例 nowPlaying + 循环队列）
 const STORE_VR_GUESTBOOK = 'vr_guestbook';        // 留言簿共享版聊墙（单例 messages）
 const STORE_VR_SCRIPTS = 'vr_scripts';            // 剧院·投稿剧本库（每份剧本一条）
@@ -376,6 +381,10 @@ export const openDB = (): Promise<IDBDatabase> => {
 
       // v72: 提示词段落预设
       createStore(STORE_PROMPT_PRESETS, { keyPath: 'id' });
+      // v78: 预设套组 + 当前指针 + 正则脚本
+      createStore(STORE_PRESET_PACKS, { keyPath: 'id' });
+      createStore(STORE_PRESET_PACK_ACTIVE, { keyPath: 'id' });
+      createStore(STORE_PRESET_REGEXES, { keyPath: 'id' });
       // v73: 购物订单（Shopping App）
       createStore(STORE_SHOPPING_ORDERS, { keyPath: 'id' });
       // v74: 塔罗占卜记录（Tarot App）
@@ -4187,6 +4196,31 @@ export const DB = {
           data.promptPresets = undefined as any;
       }, data.promptPresets?.length || 0);
 
+      // 预设套组（v78 Preset Kit）。旧备份无此二字段时走迁移兜底：按导入的
+      // promptPresets 行生成「默认预设」套组（幂等门保证新包不重复建）。
+      await runSection('预设套组', data.presetPacks !== undefined, async () => {
+          await clearAndAdd(STORE_PRESET_PACKS, data.presetPacks, '预设套组', false);
+          data.presetPacks = undefined as any;
+      }, data.presetPacks?.length || 0);
+      await runSection('预设套组指针', data.activePresetPackId !== undefined, async () => {
+          if (!hasStore(STORE_PRESET_PACK_ACTIVE)) return;
+          await withStore(STORE_PRESET_PACK_ACTIVE, store => {
+              store.clear();
+              if (data.activePresetPackId) {
+                  store.put({ id: 'active', packId: data.activePresetPackId });
+              }
+          });
+          data.activePresetPackId = undefined as any;
+      }, data.activePresetPackId ? 1 : 0);
+      await runSection('正则脚本', data.presetRegexes !== undefined, async () => {
+          await clearAndAdd(STORE_PRESET_REGEXES, data.presetRegexes, '正则脚本', false);
+          data.presetRegexes = undefined as any;
+      }, data.presetRegexes?.length || 0);
+      {
+          const { migrateToDefaultPack } = await import('./presetKitsMigration');
+          await migrateToDefaultPack().catch((e) => console.warn('[Backup] preset kit migrate fallback failed:', e));
+      }
+
       // Pixel Home（小屋像素界面）
       await runSection('像素小屋素材', data.pixelHomeAssets !== undefined, async () => {
           await clearAndAdd('pixel_home_assets', data.pixelHomeAssets, '像素小屋素材', true);
@@ -4262,6 +4296,185 @@ export const DB = {
       await new Promise<void>((resolve, reject) => {
           const tx = db.transaction(STORE_PROMPT_PRESETS, 'readwrite');
           tx.objectStore(STORE_PROMPT_PRESETS).delete(id);
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+      });
+  },
+
+  /**
+   * 提示词预设的原子对账入口（播种 + 历史去重一站式）。
+   *
+   * 单个 readwrite 事务内读全表 → 按 sourceKey 合并重复组 → 补写缺失 seed。
+   * IndexedDB 对同一 store 的 readwrite 事务跨连接串行化，并发调用不会双写，
+   * 从根上杜绝「StrictMode 双跑 / 双标签页同时播种」产生的重复行。
+   *
+   * - 只处理 builtinByKey 里登记过的 sourceKey；无锚点或未登记的旧自定义行不动。
+   * - keeper：内容或名字与目录默认不同视为用户动过，取 updatedAt 最新；都没动取
+   *   createdAt 最早；平局取 id 字典序小者。enabled 只要组内有停用即取 false。
+   */
+  reconcilePromptPresets: async (
+      seeds: PromptPreset[],
+      builtinByKey: Record<string, { name: string; content: string }>,
+  ): Promise<{ seeded: number; removed: number }> => {
+      const db = await openDB();
+      return new Promise<{ seeded: number; removed: number }>((resolve, reject) => {
+          const tx = db.transaction(STORE_PROMPT_PRESETS, 'readwrite');
+          const store = tx.objectStore(STORE_PROMPT_PRESETS);
+          let seeded = 0;
+          let removed = 0;
+          const req = store.getAll();
+          req.onsuccess = () => {
+              const rows: PromptPreset[] = req.result || [];
+              const groups = new Map<string, PromptPreset[]>();
+              for (const row of rows) {
+                  if (!row.sourceKey || !(row.sourceKey in builtinByKey)) continue;
+                  const list = groups.get(row.sourceKey);
+                  if (list) list.push(row);
+                  else groups.set(row.sourceKey, [row]);
+              }
+              for (const [sourceKey, list] of groups) {
+                  if (list.length <= 1) continue;
+                  const builtin = builtinByKey[sourceKey];
+                  const edited = list.filter(
+                      (r) => (r.content ?? '') !== builtin.content || (r.name ?? '') !== builtin.name,
+                  );
+                  const pool = edited.length > 0 ? edited : list;
+                  const keeper = pool.slice().sort((a, b) => {
+                      if (edited.length > 0) {
+                          const dt = (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+                          if (dt !== 0) return dt;
+                      } else {
+                          const dt = (a.createdAt ?? 0) - (b.createdAt ?? 0);
+                          if (dt !== 0) return dt;
+                      }
+                      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+                  })[0];
+                  const anyDisabled = list.some((r) => !r.enabled);
+                  for (const r of list) {
+                      if (r.id === keeper.id) continue;
+                      store.delete(r.id);
+                      removed++;
+                  }
+                  if (anyDisabled && keeper.enabled) {
+                      store.put({ ...keeper, enabled: false });
+                  }
+              }
+              const present = new Set(groups.keys());
+              for (const seed of seeds) {
+                  if (seed.sourceKey && present.has(seed.sourceKey)) continue;
+                  store.put(seed);
+                  if (seed.sourceKey) present.add(seed.sourceKey);
+                  seeded++;
+              }
+          };
+          tx.oncomplete = () => resolve({ seeded, removed });
+          tx.onerror = () => reject(tx.error || new Error('reconcilePromptPresets failed'));
+          tx.onabort = () => reject(tx.error || new Error('reconcilePromptPresets aborted'));
+      });
+  },
+
+  // ─── 预设套组（Preset Kit / v78）───
+  // 套组只存 entryIds 顺序，条目正文仍在 prompt_presets store；读写形态抄上面。
+
+  getPresetPacks: async (): Promise<PresetPack[]> => {
+      try {
+          const db = await openDB();
+          if (!db.objectStoreNames.contains(STORE_PRESET_PACKS)) return [];
+          const rows = await new Promise<PresetPack[]>((resolve, reject) => {
+              const tx = db.transaction(STORE_PRESET_PACKS, 'readonly');
+              const req = tx.objectStore(STORE_PRESET_PACKS).getAll();
+              req.onsuccess = () => resolve(req.result || []);
+              req.onerror = () => reject(req.error);
+          });
+          return rows.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+      } catch (e) {
+          console.warn('[DB] getPresetPacks failed:', e);
+          return [];
+      }
+  },
+
+  savePresetPack: async (pack: PresetPack): Promise<void> => {
+      const db = await openDB();
+      await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction(STORE_PRESET_PACKS, 'readwrite');
+          tx.objectStore(STORE_PRESET_PACKS).put(pack);
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+      });
+  },
+
+  deletePresetPack: async (id: string): Promise<void> => {
+      const db = await openDB();
+      await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction(STORE_PRESET_PACKS, 'readwrite');
+          tx.objectStore(STORE_PRESET_PACKS).delete(id);
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+      });
+  },
+
+  /** 当前生效套组 id；无指针行时回 'default'（迁移会建它）。 */
+  getActivePackId: async (): Promise<string> => {
+      try {
+          const db = await openDB();
+          if (!db.objectStoreNames.contains(STORE_PRESET_PACK_ACTIVE)) return 'default';
+          const row = await new Promise<{ packId?: string } | undefined>((resolve, reject) => {
+              const tx = db.transaction(STORE_PRESET_PACK_ACTIVE, 'readonly');
+              const req = tx.objectStore(STORE_PRESET_PACK_ACTIVE).get('active');
+              req.onsuccess = () => resolve(req.result);
+              req.onerror = () => reject(req.error);
+          });
+          return (row && typeof row.packId === 'string' && row.packId) || 'default';
+      } catch (e) {
+          console.warn('[DB] getActivePackId failed:', e);
+          return 'default';
+      }
+  },
+
+  setActivePackId: async (packId: string): Promise<void> => {
+      const db = await openDB();
+      await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction(STORE_PRESET_PACK_ACTIVE, 'readwrite');
+          tx.objectStore(STORE_PRESET_PACK_ACTIVE).put({ id: 'active', packId });
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+      });
+  },
+
+  // ─── 正则脚本套件（preset_regexes / v78）───
+
+  getPresetRegexes: async (): Promise<PresetRegexKit[]> => {
+      try {
+          const db = await openDB();
+          if (!db.objectStoreNames.contains(STORE_PRESET_REGEXES)) return [];
+          const rows = await new Promise<PresetRegexKit[]>((resolve, reject) => {
+              const tx = db.transaction(STORE_PRESET_REGEXES, 'readonly');
+              const req = tx.objectStore(STORE_PRESET_REGEXES).getAll();
+              req.onsuccess = () => resolve(req.result || []);
+              req.onerror = () => reject(req.error);
+          });
+          return rows.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+      } catch (e) {
+          console.warn('[DB] getPresetRegexes failed:', e);
+          return [];
+      }
+  },
+
+  savePresetRegex: async (kit: PresetRegexKit): Promise<void> => {
+      const db = await openDB();
+      await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction(STORE_PRESET_REGEXES, 'readwrite');
+          tx.objectStore(STORE_PRESET_REGEXES).put(kit);
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+      });
+  },
+
+  deletePresetRegex: async (id: string): Promise<void> => {
+      const db = await openDB();
+      await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction(STORE_PRESET_REGEXES, 'readwrite');
+          tx.objectStore(STORE_PRESET_REGEXES).delete(id);
           tx.oncomplete = () => resolve();
           tx.onerror = () => reject(tx.error);
       });

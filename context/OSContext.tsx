@@ -920,6 +920,13 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               const { getResolvedPromptPresets } = await import('../utils/promptPresetRuntime');
               await seedBuiltinPromptPresets();
               await migrateLegacyVoiceOverrides();
+              // 预设套组迁移（v78）：旧自定义段落收进「默认预设」套组，幂等，可重跑。
+              try {
+                  const { migrateToDefaultPack } = await import('../utils/presetKitsMigration');
+                  await migrateToDefaultPack();
+              } catch (e) {
+                  console.warn('[PresetKit] migrateToDefaultPack failed', e);
+              }
               if (!cancelled) await getResolvedPromptPresets();
           } catch (e) {
               console.warn('[PresetPrompt] bootstrap seeding failed', e);
@@ -3989,6 +3996,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               'life_records', 'med_plans', 'life_record_settings',
               // v72 提示词段落预设（Preset App）。
               'prompt_presets',
+              // v78 预设套组 + 当前指针（单例） + 正则脚本。
+              'preset_packs', 'preset_pack_active', 'preset_regexes',
               // v75/v76 AIRP：世界事件流 + 世界事实/知识（导入端 importFullData 已支持恢复；
               // 此前仅在兜底清单里，这里补显式登记，消除每次导出的 default-path warn）。
               'airp_events', 'airp_world',
@@ -4639,6 +4648,15 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                   case 'world_episodes': backupData.worldEpisodes = processedData; break;
                   case 'xhs_owned_posts': backupData.xhsOwnedPosts = processedData; break;
                   case 'prompt_presets': backupData.promptPresets = processedData; break;
+                  // 预设套组（v78）—— 键名须与 importFullData 读取的字段对齐；
+                  // active 单例存 {id:'active',packId}，包里只留 packId 字符串。
+                  case 'preset_packs': backupData.presetPacks = processedData; break;
+                  case 'preset_pack_active': {
+                      const first = Array.isArray(processedData) ? processedData[0] : processedData;
+                      backupData.activePresetPackId = first?.packId;
+                      break;
+                  }
+                  case 'preset_regexes': backupData.presetRegexes = processedData; break;
                   // AIRP（v75/v76）—— 键名须与 importFullData 读取的字段（data.airpEvents / data.airpWorlds）对齐
                   case 'airp_events': backupData.airpEvents = processedData; break;
                   case 'airp_world': backupData.airpWorlds = processedData; break;

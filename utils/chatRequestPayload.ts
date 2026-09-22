@@ -34,7 +34,7 @@ import { getMcpResultMemoryBlock } from './mcpResultMemory';
 import type { MusicCfg, Song, LyricLine, MusicPlaybackSnapshot, RecentTrackChange } from '../context/MusicContext';
 import { isPromptBuildSkipped, isSystemMessageMergeEnabled } from './devDebug';
 import { mergeSystemMessages } from './systemMessageMerge';
-import { injectWorldbookDepthEntries, resolveWorldbookEntries } from './worldbook';
+import { injectWorldbookDepthEntries, injectDepthEntries, resolveWorldbookEntries } from './worldbook';
 import { normalizeTranslationLangLabel } from './translationLang';
 import { cleanApiMessages, flattenImageContentParts } from './promptMessageCleanup';
 import { materializeVisionDescriptions } from './visionApi';
@@ -221,6 +221,8 @@ export function deriveRecentTrackSwitchForChar(
  *   4. ChatPrompts.buildMessageHistory → apiMessages → 剥离旧双语标签 → cleanedApiMessages
  *   5. volatileTail = volatileState + 麦当劳/瑞幸/瑞一杯实时快照块
  *   6. stable += 通用 MCP 工具块（工具清单持久化，变化慢）
++ *   6b. 预设套组 afterHistory 组拼进 volatileTail（钢印之前）；absolute 组按
++ *       depth 插进历史（与世界书 at-depth 同口径，见 injectDepthEntries）
  *   7. volatileTail += recencyTail（总纲+「回到你自己」钢印，永远最后）
  *   8. fullMessages = [stable system, ...cleanedApiMessages, volatileTail system]
  *   9. fullMessages.push（末尾双语 reminder / MCP reminder）
@@ -405,16 +407,45 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
 
     // ── 8. 剥离历史里旧的双语标签（stripImages 时先压平 image_url → 纯文本占位） ──
     const cleanedApiMessages = cleanApiMessages(input.stripImages ? flattenImageContentParts(apiMessages) : apiMessages);
+
+    // ── 8a. 输入正则（placement=1）：只改发给模型的最后一条 user 文本，不写回 DB。
+    // 世界书扫描在它之后——按模型实际看到的文本命中。无 kit 时零变化；
+    // emotion eval 读同一份 cleanedApiMessages（看到的与模型一致）。
+    let promptMessages = cleanedApiMessages;
+    try {
+        const { applyActiveInputRegexToLastUser } = await import('./presetRegex');
+        promptMessages = await applyActiveInputRegexToLastUser(cleanedApiMessages, {
+            charName: char.name,
+            userName: userProfile?.name,
+        });
+    } catch (e) {
+        console.warn('[PresetRegex] input stage skipped:', e);
+    }
     const resolvedWorldbookEntries = resolveWorldbookEntries(
         char.mountedWorldbooks || [],
-        cleanedApiMessages,
+        promptMessages,
         char.name,
         userProfile.name,
     );
     const messagesWithWorldbookDepth = injectWorldbookDepthEntries(
-        cleanedApiMessages,
+        promptMessages,
         resolvedWorldbookEntries.filter(entry => entry.position === 4),
     );
+
+    // ── 8b. 预设套组 absolute 条目（按 depth 插进历史，与世界书同口径）──
+    // 同 depth 内保持套组顺序（order=套组下标）。forFirePack 时 parts.presetAbsolute
+    // 为空数组，零变化。
+    const messagesWithPresetDepth = (parts.presetAbsolute && parts.presetAbsolute.length > 0)
+        ? injectDepthEntries(
+            messagesWithWorldbookDepth,
+            parts.presetAbsolute.map((p, i) => ({
+                depth: Math.max(0, Math.floor(p.depth ?? 0)),
+                order: i,
+                role: p.role === 'user' || p.role === 'assistant' ? p.role : 'system',
+                content: p.content,
+            })),
+        )
+        : messagesWithWorldbookDepth;
 
     // ── 9. 麦当劳小程序上下文（购物车/菜单实时快照 → 易变尾段） ──
     const mcdActive = !!mcdMiniSnap?.open;
@@ -535,6 +566,11 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
 
     // 「关于对方的表达」+「回到你自己」必须是易变尾段的最后内容：修复旧版把双语/HTML/
     // 思考链/点单块拼在钢印之后、模型开口前最后读到的是格式说明书的问题。
+    // 预设套组 afterHistory 组（用户标「历史之后」的段落）拼在钢印之前 —— 拿到
+    // recency 注意力，但不抢「回到你自己」永远最后一句的位置。
+    if (parts.presetAfterHistory) {
+        volatileTail += '\n\n' + parts.presetAfterHistory;
+    }
     volatileTail += parts.recencyTail;
 
     // 结构：[稳定 system] + [历史消息] + [易变状态 system] (+ 末尾 reminder)。
@@ -544,7 +580,7 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
     // 展平为对话历史 —— 易变尾段会以「[系统]: …」行出现在历史末尾，信息不丢。
     const fullMessages: Array<{ role: string; content: any }> = [
         { role: 'system', content: systemPrompt },
-        ...messagesWithWorldbookDepth,
+        ...messagesWithPresetDepth,
         { role: 'system', content: volatileTail },
     ];
     if (bilingualActive) {
@@ -568,10 +604,10 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
         // 返回给情绪评估 / 调试查看器的仍是"完整拼接"——信息与主 API 完全一致，
         // 只是主 API 的实际消息结构把易变尾段放在历史之后（见上）。
         systemPrompt: systemPrompt + volatileTail,
-        cleanedApiMessages: messagesWithWorldbookDepth,
+        cleanedApiMessages: messagesWithPresetDepth,
         fullMessages: finalMessages,
         // 合并开关开着时多条 system 被并进开头一条，下标失去意义 → 交出 -1，调用方退回贴尾。
-        volatileTailIndex: finalMessages === fullMessages ? 1 + messagesWithWorldbookDepth.length : -1,
+        volatileTailIndex: finalMessages === fullMessages ? 1 + messagesWithPresetDepth.length : -1,
         autonomyToldIds,
         recallTrace,
         flags: { bilingualActive, mcdActive, luckinActive, luckinChatActive, mcpChatActive, htmlActive, thinkingActive, promptBuildSkipped: false },
