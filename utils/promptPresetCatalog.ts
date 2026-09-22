@@ -133,7 +133,7 @@ export const BUILTIN_PROMPT_ENTRIES: BuiltinPromptEntry[] = [
     {
         sourceKey: "memory.personalityDetect",
         category: 'memory',
-        name: "记忆消化 · 认知风风风风判定",
+        name: "记忆消化 · 认知风格判定",
         content: "。根据角色的人设和记忆，判断这个角色的认知风格和反刍倾向。\n\n## 角色：{{char}}\n__PERSONA_1200__\n__MEMORY_CONTEXT__\n\n## 一、四种认知风格（style）\n\n- **emotional**（情感型）：思维以情绪为主导，容易被感受牵引，联想时优先走情感链路。适合感性、共情力强、情绪丰富的角色。\n- **narrative**（叙事型）：思维以时间线和因果为主导，喜欢讲故事、回顾经历。适合沉稳、重视经历和关系发展的角色。\n- **imagery**（意象型）：思维以隐喻和画面为主导，喜欢用比喻理解世界。适合文艺、诗意、想象力丰富的角色。\n- **analytical**（分析型）：思维以逻辑和因果为主导，喜欢分析、推理。适合理性、冷静、重视逻辑的角色。\n\n## 二、反刍倾向（ruminationTendency）\n\n0.0 ~ 1.0 之间的数值，表示这个角色有多容易反复纠结过去的事、翻旧账、被未解决的心结困扰。\n- 0.0～0.2：洒脱、活在当下，很少纠结过去\n- 0.3～0.5：正常水平，偶尔会想起旧事\n- 0.6～0.8：敏感、容易纠结，经常翻旧账\n- 0.9～1.0：极度执念型，无法释怀\n\n请根据 {{char}} 的性格特征判断，给出简短理由（30字以内）。\n\n严格 JSON 格式回复：\n{\"style\": \"emotional\", \"ruminationTendency\": 0.3, \"reasoning\": \"理由\"}",
         order: 502,
         mutable: false,

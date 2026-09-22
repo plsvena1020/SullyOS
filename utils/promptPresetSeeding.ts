@@ -2,46 +2,73 @@
  * 内置提示词条目的一次性播种（首次加载 / 版本升级补缺）。
  *
  * 规则：prompt_presets 里缺哪个 sourceKey 就补哪条——已存在的行**永不覆盖**，
- * 用户对内容的编辑、启停、排序都原样保留。OSContext 启动时调用，跑一次成本
- * 是一次全表读 + （冷启动时）18 次写，之后秒回。
+ * 用户对内容的编辑、启停、排序都原样保留。落库走 DB.reconcilePromptPresets 的
+ * 单事务对账：并发播种不会产生重复行，历史竞态重复行会在同一事务里合并。
+ * OSContext 启动时调用，跑一次成本是一次写事务，之后秒回。
  */
 import { DB } from './db';
 import { BUILTIN_PROMPT_ENTRIES } from './promptPresetCatalog';
 import { invalidatePromptPresetCache } from './promptPresetRuntime';
 import type { PromptPreset } from '../types';
 
+/** 已知被 9fa253b7 手滑改坏的展示名（sourceKey → 错名原文）；修复值取目录当前 name。 */
+const CORRUPTED_BUILTIN_NAMES: Record<string, string[]> = {
+    'memory.personalityDetect': ['记忆消化 · 认知风风风风判定'],
+};
+
 export const seedBuiltinPromptPresets = async (): Promise<void> => {
     try {
-        const rows = await DB.getPromptPresets();
-        const present = new Set<string>();
-        for (const r of rows || []) {
-            if (r.sourceKey) present.add(r.sourceKey);
-        }
         const now = Date.now();
-        let seeded = 0;
+        const seeds: PromptPreset[] = BUILTIN_PROMPT_ENTRIES.map((entry) => ({
+            id: crypto.randomUUID(),
+            sourceKey: entry.sourceKey,
+            category: entry.category,
+            name: entry.name,
+            content: entry.content,
+            order: entry.order,
+            enabled: true,
+            builtinVersion: entry.builtinVersion,
+            createdAt: now,
+            updatedAt: now,
+        }));
+        const builtinByKey: Record<string, { name: string; content: string }> = {};
         for (const entry of BUILTIN_PROMPT_ENTRIES) {
-            if (present.has(entry.sourceKey)) continue;
-            const row: PromptPreset = {
-                id: crypto.randomUUID(),
-                sourceKey: entry.sourceKey,
-                category: entry.category,
-                name: entry.name,
-                content: entry.content,
-                order: entry.order,
-                enabled: true,
-                builtinVersion: entry.builtinVersion,
-                createdAt: now,
-                updatedAt: now,
-            };
-            await DB.savePromptPreset(row);
-            seeded++;
+            builtinByKey[entry.sourceKey] = { name: entry.name, content: entry.content };
         }
-        if (seeded > 0) {
-            invalidatePromptPresetCache();
-            console.log(`[PresetPrompt] seeded ${seeded} builtin prompt entries`);
-        }
+        const { seeded, removed } = await DB.reconcilePromptPresets(seeds, builtinByKey);
+        if (seeded > 0) console.log(`[PresetPrompt] seeded ${seeded} builtin prompt entries`);
+        if (removed > 0) console.log(`[PresetPrompt] merged ${removed} duplicate prompt rows`);
+        await repairCorruptedBuiltinNames();
+        if (seeded > 0 || removed > 0) invalidatePromptPresetCache();
     } catch (e) {
         console.warn('[PresetPrompt] seeding builtin entries failed:', e);
+    }
+};
+
+/**
+ * 一次性修复：把历史播种行上被改坏的展示名还原成目录当前 name。
+ * 只精确匹配已知错名（避免覆盖用户自己起的名字），只动 name，内容/启停/排序/版本不动。
+ * 幂等；导入的备份里带回来的错名行也会在下次启动时被修好。
+ */
+export const repairCorruptedBuiltinNames = async (): Promise<void> => {
+    try {
+        const rows = await DB.getPromptPresets();
+        const now = Date.now();
+        let fixed = 0;
+        for (const row of rows || []) {
+            const badNames = row.sourceKey ? CORRUPTED_BUILTIN_NAMES[row.sourceKey] : undefined;
+            if (!badNames || !badNames.includes(row.name)) continue;
+            const builtin = BUILTIN_PROMPT_ENTRIES.find((e) => e.sourceKey === row.sourceKey);
+            if (!builtin || row.name === builtin.name) continue;
+            await DB.savePromptPreset({ ...row, name: builtin.name, updatedAt: now });
+            fixed++;
+        }
+        if (fixed > 0) {
+            invalidatePromptPresetCache();
+            console.log(`[PresetPrompt] repaired ${fixed} corrupted builtin name(s)`);
+        }
+    } catch (e) {
+        console.warn('[PresetPrompt] corrupted builtin name repair skipped:', e);
     }
 };
 
