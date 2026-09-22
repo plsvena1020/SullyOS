@@ -1,0 +1,12 @@
+[Unit]
+Description=SullyOS XHS Session Bridge (collector + http bridge on 127.0.0.1:8836)
+After=network.target docker.service
+
+[Service]
+WorkingDirectory=/opt/sullyos/sullyos-repo/vps-backend/src/xhs
+ExecStart=/usr/bin/node run.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
