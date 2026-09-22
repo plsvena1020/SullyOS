@@ -69,7 +69,10 @@ export const buildTarotReadingMessages = (
     `【塔罗解读】${input.querentName}问：「${question}」\n` +
     `牌阵「${input.spread.nameCn}」（${input.spread.nameEn}），抽到${input.drawn.length}张牌，牌义资料如下：\n\n` +
     `${cardsText}\n\n` +
-    `请用你的语气和口吻为${input.querentName}解读：按位置逐张结合牌义说，再给一段总述。` +
+    `请你像面对面坐在桌前一样，用自己的语气为${input.querentName}娓娓道来。` +
+    `不要分点、不要小标题、不要逐张机械复述牌义；把这几张牌串成一段连贯的话，` +
+    `让牌与牌之间自然过渡，先回应${input.querentName}的疑问，再顺着牌面展开，最后收拢成你的劝慰或提醒。` +
+    `位置含义可以融进叙述里，但别把它们当标题一条条念出来。` +
     `你只能基于上面给出的牌义资料叙述，不得发明资料之外的牌义，也不要复读指令。只输出解读本身。`;
   const userText =
     `【塔罗】${input.querentName}问「${question}」，` +

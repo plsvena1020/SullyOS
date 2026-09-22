@@ -6,6 +6,7 @@ import { buildLocalSummary, newReadingId, type ResolvedDrawn, type TarotReadingR
 import { DB } from '../../utils/db';
 import { CardBack, FlipCard } from './TarotCards';
 import { ReadingView } from './ReadingView';
+import { ZodiacRing } from './ZodiacRing';
 
 type Phase = 'setup' | 'shuffling' | 'dealing' | 'revealing' | 'reading';
 
@@ -29,6 +30,15 @@ const cardWidthFor = (count: number): string => {
   if (count <= 7) return '19%';
   return '17%';
 };
+
+const TableFelt: React.FC = () => (
+  <>
+    <div className="pointer-events-none absolute inset-0" style={{ background: 'radial-gradient(70% 60% at 50% 45%, rgba(32,62,52,0.55) 0%, rgba(10,14,18,0.15) 70%)' }} />
+    <ZodiacRing size={230} durationS={90} reverse glyphColor="rgba(232,201,106,0.75)" className="opacity-25" />
+    <div className="tarot-ring-spin pointer-events-none absolute left-1/2 top-1/2 h-60 w-60 -translate-x-1/2 -translate-y-1/2 rounded-full border border-dashed border-[#c9a227]/20" />
+    <div className="pointer-events-none absolute left-1/2 top-1/2 h-44 w-44 -translate-x-1/2 -translate-y-1/2 rounded-full border border-[#c9a227]/15" />
+  </>
+);
 
 export const RitualView: React.FC<Props> = ({
   characters, activeCharacterId, userProfile, apiConfig, addToast, dateKey, onSaved,
@@ -187,10 +197,23 @@ export const RitualView: React.FC<Props> = ({
     return (
       <div className="flex h-[380px] flex-col items-center justify-center" onClick={() => setPhase('dealing')}>
         <div className="relative h-44 w-28">
+          <div className="tarot-aura pointer-events-none absolute -inset-12 rounded-full" style={{ background: 'radial-gradient(circle, rgba(201,162,39,0.30) 0%, transparent 70%)' }} />
           {[0, 1, 2, 3, 4].map((i) => (
             <div key={i} className="tarot-shuffle absolute inset-0" style={{ animationDelay: `${i * 130}ms` }}>
               <CardBack className="h-full w-full rounded-[6px] ring-1 ring-[#c9a227]/50" />
             </div>
+          ))}
+          {Array.from({ length: 10 }).map((_, i) => (
+            <span
+              key={`spark-${i}`}
+              className="tarot-spark pointer-events-none absolute h-1 w-1 rounded-full bg-[#e8c96a]"
+              style={{
+                left: `${10 + (i % 5) * 20}%`,
+                top: `${70 - Math.floor(i / 5) * 18}%`,
+                animationDelay: `${i * 240}ms`,
+                boxShadow: '0 0 6px rgba(232,201,106,0.9)',
+              }}
+            />
           ))}
         </div>
         <p className="mt-6 font-serif text-sm tracking-[0.3em] text-[#f5f0e1]/70">洗牌中…轻点可跳过</p>
@@ -202,7 +225,8 @@ export const RitualView: React.FC<Props> = ({
   // ── dealing ──
   if (phase === 'dealing') {
     return (
-        <div className="relative h-[460px] overflow-hidden rounded border border-[#8b7355]/25 bg-[#2d4a3e]/40">
+        <div className="relative h-[460px] overflow-hidden rounded-md border border-[#c9a227]/20 bg-[#0f231d]">
+        <TableFelt />
         {spread.positions.map((p, i) => (
           <div
             key={i}
@@ -226,11 +250,12 @@ export const RitualView: React.FC<Props> = ({
     const allFlipped = flippedCount === drawn.length;
     return (
       <div className="space-y-3">
-      <div className="relative h-[460px] overflow-hidden rounded border border-[#8b7355]/25 bg-[#2d4a3e]/40">
+      <div className="relative h-[460px] overflow-hidden rounded-md border border-[#c9a227]/20 bg-[#0f231d]">
+          <TableFelt />
           {drawn.map((d, i) => (
             <div
               key={i}
-              className="absolute"
+              className={`absolute ${flipped[i] ? 'tarot-lit' : ''}`}
               style={{
                 left: `${spread.positions[i].x * 100}%`, top: `${spread.positions[i].y * 100}%`,
                 width: cardWidthFor(spread.cardCount),

@@ -8,6 +8,10 @@ import { buildLocalSummary, newReadingId, type TarotReadingRecord } from '../uti
 import { DB } from '../utils/db';
 import ConfirmDialog from '../components/os/ConfirmDialog';
 import { TarotThumb } from './tarot/TarotCards';
+import { TarotParticles } from './tarot/TarotParticles';
+import { TarotSkyShader } from './tarot/TarotSkyShader';
+import { TarotBokeh } from './tarot/TarotBokeh';
+import { ZodiacRing } from './tarot/ZodiacRing';
 import { RitualView } from './tarot/RitualView';
 import { LibraryView } from './tarot/LibraryView';
 import { ReadingView } from './tarot/ReadingView';
@@ -23,11 +27,50 @@ const TAROT_CSS = `
 .tarot-reveal { opacity: 0; animation: tarotRevealUp .5s ease-out forwards; }
 @keyframes tarotGlow { 0%,100% { opacity: .45; } 50% { opacity: .85; } }
 .tarot-glow { animation: tarotGlow 4s ease-in-out infinite; }
+@keyframes tarotTwinkle { 0%,100% { opacity: .25; transform: scale(.85); } 50% { opacity: .9; transform: scale(1.1); } }
+.tarot-twinkle { animation: tarotTwinkle 2.8s ease-in-out infinite; }
+@keyframes tarotDrift { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(14px,-10px) scale(1.08); } }
+.tarot-drift { animation: tarotDrift 60s ease-in-out infinite; }
+@keyframes tarotAurora { 0%,100% { transform: translate(0,0) scale(1); opacity: .7; } 50% { transform: translate(12%,8%) scale(1.16); opacity: 1; } }
+.tarot-aurora { animation: tarotAurora 34s ease-in-out infinite; }
+@keyframes tarotCurtain { 0% { transform: translateX(-14%) skewX(-9deg) scaleY(.94); opacity: .55; } 100% { transform: translateX(12%) skewX(-3deg) scaleY(1.1); opacity: .95; } }
+.tarot-curtain { animation: tarotCurtain 18s ease-in-out infinite alternate; }
+.tarot-curtain-rev { animation: tarotCurtain 26s ease-in-out infinite alternate-reverse; }
+@keyframes tarotBand { 0% { transform: translateX(-12%) rotate(-2deg) scaleY(1); opacity: .55; } 50% { opacity: .9; } 100% { transform: translateX(10%) rotate(1deg) scaleY(1.14); opacity: .65; } }
+.tarot-band { animation: tarotBand 30s ease-in-out infinite alternate; }
+@keyframes tarotSheen { from { background-position-x: 120%; } to { background-position-x: -30%; } }
+.group:hover .tarot-sheen { animation: tarotSheen .85s ease-out; }
+@keyframes tarotSweep { from { transform: translateX(0) skewX(-12deg); opacity: 0; } 15% { opacity: 1; } to { transform: translateX(420%) skewX(-12deg); opacity: 0; } }
+.group:hover .tarot-sweep { animation: tarotSweep .7s ease-out; }
+@keyframes tarotAuraPulse { 0%,100% { opacity: .35; transform: scale(.92); } 50% { opacity: .8; transform: scale(1.06); } }
+.tarot-aura { animation: tarotAuraPulse 2.6s ease-in-out infinite; }
+@keyframes tarotSpark { 0% { opacity: 0; transform: translateY(8px) scale(.6); } 30% { opacity: .9; } 100% { opacity: 0; transform: translateY(-46px) scale(1); } }
+.tarot-spark { animation: tarotSpark 2.4s ease-out infinite; }
+@keyframes tarotLit { 0% { filter: drop-shadow(0 0 0 rgba(232,201,106,0)); } 40% { filter: drop-shadow(0 0 16px rgba(232,201,106,.6)); } 100% { filter: drop-shadow(0 0 7px rgba(232,201,106,.22)); } }
+.tarot-lit { animation: tarotLit .65s ease-out forwards; }
+@keyframes tarotSpin { from { transform: translate(-50%,-50%) rotate(0deg); } to { transform: translate(-50%,-50%) rotate(360deg); } }
+.tarot-ring-spin { animation: tarotSpin 80s linear infinite; }
 @media (prefers-reduced-motion: reduce) {
-  .tarot-shuffle, .tarot-deal, .tarot-reveal, .tarot-glow { animation: none !important; opacity: 1 !important; }
+  .tarot-shuffle, .tarot-deal, .tarot-reveal, .tarot-glow, .tarot-twinkle, .tarot-drift, .tarot-aura, .tarot-aurora, .tarot-curtain, .tarot-curtain-rev, .tarot-band { animation: none !important; opacity: 1 !important; }
+  .tarot-spark { animation: none !important; opacity: 0 !important; }
+  .tarot-sweep { animation: none !important; opacity: 0 !important; }
+  .tarot-sheen { animation: none !important; opacity: 0 !important; }
+  .tarot-lit, .tarot-ring-spin { animation: none !important; }
   .tarot-flip-inner { transition: none; }
 }
 `;
+
+const supportsWebGL = (): boolean => {
+  try {
+    const probe = document.createElement('canvas');
+    const gl = probe.getContext('webgl');
+    if (!gl) return false;
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 type Tab = 'daily' | 'ritual' | 'library' | 'history';
 
@@ -156,19 +199,20 @@ const DailyView: React.FC<{
           </button>
         ))}
       </div>
-      <div className="tarot-reveal rounded border border-[#8b7355]/30 bg-[#2d4a3e]/30 p-5 text-center">
+      <div className="tarot-reveal relative text-center">
         <p className="font-serif text-[11px] tracking-[0.35em] text-[#c9a227]/80">{mm} 月 {dd} 日 · {targetName}的运势</p>
-        <div className="mx-auto mt-3 w-40">
-          <TarotThumb card={card} reversed={saved.reversed} eager className="w-full rounded-md ring-1 ring-[#c9a227]/60 shadow-[0_16px_36px_rgba(0,0,0,0.55)]" />
+        <div className="relative mx-auto mt-4 w-40">
+          <div className="pointer-events-none absolute -inset-7 rounded-full opacity-50" style={{ background: 'radial-gradient(circle, rgba(232,201,106,0.16) 0%, transparent 70%)' }} />
+          <TarotThumb card={card} reversed={saved.reversed} eager className="relative w-full rounded-[6px] ring-1 ring-[#c9a227]/40 shadow-[0_10px_26px_rgba(0,0,0,0.55)]" />
         </div>
-        <p className="mt-3 font-serif text-lg tracking-widest text-[#f5f0e1]">
+        <p className="mt-4 font-serif text-lg tracking-widest text-[#f5f0e1]" style={{ textShadow: '0 1px 12px rgba(0,0,0,0.55)' }}>
           {card.nameCn}
           <span className={`ml-2 align-middle text-[10px] tracking-normal px-1.5 py-px rounded border ${saved.reversed ? 'text-[#e0a080] border-[#e0a080]/40' : 'text-[#a8c69f] border-[#a8c69f]/40'}`}>
             {saved.reversed ? '逆位' : '正位'}
           </span>
         </p>
         <p className="mt-1 font-serif text-xs text-[#c9a227]/85">{(saved.reversed ? card.reversed : card.upright).keywords.join(' · ')}</p>
-        <p className="mx-auto mt-2 max-w-[26rem] font-serif text-sm leading-loose text-[#f5f0e1]/85">{(saved.reversed ? card.reversed : card.upright).meaning}</p>
+        <p className="mx-auto mt-2 max-w-[26rem] font-serif text-sm leading-loose text-[#f5f0e1]/85" style={{ textShadow: '0 1px 10px rgba(0,0,0,0.5)' }}>{(saved.reversed ? card.reversed : card.upright).meaning}</p>
       </div>
       <ReadingView
         record={record}
@@ -176,6 +220,7 @@ const DailyView: React.FC<{
         api={{ baseUrl: apiConfig.baseUrl, apiKey: apiConfig.apiKey, model: apiConfig.model }}
         user={userProfile}
         addToast={addToast}
+        hideCardList
         onRecordChange={async (next) => {
           setRecord(next);
           try { await DB.saveTarotReading(next); } catch { /* 展示优先 */ }
@@ -284,7 +329,10 @@ export const TarotApp: React.FC = () => {
   const [tab, setTab] = useState<Tab>('daily');
   const [records, setRecords] = useState<TarotReadingRecord[]>([]);
   const [recordsLoaded, setRecordsLoaded] = useState(false);
+  const [skyOff, setSkyOff] = useState(() => !supportsWebGL());
   const todayKey = useLocalDateKey();
+  const tabIndex = Math.max(0, TABS.findIndex((t) => t.id === tab));
+  const parallax = (perTab: number) => `translateX(${-(tabIndex - 1.5) * perTab}%)`;
 
   const refresh = useCallback(async () => {
     try {
@@ -302,12 +350,65 @@ export const TarotApp: React.FC = () => {
   return (
     <div
       className="relative flex h-full w-full flex-col overflow-hidden font-serif"
-      style={{ background: 'linear-gradient(180deg, #1c130c 0%, #3d2b1f 60%, #2a1d13 100%)' }}
+      style={{ background: 'radial-gradient(130% 100% at 50% 0%, #2b2249 0%, #1a1428 45%, #0b0914 100%)' }}
     >
       <style>{TAROT_CSS}</style>
-      <div className="tarot-glow pointer-events-none absolute -top-24 left-1/2 h-64 w-64 -translate-x-1/2 rounded-full" style={{ background: 'radial-gradient(circle, rgba(201,162,39,0.22) 0%, transparent 70%)' }} />
+      <div
+        className="pointer-events-none absolute inset-0"
+        style={{ transform: parallax(7), transition: 'transform 1.6s cubic-bezier(.22,.8,.24,1)' }}
+      >
+        <div className="tarot-glow absolute -top-24 left-1/2 h-64 w-64 -translate-x-1/2 rounded-full" style={{ background: 'radial-gradient(circle, rgba(201,162,39,0.26) 0%, transparent 70%)' }} />
+        <div className="tarot-drift absolute -left-20 top-1/3 h-64 w-64 rounded-full" style={{ background: 'radial-gradient(circle, rgba(92,70,160,0.26) 0%, transparent 70%)', animationDelay: '-30s' }} />
+        <div className="tarot-drift absolute -right-16 bottom-10 h-72 w-72 rounded-full" style={{ background: 'radial-gradient(circle, rgba(92,70,160,0.2) 0%, transparent 70%)', animationDelay: '-14s' }} />
+      </div>
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="tarot-aurora absolute -left-[18%] -top-[12%] h-[52%] w-[86%] rounded-full" style={{ background: 'radial-gradient(circle, rgba(122,92,205,0.30) 0%, transparent 70%)', filter: 'blur(48px)' }} />
+        <div className="tarot-aurora absolute -right-[22%] -top-[6%] h-[46%] w-[80%] rounded-full" style={{ background: 'radial-gradient(circle, rgba(74,160,140,0.22) 0%, transparent 70%)', filter: 'blur(54px)', animationDelay: '-14s', animationDirection: 'reverse', animationDuration: '42s' }} />
+        <div className="tarot-aurora absolute -top-[4%] left-[8%] h-[30%] w-[70%] rounded-full" style={{ background: 'radial-gradient(circle, rgba(232,201,106,0.14) 0%, transparent 70%)', filter: 'blur(40px)', animationDelay: '-8s', animationDuration: '26s' }} />
+        <div style={{ opacity: skyOff ? 1 : 0, transition: 'opacity .8s ease' }}>
+          <div
+            className="tarot-curtain absolute -left-[40%] -top-[10%] h-[120%] w-[180%]"
+            style={{
+              background: 'repeating-linear-gradient(90deg, rgba(122,92,205,0.22) 0px, transparent 52px, rgba(74,160,140,0.17) 110px, transparent 168px, rgba(232,201,106,0.08) 216px, transparent 268px, rgba(122,92,205,0.22) 320px)',
+              backgroundSize: '320px 100%',
+              WebkitMaskImage: 'linear-gradient(180deg, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0.5) 50%, rgba(0,0,0,0.22) 82%, rgba(0,0,0,0.05) 100%)',
+              maskImage: 'linear-gradient(180deg, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0.5) 50%, rgba(0,0,0,0.22) 82%, rgba(0,0,0,0.05) 100%)',
+              filter: 'blur(12px)',
+              mixBlendMode: 'screen',
+            }}
+          />
+          <div
+            className="tarot-curtain-rev absolute -left-[40%] -top-[8%] h-[116%] w-[180%]"
+            style={{
+              background: 'repeating-linear-gradient(90deg, rgba(74,160,140,0.19) 0px, transparent 48px, rgba(122,92,205,0.16) 100px, transparent 156px, rgba(232,201,106,0.06) 200px, transparent 260px, rgba(74,160,140,0.19) 320px)',
+              backgroundSize: '320px 100%',
+              WebkitMaskImage: 'linear-gradient(180deg, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.42) 55%, rgba(0,0,0,0.18) 84%, rgba(0,0,0,0.04) 100%)',
+              maskImage: 'linear-gradient(180deg, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.42) 55%, rgba(0,0,0,0.18) 84%, rgba(0,0,0,0.04) 100%)',
+              filter: 'blur(14px)',
+              mixBlendMode: 'screen',
+              animationDelay: '-12s',
+            }}
+          />
+          <div
+            className="tarot-band absolute -left-[35%] -top-[8%] h-[116%] w-[170%]"
+            style={{
+              background: 'linear-gradient(100deg, transparent 0%, rgba(122,92,205,0.20) 30%, rgba(74,160,140,0.15) 58%, rgba(232,201,106,0.06) 72%, transparent 100%)',
+              WebkitMaskImage: 'linear-gradient(180deg, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.4) 55%, rgba(0,0,0,0.15) 85%, transparent 100%)',
+              maskImage: 'linear-gradient(180deg, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.4) 55%, rgba(0,0,0,0.15) 85%, transparent 100%)',
+              filter: 'blur(26px)',
+              mixBlendMode: 'screen',
+            }}
+          />
+        </div>
+      </div>
+      {!skyOff && <TarotSkyShader parallaxIndex={tabIndex} onFallback={() => setSkyOff(true)} />}
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-72 overflow-hidden">
+        <ZodiacRing size={300} durationS={140} glyphColor="rgba(201,162,39,0.55)" className="opacity-[0.13]" />
+      </div>
+      <TarotParticles parallaxIndex={tabIndex} />
+      <div className="pointer-events-none absolute inset-0 z-20" style={{ background: 'radial-gradient(120% 95% at 50% 42%, transparent 58%, rgba(0,0,0,0.30) 100%)' }} />
 
-      <div className="shrink-0 px-4" style={{ paddingTop: 'calc(var(--chrome-top) + 0.25rem)' }}>
+      <div className="relative z-10 shrink-0 px-4" style={{ paddingTop: 'calc(var(--chrome-top) + 0.25rem)' }}>
         <div className="flex items-center gap-3">
           <button
             onClick={closeApp}
@@ -316,14 +417,18 @@ export const TarotApp: React.FC = () => {
           >
             <CaretLeft size={16} weight="bold" />
           </button>
-          <div>
-            <h1 className="text-lg tracking-[0.35em] text-[#f5f0e1]">塔 罗</h1>
-            <p className="text-[10px] tracking-[0.25em] text-[#c9a227]/70">A R C A N A</p>
+          <div className="flex items-center gap-2">
+            <Sparkle size={13} weight="fill" className="tarot-twinkle text-[#e8c96a]" style={{ animationDelay: '-0.9s' }} />
+            <div>
+              <h1 className="text-lg tracking-[0.35em] text-[#f5f0e1]" style={{ textShadow: '0 0 18px rgba(232,201,106,0.35)' }}>塔 罗</h1>
+              <p className="text-[10px] tracking-[0.25em] text-[#c9a227]/70">A R C A N A</p>
+            </div>
+            <Sparkle size={13} weight="fill" className="tarot-twinkle text-[#e8c96a]" />
           </div>
         </div>
       </div>
 
-      <div key={tab} className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-4 animate-fade-soft">
+      <div key={tab} className="no-scrollbar relative z-10 min-h-0 flex-1 overflow-y-auto px-4 py-4 animate-fade-soft">
         {tab === 'daily' && <DailyView records={records} recordsLoaded={recordsLoaded} refresh={refresh} />}
         {tab === 'ritual' && (
           <RitualView
@@ -341,7 +446,7 @@ export const TarotApp: React.FC = () => {
       </div>
 
       <nav
-        className="grid shrink-0 grid-cols-4 border-t border-[#c9a227]/25 bg-[#1c130c]/95"
+        className="relative z-10 grid shrink-0 grid-cols-4 border-t border-[#c9a227]/25 bg-[#0e0b18]/95"
         style={{ paddingBottom: 'calc(var(--safe-bottom) + 0.5rem)', paddingTop: '0.5rem' }}
       >
         {TABS.map(({ id, name, Icon }) => (
@@ -350,11 +455,17 @@ export const TarotApp: React.FC = () => {
             onClick={() => setTab(id)}
             className={`flex flex-col items-center gap-0.5 py-1 active:scale-95 ${tab === id ? 'text-[#e8c96a]' : 'text-[#f5f0e1]/45'}`}
           >
-            <Icon size={20} weight={tab === id ? 'fill' : 'regular'} />
+            <Icon
+              size={20}
+              weight={tab === id ? 'fill' : 'regular'}
+              style={tab === id ? { filter: 'drop-shadow(0 0 6px rgba(232,201,106,0.7))' } : undefined}
+            />
             <span className="text-[10px] tracking-widest">{name}</span>
+            <span className={`h-1 w-1 rounded-full transition-all duration-200 ${tab === id ? 'bg-[#e8c96a] shadow-[0_0_6px_rgba(232,201,106,0.9)]' : 'bg-transparent'}`} />
           </button>
         ))}
       </nav>
+      <TarotBokeh parallaxIndex={tabIndex} />
     </div>
   );
 };

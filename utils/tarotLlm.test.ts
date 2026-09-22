@@ -52,6 +52,13 @@ describe('tarot llm prompt builder', () => {
     expect(m.system).toMatch(/只能|不得|禁止/);
   });
 
+  it('asks for flowing prose instead of a card-by-card recitation', () => {
+    const m = buildTarotReadingMessages(reader, user, input);
+    expect(m.system).toMatch(/娓娓|连贯|自然过渡/);
+    expect(m.system).toMatch(/不要分点/);
+    expect(m.system).not.toContain('按位置逐张');
+  });
+
   it('puts the question and spread in the user turn', () => {
     const m = buildTarotReadingMessages(reader, user, input);
     expect(m.user).toContain('这周适合跳槽吗');

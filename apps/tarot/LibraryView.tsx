@@ -1,4 +1,7 @@
 import React, { useMemo, useState } from 'react';
+import { Sparkle } from '@phosphor-icons/react';
+import { useOS } from '../../context/OSContext';
+import { useLayoutMode } from '../../utils/layoutMode';
 import { CARDS, type TarotArcana, type TarotCard } from '../../utils/tarotData';
 import { TarotThumb } from './TarotCards';
 
@@ -12,27 +15,36 @@ const SUITS: { id: TarotArcana; name: string }[] = [
 
 const SectionHead: React.FC<{ title: string; count: string }> = ({ title, count }) => (
   <div className="group flex items-center gap-2">
+    <Sparkle size={11} weight="fill" className="text-[#c9a227]/70" />
     <span className="font-serif text-xs tracking-[0.3em] text-[#c9a227]">{title}</span>
     <span className="h-px w-4 bg-[#c9a227]/50 transition-all duration-300 group-hover:w-12" />
     <span className="font-serif text-[10px] text-[#f5f0e1]/40">{count}</span>
   </div>
 );
 
-const CardCell: React.FC<{ card: TarotCard; onOpen: (c: TarotCard) => void }> = ({ card, onOpen }) => (
+const CardTile: React.FC<{ card: TarotCard; isDesktop: boolean; index: number; onOpen: (c: TarotCard) => void }> = ({ card, isDesktop, index, onOpen }) => (
   <button
     onClick={() => onOpen(card)}
-    className="group flex w-full items-center gap-3 rounded border border-[#8b7355]/30 bg-[#f5f0e1]/[0.04] p-2.5 text-left transition-all active:scale-[0.99]"
+    className="tarot-reveal group relative flex h-full w-full flex-col overflow-hidden rounded-md border border-[#8b7355]/30 bg-[#f5f0e1]/[0.05] text-left transition-all duration-300 active:scale-[0.98] hover:z-10 hover:-translate-y-0.5 hover:border-[#c9a227]/60 hover:shadow-[0_12px_30px_rgba(0,0,0,0.5)]"
+    style={{ animationDelay: `${Math.min(index * 18, 320)}ms` }}
   >
-    <TarotThumb card={card} className="w-12 shrink-0 rounded-[4px] grayscale-[25%] transition-all duration-300 group-hover:grayscale-0" />
-    <div className="min-w-0 flex-1 py-0.5">
-      <p className="truncate font-serif text-sm text-[#f5f0e1] transition-colors group-hover:text-[#e8c96a]">
-        {card.nameCn}
-        <span className="ml-2 font-serif text-[10px] tracking-widest text-[#c9a227]/60">{String(card.num).padStart(2, '0')}</span>
-      </p>
-      <p className="truncate font-serif text-[11px] italic text-[#f5f0e1]/45">{card.nameEn}</p>
-      <p className="mt-0.5 truncate font-serif text-[11px] text-[#f5f0e1]/55">{card.upright.keywords.join(' · ')}</p>
+    <span className="tarot-sweep pointer-events-none absolute inset-y-0 left-0 z-10 w-1/3 bg-gradient-to-r from-transparent via-[#e8c96a]/20 to-transparent opacity-0" />
+    <div className="relative overflow-hidden">
+      <TarotThumb card={card} className="w-full grayscale-[25%] transition-all duration-300 group-hover:scale-[1.03] group-hover:grayscale-0" />
+      <span className="absolute left-1.5 top-1.5 rounded-[3px] border border-[#c9a227]/50 bg-black/45 px-1 py-px font-serif text-[9px] tracking-widest text-[#e8c96a]/90">
+        {String(card.num).padStart(2, '0')}
+      </span>
     </div>
-    <span className="shrink-0 font-serif text-base text-[#f5f0e1]/25 transition-colors group-hover:text-[#e8c96a]">›</span>
+    <div className="flex flex-1 flex-col px-2 py-2">
+      <p className="truncate font-serif text-xs text-[#f5f0e1] transition-colors group-hover:text-[#e8c96a]">{card.nameCn}</p>
+      {isDesktop && <p className="mt-0.5 truncate font-serif text-[10px] italic text-[#f5f0e1]/40">{card.nameEn}</p>}
+      <p className="mt-0.5 truncate font-serif text-[10px] text-[#f5f0e1]/50">{card.upright.keywords.join(' · ')}</p>
+      {isDesktop && (
+        <p className="mt-0.5 truncate font-serif text-[10px] text-[#c9a227]/60">
+          {[card.element, card.astrology].filter(Boolean).join(' · ')}
+        </p>
+      )}
+    </div>
   </button>
 );
 
@@ -42,8 +54,12 @@ const CardDetail: React.FC<{ card: TarotCard; onBack: () => void }> = ({ card, o
   return (
     <div className="tarot-reveal space-y-4">
       <button onClick={onBack} className="font-serif text-xs tracking-widest text-[#f5f0e1]/60 active:scale-95">← 回牌库</button>
-      <div className="mx-auto w-52">
-        <TarotThumb card={card} reversed={face === 'reversed'} eager className="w-full rounded-md ring-1 ring-[#c9a227]/50 shadow-[0_14px_30px_rgba(0,0,0,0.5)]" />
+      <div className="relative mx-auto w-60">
+        <div
+          className="pointer-events-none absolute -inset-8 rounded-full opacity-60"
+          style={{ background: 'radial-gradient(circle, rgba(201,162,39,0.22) 0%, transparent 70%)' }}
+        />
+        <TarotThumb card={card} reversed={face === 'reversed'} eager className="relative w-full rounded-md ring-1 ring-[#c9a227]/50 shadow-[0_14px_30px_rgba(0,0,0,0.5)]" />
       </div>
       <div className="text-center font-serif">
         <p className="text-xl tracking-widest text-[#f5f0e1]">{card.nameCn}</p>
@@ -52,7 +68,7 @@ const CardDetail: React.FC<{ card: TarotCard; onBack: () => void }> = ({ card, o
           <p className="mt-1 text-[11px] text-[#c9a227]/80">{[card.element, card.astrology].filter(Boolean).join(' · ')}</p>
         )}
       </div>
-      <div className="mx-auto grid w-52 grid-cols-2 gap-2">
+      <div className="mx-auto grid w-60 grid-cols-2 gap-2">
         {(['upright', 'reversed'] as const).map((k) => (
           <button
             key={k}
@@ -72,6 +88,8 @@ const CardDetail: React.FC<{ card: TarotCard; onBack: () => void }> = ({ card, o
 };
 
 export const LibraryView: React.FC = () => {
+  const { theme } = useOS();
+  const isDesktop = useLayoutMode(theme.desktopMode) === 'desktop';
   const [query, setQuery] = useState('');
   const [suit, setSuit] = useState<TarotArcana | 'all'>('all');
   const [openId, setOpenId] = useState<string | null>(null);
@@ -96,7 +114,7 @@ export const LibraryView: React.FC = () => {
   const groups = suit === 'all' ? SUITS : SUITS.filter((s) => s.id === suit);
 
   return (
-    <div className="space-y-5">
+    <div className={`space-y-5 ${isDesktop ? 'mx-auto w-full max-w-[1180px]' : ''}`}>
       <input
         value={query}
         onChange={(e) => setQuery(e.target.value)}
@@ -122,12 +140,16 @@ export const LibraryView: React.FC = () => {
         const list = filtered.filter((c) => c.arcana === g.id);
         if (list.length === 0) return null;
         return (
-          <section key={g.id} className="space-y-2">
-            <SectionHead title={g.name} count={`${list.length} 张`} />
-            <div className="space-y-1.5">
-              {list.map((c) => (
-                <CardCell key={c.id} card={c} onOpen={open} />
-              ))}
+          <section key={g.id}>
+            <div className="sticky top-0 z-20 -mx-1 bg-[#141020]/85 px-1 py-2 backdrop-blur-sm">
+              <SectionHead title={g.name} count={`${list.length} 张`} />
+            </div>
+            <div className="pt-2">
+              <div className={isDesktop ? 'grid grid-cols-4 gap-3' : 'grid grid-cols-2 gap-3'}>
+                {list.map((c, i) => (
+                  <CardTile key={c.id} card={c} isDesktop={isDesktop} index={i} onOpen={open} />
+                ))}
+              </div>
             </div>
           </section>
         );
