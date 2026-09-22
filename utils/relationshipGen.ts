@@ -15,7 +15,7 @@
  */
 import type { CharacterProfile, RelationshipProfile, UserProfile } from '../types';
 import { ContextBuilder } from './context';
-import { extractContent, extractJson } from './safeApi';
+import { extractContent, extractJson, safeFetchJson } from './safeApi';
 import { getBuiltinContent, fillIdentity } from './promptPresetCatalog';
 import { resolveTechnicalPrompt } from './promptPresetRuntime';
 
@@ -30,6 +30,8 @@ export interface RelGenApiConfig {
 export const REL_PERSONA_MAX_CHARS = 200;
 /** 一次最多生成几个 */
 export const REL_GEN_MAX_COUNT = 6;
+/** 单次调用的硬上限：UI 不允许无限「生成中」；主代理上行 120s abort，这里留余量。 */
+export const REL_GEN_TIMEOUT_MS = 180_000;
 
 export interface RelationshipGenRequest {
     char: CharacterProfile;
@@ -88,17 +90,23 @@ export async function generateRelationshipProfiles(
 
 ${taskBlock}`;
 
-    const res = await fetch(`${api.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${api.apiKey}` },
-        body: JSON.stringify({
-            model: api.model,
-            messages: [{ role: 'user', content: prompt }],
-            temperature: 1.0,
-        }),
-    });
-    if (!res.ok) throw new Error(`LLM ${res.status}`);
-    const data = await res.json().catch(() => null);
+    let data: any;
+    try {
+        data = await safeFetchJson(`${api.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${api.apiKey}` },
+            body: JSON.stringify({
+                model: api.model,
+                messages: [{ role: 'user', content: prompt }],
+                temperature: 1.0,
+            }),
+        }, 0, REL_GEN_TIMEOUT_MS);
+    } catch (e: any) {
+        if (e?.name === 'AbortError' || /aborted|timeout/i.test(String(e?.message || ''))) {
+            throw new Error('生成超时，请重试');
+        }
+        throw e;
+    }
     const content = extractContent(data);
     const raw = extractJson(content);
     if (!Array.isArray(raw) || raw.length === 0) throw new Error('生成结果解析失败，请重试');

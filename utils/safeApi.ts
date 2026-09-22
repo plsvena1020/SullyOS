@@ -346,6 +346,80 @@ async function readBodyWithStreaming(
     return parseRawBodyText(raw, response.status, contentType);
 }
 
+/** 终止事件（[DONE] / finish_reason）之后留给尾随 usage chunk 的宽限窗口。 */
+export const TERMINAL_READ_GRACE_MS = 1500;
+
+/**
+ * 读响应全文，但见 SSE 终止事件即收口：
+ *  - `data: [DONE]` → 立即取消连接，返回已读原始文本；
+ *  - 仅见 finish_reason → 给 graceMs 宽限（include_usage 的 usage chunk 常紧跟其后），
+ *    到期无新数据则取消。
+ * 上游发完终止事件却保持连接不关时（部分 OpenAI 兼容代理的真实行为），调用方
+ * 得以立刻拿到结果，而不是把 socket 吊在那里等它自己断。
+ * 非 SSE 响应（或 body 不可读）→ 行为等价于 response.text()。
+ */
+export async function readBodyTextUntilTerminal(
+    response: Response,
+    graceMs: number = TERMINAL_READ_GRACE_MS,
+): Promise<string> {
+    if (!response.body?.getReader) return response.text();
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    const asm = new SseAssembler();
+    let raw = '';
+    let pending = '';
+    let graceTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const cancelNow = () => {
+        try { void reader.cancel(); } catch { /* 已关闭 */ }
+    };
+    const clearGrace = () => {
+        if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
+    };
+    const armGrace = () => {
+        clearGrace();
+        graceTimer = setTimeout(() => { graceTimer = null; cancelNow(); }, graceMs);
+    };
+
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const textChunk = decoder.decode(value, { stream: true });
+            raw += textChunk;
+            pending += textChunk;
+            const lastNl = pending.lastIndexOf('\n');
+            if (lastNl < 0) continue;
+            const complete = pending.slice(0, lastNl);
+            pending = pending.slice(lastNl + 1);
+            let explicitDone = false;
+            for (const line of complete.split(/\r?\n/)) {
+                const delta = asm.feedLine(line);
+                if (!delta.done) continue;
+                if (line.startsWith('data:') && line.slice(5).trim() === '[DONE]') {
+                    explicitDone = true;
+                    break;
+                }
+                armGrace();
+            }
+            if (explicitDone) {
+                clearGrace();
+                cancelNow();
+                break;
+            }
+        }
+        const tail = decoder.decode();
+        if (tail) {
+            raw += tail;
+            pending += tail;
+        }
+        if (pending.trim()) asm.feedLine(pending.trim());
+        return raw;
+    } finally {
+        clearGrace();
+    }
+}
+
 /**
  * Fetch with automatic retry for transient errors on non-billable endpoints.
  * Chat completions never retry automatically: a timeout/network error does not

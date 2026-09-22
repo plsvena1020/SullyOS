@@ -19,7 +19,7 @@
  * 重发付费生成请求：中转可能已经把第一份交给上游，静默重发会造成重复扣费。
  */
 
-import { isSseResponseText, parseSseToCompletion } from './safeApi';
+import { isSseResponseText, parseSseToCompletion, readBodyTextUntilTerminal } from './safeApi';
 
 const API_CONFIG_KEY = 'os_api_config';
 
@@ -56,9 +56,11 @@ export function upgradeChatBodyToStream(bodyStr: string): string | null {
  *   - SSE 流 → 攒齐拼装成标准 chat.completion JSON（Content-Type: application/json）
  *   - 已是 JSON（代理无视 stream）/ 其他文本 → 原文重新包装（body 已被消费，必须重包）
  * 只在响应 ok 时调用；错误响应由调用方原样透传给业务层的错误处理。
+ * 读取时见终止事件（[DONE]/finish_reason）即取消连接，不等上游 socket 自己关，
+ * 避免「发完 [DONE] 却保持连接」的代理把调用方吊死在「生成中」。
  */
 export async function assembleUpgradedResponse(response: Response): Promise<Response> {
-    const text = await response.text();
+    const text = await readBodyTextUntilTerminal(response);
     if (isSseResponseText(text, response.headers.get('content-type'))) {
         const assembled = parseSseToCompletion(text);
         if (assembled) {

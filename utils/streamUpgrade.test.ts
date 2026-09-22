@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { upgradeChatBodyToStream, assembleUpgradedResponse } from './streamUpgrade';
 
 // 透明流式升级：请求体改写 + SSE 响应拼回 JSON。
@@ -66,5 +66,39 @@ describe('assembleUpgradedResponse', () => {
         const upstream = new Response(json, { status: 200, headers: { 'Content-Type': 'application/json' } });
         const out = await assembleUpgradedResponse(upstream);
         expect((await out.json()).choices[0].message.content).toBe('整包');
+    });
+
+    it('上游发完 [DONE] 后不关连接 → 立即拼回 JSON，不等待 socket 关闭', async () => {
+        const cancelled = vi.fn();
+        const upstream = new Response(new ReadableStream<Uint8Array>({
+            start(controller) {
+                const enc = new TextEncoder();
+                controller.enqueue(enc.encode('data: {"choices":[{"delta":{"content":"收口"}}]}\n\n'));
+                controller.enqueue(enc.encode('data: [DONE]\n\n'));
+                // 故意不 close：部分兼容代理发完终止事件后仍保持连接。
+            },
+            cancel() { cancelled(); },
+        }), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+        const out = await assembleUpgradedResponse(upstream);
+        const data = await out.json();
+        expect(data.choices[0].message.content).toBe('收口');
+        expect(cancelled).toHaveBeenCalledOnce();
+    });
+
+    it('缺少 [DONE] 时由 finish_reason 收口（宽限后取消连接）', async () => {
+        const cancelled = vi.fn();
+        const upstream = new Response(new ReadableStream<Uint8Array>({
+            start(controller) {
+                const enc = new TextEncoder();
+                controller.enqueue(enc.encode('data: {"choices":[{"delta":{"content":"无DONE"}}]}\n\n'));
+                controller.enqueue(enc.encode('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'));
+            },
+            cancel() { cancelled(); },
+        }), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+        const out = await assembleUpgradedResponse(upstream);
+        const data = await out.json();
+        expect(data.choices[0].message.content).toBe('无DONE');
+        expect(data.choices[0].finish_reason).toBe('stop');
+        expect(cancelled).toHaveBeenCalledOnce();
     });
 });

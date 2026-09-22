@@ -286,12 +286,15 @@ async function llmStream(provider, messages, tools, timeoutMs, emitText) {
       if (done) break;
       buf += decoder.decode(value, { stream: true });
       let idx;
+      let sawTerminal = false;
       while ((idx = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, idx).trim();
         buf = buf.slice(idx + 1);
         if (!line.startsWith('data:')) continue;
         const data = line.slice(5).trim();
-        if (data === DONE_MARKER) { acc.finishReason = acc.finishReason || 'stop'; continue; }
+        // 终止事件即收口：部分代理发完 [DONE]/finish_reason 后仍保持 socket，
+        // 等 EOF 会被 120s abort 成「假失败」并触发 fallback 重试（重复计费）。
+        if (data === DONE_MARKER) { acc.finishReason = acc.finishReason || 'stop'; sawTerminal = true; break; }
         let chunk;
         try { chunk = JSON.parse(data); } catch { continue; }
         const choice = chunk && chunk.choices && chunk.choices[0];
@@ -311,8 +314,9 @@ async function llmStream(provider, messages, tools, timeoutMs, emitText) {
             tcMap.set(i, slot);
           }
         }
-        if (choice.finish_reason) acc.finishReason = choice.finish_reason;
+        if (choice.finish_reason) { acc.finishReason = choice.finish_reason; sawTerminal = true; break; }
       }
+      if (sawTerminal) break;
     }
   } finally {
     clearTimeout(timer);

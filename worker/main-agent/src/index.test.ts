@@ -279,3 +279,33 @@ describe('聊天 SSE 心跳（静默期保活）', () => {
         }
     });
 });
+
+describe('上游发完终止事件但不关连接', () => {
+    it('主代理在 [DONE]/finish_reason 处收口，不等待上游 socket 关闭', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => new Response(
+            new ReadableStream({
+                start(controller) {
+                    const enc = new TextEncoder();
+                    controller.enqueue(enc.encode('data: {"choices":[{"delta":{"content":"收口"}}]}\n\n'));
+                    controller.enqueue(enc.encode('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'));
+                    controller.enqueue(enc.encode('data: [DONE]\n\n'));
+                    // 故意不 close：模拟保持连接的代理
+                },
+            }),
+            { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+        )));
+        const res = await worker.fetch(
+            new Request(`${AGENT}/agent/v1/chat/completions`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }], stream: true }),
+            }),
+            { LLM_BASE_URL: 'https://api.example.com/v1', LLM_API_KEY: 'k', LLM_MODEL: 'm', LLM_TIMEOUT_MS: '120000' },
+            { waitUntil: () => {} },
+        );
+        expect(res.status).toBe(200);
+        const text = await res.text();
+        expect(text).toContain('"content":"收口"');
+        expect(text).toContain('data: [DONE]');
+    });
+});
