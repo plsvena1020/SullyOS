@@ -64,12 +64,13 @@ export async function debitCharCardForOrder(input: CharOrderPaymentInput): Promi
   const tx: BankTransaction = {
     id: outId,
     amount: -total,
-    category: '购物',
+    category: 'shopping',
     note: who ? `${input.shop}（${who}点的）` : `${input.shop}`,
     timestamp: now,
     dateStr: getLocalDateKey(new Date(now)),
     ownerId: input.charId,
     linkedPurchaseId: orderId,
+    cardId,
   };
   await DB.saveTransaction(tx);
   return { ok: true, txnId: outId, cardId, cardLabel };
@@ -112,6 +113,7 @@ export async function refundCharOrder(
     dateStr: getLocalDateKey(new Date(now)),
     ownerId: charId,
     linkedPurchaseId: oid,
+    cardId: target.id,
   });
   return { refunded: true, txnId: refId };
 }

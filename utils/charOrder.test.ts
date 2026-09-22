@@ -6,11 +6,11 @@ import { describe, it, expect } from 'vitest';
 import { DB } from './db';
 import { debitCharCardForOrder, refundCharOrder } from './charOrder';
 import { sumMoney } from './format';
+import { expenseOf } from './bankTx';
 
-// BankApp 今日支出统计（apps/BankApp.tsx）的原样映射：负值取 abs，
-// 正值里 category==='income' 是收入不计，其余按老语义计入支出。
-const spentContribution = (t: { amount: number; category: string }): number =>
-    t.amount < 0 ? -t.amount : (t.category === 'income' ? 0 : t.amount);
+// BankApp 今日支出统计（apps/BankApp.tsx）的口径：只认符号（负值取 abs，正数一律收入不计）。
+// v3 迁移已把旧的「正数金额支出」写法转负，所以这里不再按 category==='income' 兜底。
+const spentContribution = (t: { amount: number }): number => expenseOf(t);
 
 async function ensureCharCard(charId: string): Promise<void> {
     const bank = await DB.getBankState();
@@ -57,16 +57,17 @@ describe('refundCharOrder 退款不虚增今日支出', () => {
         }
     });
 
-    it('char 账本流水不进 user 今日支出（ownerId 过滤）', async () => {
-        // BankApp 加载统计原样口径：先按 ownerId 排除 char 流水，再做支出映射
+    it('char 账本流水不进 user 今日支出（ownerId 过滤）；正数一律不计支出', async () => {
+        // BankApp 加载统计口径：先按 ownerId 排除 char 流水，再做符号映射（负数=支出）
         const today = '2099-01-01';
         const txs = [
             { amount: -50, category: '购物', dateStr: today, ownerId: 'char-1' },
             { amount: -30, category: 'general', dateStr: today },
             { amount: 100, category: 'income', dateStr: today },
+            { amount: 12, category: 'general', dateStr: today },
         ];
         const scoped = txs.filter(t => t.dateStr === today && !(t as any).ownerId);
-        expect(scoped.length).toBe(2);
+        expect(scoped.length).toBe(3);
         expect(sumMoney(scoped.map(spentContribution))).toBe(30);
     });
 });

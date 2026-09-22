@@ -17,6 +17,12 @@ import { ContextBuilder } from '../utils/context';
 import { Coffee, ClipboardText, ChartBar, Coin, Target, UserCircle, BookOpen, Lightning, Storefront, CreditCard } from '@phosphor-icons/react';
 import { addLocalDays, getLocalDateKey } from '../utils/localDate';
 import { roundMoney, sumMoney } from '../utils/format';
+import {
+    DEFAULT_EXPENSE_CATEGORY, DEFAULT_INCOME_CATEGORY,
+    EXPENSE_CATEGORIES, EXPENSE_CATEGORY_ORDER,
+    INCOME_CATEGORIES, INCOME_CATEGORY_ORDER,
+} from '../utils/bankCategories';
+import { applyCardDelta, expenseOf, normalizeLegacyTransactions, rollbackTxBalance } from '../utils/bankTx';
 import { useLocalDateKey } from '../hooks/useLocalDateKey';
 import BankBrandIcon from '../components/BankBrandIcon';
 import BankCardFace from '../components/bank/BankCardFace';
@@ -86,6 +92,8 @@ const BankApp: React.FC = () => {
     const [txAmount, setTxAmount] = useState('');
     const [txType, setTxType] = useState<'expense' | 'income'>('expense');
     const [txNote, setTxNote] = useState('');
+    const [txCategory, setTxCategory] = useState<string>(DEFAULT_EXPENSE_CATEGORY);
+    const [txCardId, setTxCardId] = useState<string>('');
     const [goalName, setGoalName] = useState('');
     const [goalTarget, setGoalTarget] = useState('');
 
@@ -171,6 +179,19 @@ const BankApp: React.FC = () => {
         return () => { alive = false; };
     }, [actor, actorIsChar]);
     const scopedCards = actorIsChar ? (state.cards || []).filter(c => c.owner === 'char' && c.ownerId === actor) : (state.cards || []);
+    // 可记账的卡：角色视图=角色名下卡；用户视图=非角色卡（与购物/外卖的选卡口径一致）
+    const selectableCards = actorIsChar ? scopedCards : (state.cards || []).filter(c => c.owner !== 'char');
+    /** 「记一笔」统一入口：默认选中该身份的默认卡与默认分类 */
+    const openAddTxModal = (opts?: { type?: 'expense' | 'income'; note?: string }) => {
+        const type = opts?.type || 'expense';
+        const def = selectableCards.find(c => c.isDefault) || selectableCards[0];
+        setTxType(type);
+        setTxCategory(type === 'income' ? DEFAULT_INCOME_CATEGORY : DEFAULT_EXPENSE_CATEGORY);
+        setTxCardId(def?.id || '');
+        setTxAmount('');
+        setTxNote(opts?.note || '');
+        setShowAddTxModal(true);
+    };
     const [showCardModal, setShowCardModal] = useState(false);
     const [flippedCardId, setFlippedCardId] = useState<string | null>(null);
     const [cardDraft, setCardDraft] = useState({ name: '', tailNo: '', balance: '', brand: '', owner: undefined as 'user' | 'char' | undefined, ownerId: undefined as string | undefined });
@@ -196,7 +217,7 @@ const BankApp: React.FC = () => {
     const loadData = async () => {
         setIsBankDataLoaded(false);
         const savedState = await DB.getBankState();
-        const txs = await DB.getAllTransactions();
+        let txs = await DB.getAllTransactions();
 
         let currentState = savedState || INITIAL_STATE;
 
@@ -303,6 +324,20 @@ const BankApp: React.FC = () => {
             currentState = { ...currentState, dataVersion: 2 };
         }
 
+        // v3（一次性）：历史「正数金额 + 非 income 分类」的支出写法统一转负（生活记录旧手动入账也在这修）；
+        // 此后全链路只认符号（<0 支出 / >0 收入）。
+        if (!currentState.dataVersion || currentState.dataVersion < 3) {
+            const { list: normalized, changedIds } = normalizeLegacyTransactions(txs);
+            if (changedIds.length > 0) {
+                const changedSet = new Set(changedIds);
+                for (const t of normalized) {
+                    if (changedSet.has(t.id)) await DB.saveTransaction(t);
+                }
+            }
+            txs = normalized;
+            currentState = { ...currentState, dataVersion: 3 };
+        }
+
         // DAILY RESET LOGIC
         const today = getLocalDateKey();
 
@@ -310,11 +345,12 @@ const BankApp: React.FC = () => {
             // Find yesterday's expenses to calculate AP
             const yesterdayStr = addLocalDays(today, -1);
 
-            const yesterTx = txs.filter(t => t.dateStr === yesterdayStr);
+            // 昨日预算只看 user 自己的支出（ownerId 角色流水不进；收入不抵扣预算，口径同 353 行加载统计）
+            const yesterTx = txs.filter(t => t.dateStr === yesterdayStr && !t.ownerId);
             let gainedAP = 0;
 
             if (yesterTx.length > 0) {
-                const yesterSpent = yesterTx.reduce((sum, t) => sum + t.amount, 0);
+                const yesterSpent = sumMoney(yesterTx.map(expenseOf));
                 // Core Mechanic: AP = Budget - Spent
                 gainedAP = Math.max(0, Math.floor(currentState.config.dailyBudget - yesterSpent));
             } else {
@@ -350,9 +386,9 @@ const BankApp: React.FC = () => {
         }
 
         // 今日支出只看 user 自己的流水：带 ownerId 的 char 账本不进 user 预算（展示层 361 行同口径）
-        const todayTx = txs.filter(t => t.dateStr === today && !(t as any).ownerId);
-        // 支出合计（签名兼容）：负值流水=支出取 abs；正值流水里 category==='income' 是收入不计，其余按老语义支出计
-        const spent = sumMoney(todayTx.map(t => t.amount < 0 ? -t.amount : (t.category === 'income' ? 0 : t.amount)));
+        const todayTx = txs.filter(t => t.dateStr === today && !t.ownerId);
+        // 支出合计：只认符号（负值=支出取 abs；收入不计），v3 迁移后旧数据也统一在此口径
+        const spent = sumMoney(todayTx.map(expenseOf));
         const appeal = calculateAppeal(currentState.shop.staff.length, currentState.shop.unlockedRecipes);
 
         const finalState = { ...currentState, todaySpent: spent, shop: { ...currentState.shop, appeal } };
@@ -375,48 +411,55 @@ const BankApp: React.FC = () => {
     // --- Transactions ---
 
     const handleAddTransaction = async () => {
-        if (!txAmount || isNaN(parseFloat(txAmount)) || !txNote.trim()) {
-            addToast('请填写金额和内容哦', 'error');
-            return;
-        }
-        
         const amount = parseFloat(txAmount);
-        const today = getLocalDateKey();
-        
-        const signedAmount = txType === 'income' ? amount : -amount;
-        const newTx: BankTransaction = {
-            id: `tx-${Date.now()}`,
-            amount: signedAmount,
-            category: txType === 'income' ? 'income' : 'general',
-            note: txNote,
-            timestamp: Date.now(),
-            dateStr: today,
-            ownerId: actorIsChar ? actor : undefined
-        };
-        
-        await DB.saveTransaction(newTx);
-        if (actorIsChar) {
-            // char 流水：落库即可（带 ownerId），不进 user 记账/预算
-            setTxAmount('');
-            setTxNote('');
-            setShowAddTxModal(false);
-            addToast('已记入 ' + charName + ' 的账本');
+        if (!txAmount || !Number.isFinite(amount) || amount <= 0) {
+            addToast('请填写有效金额哦', 'error');
             return;
         }
 
+        const sign = txType === 'income' ? 1 : -1;
+        const signedAmount = roundMoney(sign * amount);
+        const today = getLocalDateKey();
+        const category = txCategory || (txType === 'income' ? DEFAULT_INCOME_CATEGORY : DEFAULT_EXPENSE_CATEGORY);
         const cur = stateRef.current;
-        const newSpent = txType === 'income' ? cur.todaySpent : roundMoney(cur.todaySpent + amount);
-        const newState = { ...cur, todaySpent: newSpent };
+        const cards = cur.cards || [];
+        const card = txCardId ? cards.find(c => c.id === txCardId) : undefined;
+
+        // 选卡联动余额：支出余额不足直接拒绝（订单类不受影响，余额归下单流程管）
+        if (card && txType === 'expense' && card.balance < amount) {
+            addToast(`「${card.name}·${card.tailNo}」余额不足，换张卡或选「不关联」`, 'error');
+            return;
+        }
+
+        const newTx: BankTransaction = {
+            id: `tx-${Date.now()}`,
+            amount: signedAmount,
+            category,
+            note: txNote.trim(),
+            timestamp: Date.now(),
+            dateStr: today,
+            ownerId: actorIsChar ? actor : undefined,
+            ...(card ? { cardId: card.id, ownsBalance: true } : {}),
+        };
+
+        await DB.saveTransaction(newTx);
+
+        const nextCards = card ? applyCardDelta(cards, card.id, signedAmount) : cards;
+        const newSpent = actorIsChar || txType === 'income' ? cur.todaySpent : roundMoney(cur.todaySpent + amount);
+        const newState = { ...cur, todaySpent: newSpent, cards: nextCards };
         stateRef.current = newState;
         setState(newState);
         await DB.saveBankState(newState);
 
         setTransactions(prev => [newTx, ...prev]);
-
         setShowAddTxModal(false);
         setTxAmount('');
         setTxNote('');
 
+        if (actorIsChar) {
+            addToast('已记入 ' + charName + ' 的账本');
+            return;
+        }
         if (newSpent > cur.config.dailyBudget) {
             addToast('⚠️ 警报：今日预算已超支！明天可能没有 AP 了...', 'info');
         } else {
@@ -429,24 +472,23 @@ const BankApp: React.FC = () => {
         if (!tx) return;
         await DB.deleteTransaction(id);
 
-        if ((tx as any).ownerId) {
-            // char 账本流水：不影响 user 预算
-            setTransactions(prev => prev.filter(t => t.id !== id));
-            addToast('记录已删除', 'success');
-            return;
-        }
-
         const cur = stateRef.current;
-        let newSpent = cur.todaySpent;
+        let nextState = cur;
+        // 手动记账的余额回滚（订单类 ownsBalance 缺省，余额归下单流程，删流水不退款）
+        if (tx.cardId && tx.ownsBalance) {
+            nextState = { ...nextState, cards: rollbackTxBalance(nextState.cards || [], tx) };
+        }
+        // 只有「user 自己的今日支出」影响 todaySpent；收入删除不改变支出（原实现会把收入额从支出里扣掉）
         const today = getLocalDateKey();
-        if (tx.dateStr === today) {
-            newSpent = Math.max(0, roundMoney(cur.todaySpent - Math.abs(tx.amount)));
+        if (!tx.ownerId && tx.dateStr === today && tx.amount < 0) {
+            nextState = { ...nextState, todaySpent: Math.max(0, roundMoney(nextState.todaySpent - expenseOf(tx))) };
+        }
+        if (nextState !== cur) {
+            stateRef.current = nextState;
+            setState(nextState);
+            await DB.saveBankState(nextState);
         }
 
-        const newState = { ...cur, todaySpent: newSpent };
-        stateRef.current = newState;
-        setState(newState);
-        await DB.saveBankState(newState);
         setTransactions(prev => prev.filter(t => t.id !== id));
         addToast('记录已删除', 'success');
     };
@@ -862,7 +904,7 @@ ${previousGuestbook}
                             ?
                         </button>
                         <button
-                            onClick={() => { setShowAddTxModal(true);  }}
+                            onClick={() => openAddTxModal()}
                             className="flex items-center gap-1.5 bg-gradient-to-r from-[#FF8A65] to-[#FF7043] text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-lg hover:shadow-xl active:scale-95 transition-all"
                             style={{ boxShadow: '0 4px 14px rgba(255, 112, 67, 0.4)' }}
                         >
@@ -871,7 +913,7 @@ ${previousGuestbook}
                         </button>
                         {actorIsChar && (
                             <button
-                                onClick={() => { setTxType('income'); setTxAmount(''); setTxNote(charName + ' 的零花钱/进账'); setShowAddTxModal(true); }}
+                                onClick={() => openAddTxModal({ type: 'income', note: charName + ' 的零花钱/进账' })}
                                 className="flex items-center gap-1.5 bg-gradient-to-r from-[#66BB6A] to-[#43A047] text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-lg hover:shadow-xl active:scale-95 transition-all"
                                 style={{ boxShadow: '0 4px 14px rgba(102, 187, 106, 0.4)' }}
                             >
@@ -1012,6 +1054,7 @@ ${previousGuestbook}
                             onDeleteTx={handleDeleteTransaction}
                             apiConfig={apiConfig}
                             dailyBudget={state.config.dailyBudget}
+                            cards={state.cards || []}
                         />
                     </div>
                 )}
@@ -1221,29 +1264,62 @@ ${previousGuestbook}
             }>
                 <div className="space-y-5">
                     <div className="flex gap-2">
-                        <button onClick={() => setTxType('expense')} className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${txType === 'expense' ? 'bg-[#FF7043] text-white shadow-md' : 'bg-[#FDF6E3] text-[#A1887F] border border-[#E8DCC8]'}`}>− 支出</button>
-                        <button onClick={() => setTxType('income')} className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${txType === 'income' ? 'bg-[#66BB6A] text-white shadow-md' : 'bg-[#FDF6E3] text-[#A1887F] border border-[#E8DCC8]'}`}>+ 收入</button>
+                        <button onClick={() => { setTxType('expense'); if (!EXPENSE_CATEGORIES[txCategory]) setTxCategory(DEFAULT_EXPENSE_CATEGORY); }} className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${txType === 'expense' ? 'bg-[#FF7043] text-white shadow-md' : 'bg-[#FDF6E3] text-[#A1887F] border border-[#E8DCC8]'}`}>− 支出</button>
+                        <button onClick={() => { setTxType('income'); if (!INCOME_CATEGORIES[txCategory]) setTxCategory(DEFAULT_INCOME_CATEGORY); }} className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${txType === 'income' ? 'bg-[#66BB6A] text-white shadow-md' : 'bg-[#FDF6E3] text-[#A1887F] border border-[#E8DCC8]'}`}>+ 收入</button>
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold text-[#A1887F] uppercase tracking-wider mb-2 block">分类</label>
+                        <div className={`grid gap-1.5 ${txType === 'income' ? 'grid-cols-3' : 'grid-cols-4'}`}>
+                            {(txType === 'income' ? INCOME_CATEGORY_ORDER : EXPENSE_CATEGORY_ORDER).map(key => {
+                                const meta = (txType === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES)[key];
+                                const selected = txCategory === key;
+                                return (
+                                    <button key={key} onClick={() => setTxCategory(key)}
+                                        className={`flex flex-col items-center gap-0.5 py-2 rounded-xl border transition-all active:scale-95 ${selected ? 'bg-white' : 'bg-[#FDF6E3] border-[#E8DCC8]'}`}
+                                        style={selected ? { borderColor: meta.color, boxShadow: `0 2px 8px ${meta.color}33` } : undefined}>
+                                        <img src={meta.icon} className="w-5 h-5" alt="" />
+                                        <span className="text-[10px] font-bold" style={{ color: selected ? meta.color : '#A1887F' }}>{meta.label}</span>
+                                    </button>
+                                );
+                            })}
+                        </div>
                     </div>
                     <div>
                         <label className="text-xs font-bold text-[#A1887F] uppercase tracking-wider mb-2 block">金额</label>
                         <div className="relative">
-                            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-[#A1887F] text-lg font-bold">{state.config.currencySymbol}</span>
+                            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-lg font-bold transition-colors" style={{ color: txType === 'income' ? '#66BB6A' : '#A1887F' }}>{state.config.currencySymbol}</span>
                             <input
                                 type="number"
                                 value={txAmount}
                                 onChange={e => setTxAmount(e.target.value)}
-                                className="w-full bg-[#FDF6E3] border-2 border-[#E8DCC8] rounded-2xl pl-10 pr-4 py-4 text-2xl font-black text-[#5D4037] focus:border-[#FF7043] outline-none transition-colors"
+                                className={`w-full bg-[#FDF6E3] border-2 rounded-2xl pl-10 pr-4 py-4 text-2xl font-black outline-none transition-colors ${txType === 'income' ? 'text-[#43A047] border-[#C8E6C9] focus:border-[#66BB6A]' : 'text-[#5D4037] border-[#E8DCC8] focus:border-[#FF7043]'}`}
                                 placeholder="0.00"
                             />
                         </div>
                     </div>
                     <div>
-                        <label className="text-xs font-bold text-[#A1887F] uppercase tracking-wider mb-2 block">备注</label>
+                        <label className="text-xs font-bold text-[#A1887F] uppercase tracking-wider mb-2 block">记到哪张卡 <span className="normal-case font-medium">（可不关联）</span></label>
+                        <div className="flex flex-wrap gap-1.5">
+                            <button onClick={() => setTxCardId('')}
+                                className={`px-3 py-2 rounded-xl text-[11px] font-bold border transition-all active:scale-95 ${txCardId === '' ? 'border-[#8D6E63] bg-white text-[#5D4037] shadow-sm' : 'border-[#E8DCC8] bg-[#FDF6E3] text-[#A1887F]'}`}>
+                                不关联
+                            </button>
+                            {selectableCards.map(card => (
+                                <button key={card.id} onClick={() => setTxCardId(card.id)}
+                                    className={`px-3 py-2 rounded-xl text-[11px] font-bold border transition-all active:scale-95 ${txCardId === card.id ? 'bg-white shadow-sm' : 'bg-[#FDF6E3] border-[#E8DCC8] text-[#A1887F]'}`}
+                                    style={txCardId === card.id ? { borderColor: '#5C6BC0', color: '#3949AB' } : undefined}>
+                                    {card.name} · {card.tailNo}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold text-[#A1887F] uppercase tracking-wider mb-2 block">备注 <span className="normal-case font-medium">（选填）</span></label>
                         <input
                             value={txNote}
                             onChange={e => setTxNote(e.target.value)}
                             className="w-full bg-[#FDF6E3] border-2 border-[#E8DCC8] rounded-2xl px-4 py-4 text-base font-medium text-[#5D4037] focus:border-[#FF7043] outline-none transition-colors"
-                            placeholder="买什么了？"
+                            placeholder={txType === 'income' ? '这笔从哪来？' : '买什么了？'}
                         />
                     </div>
                 </div>

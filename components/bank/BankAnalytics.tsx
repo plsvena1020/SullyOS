@@ -1,10 +1,12 @@
 
 import React, { useMemo, useState, useEffect } from 'react';
-import { BankTransaction, SavingsGoal, APIConfig } from '../../types';
+import { BankCard, BankTransaction, SavingsGoal, APIConfig } from '../../types';
 import { safeResponseJson } from '../../utils/safeApi';
 import { getLocalDateKey } from '../../utils/localDate';
 import { shareOrDownloadFile } from '../../utils/shareExport';
 import { formatMoney, roundMoney, sumMoney } from '../../utils/format';
+import { EXPENSE_CATEGORIES, categoryMeta, resolveCategory } from '../../utils/bankCategories';
+import { expenseOf, incomeOf } from '../../utils/bankTx';
 
 interface Props {
     transactions: BankTransaction[];
@@ -13,21 +15,10 @@ interface Props {
     onDeleteTx: (id: string) => void;
     apiConfig?: APIConfig;
     dailyBudget?: number;
+    cards?: BankCard[];
 }
 
-// Category definitions with icons and colors
-const CATEGORIES: Record<string, { icon: string; label: string; color: string; gradient: string }> = {
-    food: { icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f354.png', label: '餐饮', color: '#FF7043', gradient: 'from-orange-400 to-red-500' },
-    transport: { icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f697.png', label: '交通', color: '#42A5F5', gradient: 'from-blue-400 to-indigo-500' },
-    shopping: { icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f6cd.png', label: '购物', color: '#AB47BC', gradient: 'from-purple-400 to-pink-500' },
-    entertainment: { icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f3ae.png', label: '娱乐', color: '#66BB6A', gradient: 'from-green-400 to-teal-500' },
-    bills: { icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f4f1.png', label: '账单', color: '#FFA726', gradient: 'from-yellow-400 to-orange-500' },
-    health: { icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f48a.png', label: '医疗', color: '#EF5350', gradient: 'from-red-400 to-rose-500' },
-    education: { icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f4da.png', label: '学习', color: '#5C6BC0', gradient: 'from-indigo-400 to-purple-500' },
-    other: { icon: 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f4e6.png', label: '其他', color: '#78909C', gradient: 'from-gray-400 to-slate-500' }
-};
-
-const BankAnalytics: React.FC<Props> = ({ transactions, goals, currency, onDeleteTx, apiConfig, dailyBudget = 100 }) => {
+const BankAnalytics: React.FC<Props> = ({ transactions, goals, currency, onDeleteTx, apiConfig, dailyBudget = 100, cards = [] }) => {
     const [viewMode, setViewMode] = useState<'today' | 'week' | 'month'>('today');
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [categorizedTx, setCategorizedTx] = useState<Record<string, string>>({});
@@ -57,22 +48,34 @@ const BankAnalytics: React.FC<Props> = ({ transactions, goals, currency, onDelet
         });
     }, [transactions, viewMode, today, weekStart, currentMonth]);
 
-    // Calculate totals
-    const totalSpent = useMemo(() => sumMoney(filteredTx.map(tx => tx.amount)), [filteredTx]);
+    // 分类解析：AI 会话内覆盖只作用于支出笔（收入按注册表解析，绿色语义由符号决定）
+    const resolveTx = (tx: BankTransaction) => {
+        const aiKey = categorizedTx[tx.id];
+        if (aiKey && EXPENSE_CATEGORIES[aiKey] && tx.amount < 0) {
+            return { key: aiKey, meta: EXPENSE_CATEGORIES[aiKey], isIncome: false };
+        }
+        return resolveCategory(tx);
+    };
+
+    // Calculate totals（收支分离：收入不再冲减支出）
+    const totalExpense = useMemo(() => sumMoney(filteredTx.map(expenseOf)), [filteredTx]);
+    const totalIncome = useMemo(() => sumMoney(filteredTx.map(incomeOf)), [filteredTx]);
+    const filteredExpenseTx = useMemo(() => filteredTx.filter(t => t.amount < 0), [filteredTx]);
 
     // CSV Export
     const handleExportCSV = async () => {
         if (transactions.length === 0) return;
         const BOM = '\uFEFF';
-        const header = '日期,时间,金额,备注,分类\n';
-        const rows = transactions
+        const header = '日期,时间,收支,金额,分类,银行卡,备注\n';
+        const rows = [...transactions]
             .sort((a, b) => b.timestamp - a.timestamp)
             .map(tx => {
                 const date = tx.dateStr;
                 const time = new Date(tx.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                const cat = CATEGORIES[categorizedTx[tx.id] || guessCategory(tx.note)]?.label || '其他';
-                const note = tx.note.replace(/,/g, '，').replace(/"/g, '""');
-                return `${date},${time},${formatMoney(tx.amount)},"${note}",${cat}`;
+                const resolved = resolveTx(tx);
+                const card = tx.cardId ? cards.find(c => c.id === tx.cardId) : undefined;
+                const note = (tx.note || resolved.meta.label).replace(/,/g, '，').replace(/"/g, '""');
+                return `${date},${time},${tx.amount < 0 ? '支出' : '收入'},${formatMoney(Math.abs(tx.amount))},"${resolved.meta.label}","${card ? `${card.name}·${card.tailNo}` : ''}","${note}"`;
             })
             .join('\n');
         const csv = BOM + header + rows;
@@ -84,43 +87,30 @@ const BankAnalytics: React.FC<Props> = ({ transactions, goals, currency, onDelet
         });
     };
 
-    // Group by category
+    // Group by category（只统计支出）
     const categoryData = useMemo(() => {
         const groups: Record<string, { total: number; count: number; items: BankTransaction[] }> = {};
 
-        filteredTx.forEach(tx => {
-            const cat = categorizedTx[tx.id] || guessCategory(tx.note);
+        filteredExpenseTx.forEach(tx => {
+            const cat = resolveTx(tx).key;
             if (!groups[cat]) groups[cat] = { total: 0, count: 0, items: [] };
-            groups[cat].total += tx.amount;
+            groups[cat].total += expenseOf(tx);
             groups[cat].count++;
             groups[cat].items.push(tx);
         });
 
         return Object.entries(groups)
-            .map(([key, data]) => ({ category: key, ...data, total: roundMoney(data.total), percentage: totalSpent > 0 ? (data.total / totalSpent) * 100 : 0 }))
+            .map(([key, data]) => ({ category: key, ...data, total: roundMoney(data.total), percentage: totalExpense > 0 ? (data.total / totalExpense) * 100 : 0 }))
             .sort((a, b) => b.total - a.total);
-    }, [filteredTx, categorizedTx, totalSpent]);
+    }, [filteredExpenseTx, categorizedTx, totalExpense]);
 
-    // Simple keyword-based category guessing
-    function guessCategory(note: string): string {
-        const lower = note.toLowerCase();
-        if (/饭|餐|吃|外卖|食|奶茶|咖啡|早|午|晚|火锅|烧烤|面|饮/.test(lower)) return 'food';
-        if (/车|地铁|公交|打车|油|加油|停车|出租/.test(lower)) return 'transport';
-        if (/买|购|淘宝|京东|拼多多|商场|超市|衣服/.test(lower)) return 'shopping';
-        if (/游戏|电影|娱乐|ktv|酒吧|玩/.test(lower)) return 'entertainment';
-        if (/话费|水电|房租|网费|会员|订阅/.test(lower)) return 'bills';
-        if (/医|药|健康|体检|看病/.test(lower)) return 'health';
-        if (/书|课|学习|培训|教育/.test(lower)) return 'education';
-        return 'other';
-    }
-
-    // AI categorization and summary
+    // AI categorization and summary（只分析支出笔，收入不参与消费分析）
     const analyzeWithAI = async () => {
-        if (!apiConfig?.apiKey || filteredTx.length === 0) return;
+        if (!apiConfig?.apiKey || filteredExpenseTx.length === 0) return;
 
         setIsAnalyzing(true);
         try {
-            const txList = filteredTx.map(tx => `- ${tx.note}: ${currency}${formatMoney(tx.amount)}`).join('\n');
+            const txList = filteredExpenseTx.map(tx => `- ${tx.note || resolveTx(tx).meta.label}: ${currency}${formatMoney(expenseOf(tx))}`).join('\n');
             const periodLabel = viewMode === 'today' ? '今天' : viewMode === 'week' ? '本周' : '本月';
 
             const prompt = `作为一个财务分析助手，分析以下消费记录：
@@ -150,7 +140,7 @@ ${txList}
 
                 // Map categories to transaction IDs
                 const newCategories: Record<string, string> = { ...categorizedTx };
-                filteredTx.forEach(tx => {
+                filteredExpenseTx.forEach(tx => {
                     if (result.categories[tx.note]) {
                         newCategories[tx.id] = result.categories[tx.note];
                     }
@@ -169,8 +159,8 @@ ${txList}
     const totalSaved = useMemo(() => sumMoney(goals.map(g => g.currentAmount)), [goals]);
     const nextGoal = useMemo(() => goals.find(g => !g.isCompleted) || goals[0], [goals]);
 
-    // Budget status for today
-    const budgetRemaining = roundMoney(dailyBudget - (viewMode === 'today' ? totalSpent : 0));
+    // Budget status for today（只看支出，收入不占也不还预算）
+    const budgetRemaining = roundMoney(dailyBudget - (viewMode === 'today' ? totalExpense : 0));
     const budgetStatus = budgetRemaining >= 0 ? 'good' : 'over';
 
     return (
@@ -211,8 +201,13 @@ ${txList}
                             {viewMode === 'today' ? '今日支出' : viewMode === 'week' ? '本周支出' : '本月支出'}
                         </div>
                         <div className="text-5xl font-black text-white font-mono tracking-tight">
-                            {currency}{totalSpent.toFixed(0)}
+                            {currency}{totalExpense.toFixed(0)}
                         </div>
+                        {totalIncome > 0 && (
+                            <div className="text-sm mt-1 font-mono font-bold text-[#A5D6A7]">
+                                收入 +{currency}{formatMoney(totalIncome)}
+                            </div>
+                        )}
                         <div className="text-sm text-white/50 mt-1">
                             共 {filteredTx.length} 笔
                         </div>
@@ -241,7 +236,7 @@ ${txList}
                                     className={`h-full rounded-full transition-all duration-500 ${
                                         budgetStatus === 'good' ? 'bg-green-400' : 'bg-red-400'
                                     }`}
-                                    style={{ width: `${Math.min(100, (totalSpent / dailyBudget) * 100)}%` }}
+                                    style={{ width: `${Math.min(100, (totalExpense / dailyBudget) * 100)}%` }}
                                 ></div>
                             </div>
                             <div className="text-[10px] text-white/50 mt-1 text-right">
@@ -256,7 +251,7 @@ ${txList}
             <div className="p-5 space-y-5">
 
                 {/* AI Summary Card */}
-                {(aiSummary || filteredTx.length > 0) && (
+                {(aiSummary || filteredExpenseTx.length > 0) && (
                     <div className="bg-white rounded-3xl p-5 shadow-lg border border-[#E8DCC8] relative overflow-hidden">
                         <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-[#FFE0B2]/30 to-transparent rounded-full -mr-8 -mt-8"></div>
 
@@ -267,7 +262,7 @@ ${txList}
                             </div>
                             <button
                                 onClick={analyzeWithAI}
-                                disabled={isAnalyzing || !apiConfig?.apiKey}
+                                disabled={isAnalyzing || !apiConfig?.apiKey || filteredExpenseTx.length === 0}
                                 className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
                                     isAnalyzing
                                         ? 'bg-[#EFEBE9] text-[#BCAAA4]'
@@ -306,7 +301,7 @@ ${txList}
 
                         <div className="space-y-3">
                             {categoryData.map(({ category, total, count, percentage }) => {
-                                const cat = CATEGORIES[category] || CATEGORIES.other;
+                                const cat = categoryMeta(category, false);
                                 return (
                                     <div key={category} className="group">
                                         <div className="flex items-center justify-between mb-1.5">
@@ -338,7 +333,7 @@ ${txList}
                     <div className="flex items-center justify-between mb-4">
                         <div className="flex items-center gap-2">
                             <span className="w-8 h-8 bg-gradient-to-br from-[#66BB6A] to-[#43A047] rounded-xl flex items-center justify-center text-lg shadow-md"><img src="https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f4dd.png" className="w-5 h-5" alt="" /></span>
-                            <span className="text-sm font-bold text-[#5D4037]">消费明细</span>
+                            <span className="text-sm font-bold text-[#5D4037]">收支明细</span>
                         </div>
                         {transactions.length > 0 && (
                             <button onClick={handleExportCSV} className="flex items-center gap-1 px-3 py-1.5 bg-[#FDF6E3] hover:bg-[#FFF8E1] border border-[#E8DCC8] rounded-xl text-[10px] font-bold text-[#8D6E63] active:scale-95 transition-all">
@@ -352,29 +347,34 @@ ${txList}
                         <div className="text-center py-12">
                             <div className="mb-3 opacity-40"><img src="https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f4ed.png" className="w-16 h-16 mx-auto" alt="" /></div>
                             <div className="text-sm text-[#A1887F]">
-                                {viewMode === 'today' ? '今天还没有消费记录' : viewMode === 'week' ? '本周暂无记录' : '本月暂无记录'}
+                                {viewMode === 'today' ? '今天还没有收支记录' : viewMode === 'week' ? '本周暂无记录' : '本月暂无记录'}
                             </div>
                             <div className="text-xs text-[#BCAAA4] mt-1">点击右上角开始记账吧！</div>
                         </div>
                     ) : (
                         <div className="space-y-3 max-h-[400px] overflow-y-auto no-scrollbar">
                             {filteredTx.map(tx => {
-                                const cat = CATEGORIES[categorizedTx[tx.id] || guessCategory(tx.note)] || CATEGORIES.other;
+                                const resolved = resolveTx(tx);
+                                const isExpense = tx.amount < 0;
+                                const card = tx.cardId ? cards.find(c => c.id === tx.cardId) : undefined;
                                 return (
                                     <div key={tx.id} className="flex items-center justify-between p-3 rounded-2xl bg-[#FDF6E3] hover:bg-[#FFF8E1] transition-colors group relative">
                                         <div className="flex items-center gap-3">
                                             <div className="w-11 h-11 rounded-xl bg-white flex items-center justify-center shadow-inner">
-                                                <img src={cat.icon} className="w-6 h-6" alt="" />
+                                                <img src={resolved.meta.icon} className="w-6 h-6" alt="" />
                                             </div>
                                             <div>
-                                                <div className="font-bold text-[#5D4037] text-sm">{tx.note}</div>
+                                                <div className="font-bold text-[#5D4037] text-sm">{tx.note || resolved.meta.label}</div>
                                                 <div className="text-[10px] text-[#A1887F] flex items-center gap-2">
                                                     <span>{new Date(tx.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
-                                                    <span className="px-1.5 py-0.5 bg-white rounded text-[9px]" style={{ color: cat.color }}>{cat.label}</span>
+                                                    <span className="px-1.5 py-0.5 bg-white rounded text-[9px]" style={{ color: resolved.meta.color }}>{resolved.meta.label}</span>
+                                                    {card && <span className="px-1.5 py-0.5 bg-white rounded text-[9px] text-[#7986CB]">{card.name}·{card.tailNo}</span>}
                                                 </div>
                                             </div>
                                         </div>
-                                        <div className="font-mono font-bold text-[#E64A19]">-{currency}{formatMoney(tx.amount)}</div>
+                                        <div className={`font-mono font-bold ${isExpense ? 'text-[#E64A19]' : 'text-[#43A047]'}`}>
+                                            {isExpense ? '−' : '+'}{currency}{formatMoney(Math.abs(tx.amount))}
+                                        </div>
 
                                         <button
                                             onClick={() => onDeleteTx(tx.id)}

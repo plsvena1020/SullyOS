@@ -63,6 +63,7 @@ export async function appendCharPurchaseTxn(
     dateStr,
     ownerId: charId,
     linkedPurchaseId: p.purchaseId,
+    cardId: cardId || undefined,
   };
   await DB.saveTransaction(tx);
   return { bankTxnId, cardId, cardLabel, deducted };

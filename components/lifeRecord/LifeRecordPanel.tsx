@@ -2,14 +2,21 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useOS } from '../../context/OSContext';
 import { DB } from '../../utils/db';
-import { BankTransaction, LifeRecord, LifeRecordModule, LifeRecordSettings, MedPlan } from '../../types';
+import { BankCard, BankTransaction, LifeRecord, LifeRecordModule, LifeRecordSettings, MedPlan } from '../../types';
 import {
     DEFAULT_CYCLE_LENGTH, DEFAULT_PERIOD_LENGTH, computePeriodStatus, getPeriodIntervals,
     isMedPlanDueToday, lifeAddDays, medFreqLabel, weekStartOf,
 } from '../../utils/lifeRecords';
 import { useLocalDateKey } from '../../hooks/useLocalDateKey';
 import { markAmsgStateDirtyForAll } from '../../utils/amsgStateSync';
-import { formatMoney, sumMoney } from '../../utils/format';
+import { formatMoney, roundMoney, sumMoney } from '../../utils/format';
+import {
+    DEFAULT_EXPENSE_CATEGORY, DEFAULT_INCOME_CATEGORY,
+    EXPENSE_CATEGORIES, EXPENSE_CATEGORY_ORDER,
+    INCOME_CATEGORIES, INCOME_CATEGORY_ORDER,
+    resolveCategory,
+} from '../../utils/bankCategories';
+import { applyCardDelta, expenseOf, incomeOf, rollbackTxBalance } from '../../utils/bankTx';
 
 /**
  * 档案 App「生活记录」面板 —— 复古优雅浅色系，但四个模块各有独立版式：
@@ -271,6 +278,7 @@ const LifeRecordPanel: React.FC = () => {
     const [plans, setPlans] = useState<MedPlan[]>([]);
     const [settings, setSettings] = useState<LifeRecordSettings | null>(null);
     const [txs, setTxs] = useState<BankTransaction[]>([]);
+    const [cards, setCards] = useState<BankCard[]>([]);
     const [loaded, setLoaded] = useState(false);
     const [hideCandidate, setHideCandidate] = useState<LifeRecordModule | null>(null);
     const [showRestore, setShowRestore] = useState(false);
@@ -297,16 +305,19 @@ const LifeRecordPanel: React.FC = () => {
      * 首次进面板只是读，不算改动，所以 mutated 传 false。
      */
     const reload = async (mutated = true) => {
-        const [r, p, s, t] = await Promise.all([
+        const [r, p, s, t, bank] = await Promise.all([
             DB.getAllLifeRecords().catch(() => [] as LifeRecord[]),
             DB.getAllMedPlans().catch(() => [] as MedPlan[]),
             DB.getLifeRecordSettings().catch(() => null),
             DB.getAllTransactions().catch(() => [] as BankTransaction[]),
+            DB.getBankState().catch(() => null),
         ]);
         setRecords(r.sort((a, b) => b.timestamp - a.timestamp));
         setPlans(p.sort((a, b) => a.time.localeCompare(b.time)));
         setSettings(s);
-        setTxs(t.sort((a, b) => b.timestamp - a.timestamp));
+        // 记账页只展示用户自己的流水；角色流水归查手机·银行卡，不混进生活记录
+        setTxs(t.filter(x => !x.ownerId).sort((a, b) => b.timestamp - a.timestamp));
+        setCards(((bank?.cards || []) as BankCard[]).filter(c => c.owner !== 'char'));
         setLoaded(true);
         if (mutated) markAmsgStateDirtyForAll({ characters, userProfile, groups, realtimeConfig });
     };
@@ -514,20 +525,39 @@ const LifeRecordPanel: React.FC = () => {
     // ─── 记账（银行同一本账） ───
     const [txAmount, setTxAmount] = useState('');
     const [txNote, setTxNote] = useState('');
+    const [txType, setTxType] = useState<'expense' | 'income'>('expense');
+    const [txCategory, setTxCategory] = useState<string>(DEFAULT_EXPENSE_CATEGORY);
+    const [txCardId, setTxCardId] = useState<string>('');
     const dayTxs = useMemo(() => txs.filter(t => t.dateStr === recordDate), [txs, recordDate]);
-    const dayTotal = useMemo(() => sumMoney(dayTxs.map(t => t.amount)), [dayTxs]);
-    const monthTotal = useMemo(() => {
+    const dayExpense = useMemo(() => sumMoney(dayTxs.map(expenseOf)), [dayTxs]);
+    const dayIncome = useMemo(() => sumMoney(dayTxs.map(incomeOf)), [dayTxs]);
+    const monthTotals = useMemo(() => {
         const monthKey = recordDate.slice(0, 7);
-        return sumMoney(txs.filter(t => (t.dateStr || '').startsWith(monthKey)).map(t => t.amount));
+        const monthTxs = txs.filter(t => (t.dateStr || '').startsWith(monthKey));
+        return { expense: sumMoney(monthTxs.map(expenseOf)), income: sumMoney(monthTxs.map(incomeOf)) };
     }, [txs, recordDate]);
 
     const handleAddTx = async () => {
         const amount = parseFloat(txAmount);
-        if (isNaN(amount) || amount <= 0 || !txNote.trim()) { addToast('请填写金额和用途哦', 'error'); return; }
+        if (isNaN(amount) || amount <= 0) { addToast('请填写有效金额哦', 'error'); return; }
+        const sign = txType === 'income' ? 1 : -1;
+        const signedAmount = roundMoney(sign * amount);
+        const card = txCardId ? cards.find(c => c.id === txCardId) : undefined;
+        // 选卡联动余额：支出余额不足拒绝（口径同银行 App）
+        if (card && txType === 'expense' && card.balance < amount) {
+            addToast(`「${card.name}·${card.tailNo}」余额不足，换张卡或选「不关联」`, 'error');
+            return;
+        }
         await DB.saveTransaction({
-            id: newId('tx-life'), amount, category: 'general',
+            id: newId('tx-life'), amount: signedAmount,
+            category: txCategory || (txType === 'income' ? DEFAULT_INCOME_CATEGORY : DEFAULT_EXPENSE_CATEGORY),
             note: txNote.trim(), timestamp: Date.now(), dateStr: recordDate,
+            ...(card ? { cardId: card.id, ownsBalance: true } : {}),
         });
+        if (card) {
+            const bank = await DB.getBankState().catch(() => null);
+            if (bank) await DB.saveBankState({ ...bank, cards: applyCardDelta(bank.cards || [], card.id, signedAmount) });
+        }
         setTxAmount(''); setTxNote('');
         await reload();
         addToast(recordDate === today ? '记账成功' : `已补记到 ${fmtCN(recordDate)}`, 'success');
@@ -884,28 +914,71 @@ const LifeRecordPanel: React.FC = () => {
                             <div className="flex-1">
                                 <div className="text-[9px] mb-0.5" style={{ color: FADE, letterSpacing: '0.25em' }}>{recordDateLabel}支出</div>
                                 <div style={{ fontFamily: SERIF, color: THEMES.expense.accent }}>
-                                    <span className="text-[34px] font-bold leading-none tabular-nums">{formatMoney(dayTotal)}</span>
+                                    <span className="text-[34px] font-bold leading-none tabular-nums">{formatMoney(dayExpense)}</span>
                                 </div>
+                                {dayIncome > 0 && (
+                                    <div className="text-[11px] font-bold mt-1 tabular-nums" style={{ color: '#5d7345', fontFamily: SERIF }}>
+                                        收入 +{formatMoney(dayIncome)}
+                                    </div>
+                                )}
                             </div>
                             <span className="w-px mx-3" style={{ background: THEMES.expense.soft }} />
                             <div className="text-right flex flex-col justify-end pb-1">
-                                <div className="text-[9px] mb-0.5" style={{ color: FADE, letterSpacing: '0.16em' }}>{recordMonthLabel}</div>
-                                <div className="text-sm font-bold tabular-nums" style={{ fontFamily: SERIF, color: INK }}>{formatMoney(monthTotal)}</div>
+                                <div className="text-[9px] mb-0.5" style={{ color: FADE, letterSpacing: '0.16em' }}>{recordMonthLabel}支出</div>
+                                <div className="text-sm font-bold tabular-nums" style={{ fontFamily: SERIF, color: INK }}>{formatMoney(monthTotals.expense)}</div>
+                                {monthTotals.income > 0 && (
+                                    <div className="text-[10px] font-bold tabular-nums mt-0.5" style={{ color: '#5d7345', fontFamily: SERIF }}>收 +{formatMoney(monthTotals.income)}</div>
+                                )}
                             </div>
                         </div>
                         <p className="text-[9px] italic mt-2 px-1" style={{ color: FAINT, fontFamily: SERIF }}>
                             与银行 App 共用一本账
                         </p>
-                        <div className="flex items-end gap-2.5 mt-3 pt-3" style={{ borderTop: `1px dashed ${THEMES.expense.soft}` }}>
-                            <input value={txAmount} onChange={e => setTxAmount(e.target.value)} inputMode="decimal" placeholder="金额"
-                                className={`w-16 ${inkInputCls}`} style={inkInputStyle(THEMES.expense)} />
-                            <input value={txNote} onChange={e => setTxNote(e.target.value)} placeholder="用途（奶茶 / 午饭…）"
-                                className={`flex-1 min-w-0 ${inkInputCls}`} style={inkInputStyle(THEMES.expense)} />
-                            <button onClick={handleAddTx}
-                                className="shrink-0 px-4 py-1.5 rounded-full text-[11px] font-bold active:scale-95 transition-transform"
-                                style={accentBtn(THEMES.expense)}>
-                                入账
-                            </button>
+                        <div className="mt-3 pt-3" style={{ borderTop: `1px dashed ${THEMES.expense.soft}` }}>
+                            <div className="flex items-center gap-2">
+                                {(['expense', 'income'] as const).map(t => (
+                                    <button key={t} onClick={() => { setTxType(t); setTxCategory(t === 'income' ? DEFAULT_INCOME_CATEGORY : DEFAULT_EXPENSE_CATEGORY); }}
+                                        className="px-3 py-1 rounded-full text-[10px] font-bold active:scale-95 transition-transform"
+                                        style={txType === t
+                                            ? { background: t === 'income' ? '#5d7345' : THEMES.expense.accent, color: '#fdfbf7' }
+                                            : { color: FADE, border: `1px solid ${THEMES.expense.soft}` }}>
+                                        {t === 'income' ? '收入' : '支出'}
+                                    </button>
+                                ))}
+                                <span className="flex-1" />
+                                {cards.length > 0 && (
+                                    <select value={txCardId} onChange={e => setTxCardId(e.target.value)}
+                                        className="text-[10px] rounded-full px-2 py-1 outline-none max-w-[50%]"
+                                        style={{ fontFamily: SERIF, color: INK, background: '#fdfbf7', border: `1px solid ${THEMES.expense.soft}` }}>
+                                        <option value="">不关联卡</option>
+                                        {cards.map(c => <option key={c.id} value={c.id}>{c.name}·{c.tailNo}</option>)}
+                                    </select>
+                                )}
+                            </div>
+                            <div className="flex flex-wrap gap-1.5 mt-2.5">
+                                {(txType === 'income' ? INCOME_CATEGORY_ORDER : EXPENSE_CATEGORY_ORDER).map(key => {
+                                    const meta = (txType === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES)[key];
+                                    const selected = txCategory === key;
+                                    return (
+                                        <button key={key} onClick={() => setTxCategory(key)}
+                                            className="px-2 py-0.5 rounded-full text-[10px] font-bold active:scale-95 transition-transform"
+                                            style={selected ? { background: meta.color, color: '#fdfbf7' } : { color: FADE, border: `1px solid ${THEMES.expense.soft}` }}>
+                                            {meta.label}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            <div className="flex items-end gap-2.5 mt-2.5">
+                                <input value={txAmount} onChange={e => setTxAmount(e.target.value)} inputMode="decimal" placeholder="金额"
+                                    className={`w-16 ${inkInputCls}`} style={inkInputStyle(THEMES.expense)} />
+                                <input value={txNote} onChange={e => setTxNote(e.target.value)} placeholder="用途（选填）"
+                                    className={`flex-1 min-w-0 ${inkInputCls}`} style={inkInputStyle(THEMES.expense)} />
+                                <button onClick={handleAddTx}
+                                    className="shrink-0 px-4 py-1.5 rounded-full text-[11px] font-bold active:scale-95 transition-transform"
+                                    style={accentBtn(THEMES.expense)}>
+                                    入账
+                                </button>
+                            </div>
                         </div>
                     </LedgerCard>
 
@@ -917,17 +990,33 @@ const LifeRecordPanel: React.FC = () => {
                             </p>
                         ) : (
                             <div>
-                                {dayTxs.map(t => (
-                                    <div key={t.id} className="flex items-center gap-2 py-2 text-[11px]"
-                                        style={{ fontFamily: SERIF, borderBottom: `1px dashed ${THEMES.expense.soft}` }}>
-                                        <span className="flex-1 truncate" style={{ color: INK }}>{t.note || '未备注'}</span>
-                                        <span className="font-bold tabular-nums" style={{ color: THEMES.expense.accent }}>{formatMoney(t.amount)}</span>
-                                        <button
-                                            onClick={async () => { await DB.deleteTransaction(t.id); await reload(); addToast('记录已删除', 'success'); }}
-                                            className="px-1 text-slate-300 hover:text-rose-400"
-                                        >✕</button>
-                                    </div>
-                                ))}
+                                {dayTxs.map(t => {
+                                    const resolved = resolveCategory(t);
+                                    const isExpense = t.amount < 0;
+                                    return (
+                                        <div key={t.id} className="flex items-center gap-2 py-2 text-[11px]"
+                                            style={{ fontFamily: SERIF, borderBottom: `1px dashed ${THEMES.expense.soft}` }}>
+                                            <span className="flex-1 truncate" style={{ color: INK }}>{t.note || resolved.meta.label}</span>
+                                            <span className="text-[9px] shrink-0" style={{ color: FAINT }}>{resolved.meta.label}</span>
+                                            <span className="font-bold tabular-nums" style={{ color: isExpense ? THEMES.expense.accent : '#5d7345' }}>
+                                                {isExpense ? '−' : '+'}{formatMoney(Math.abs(t.amount))}
+                                            </span>
+                                            <button
+                                                onClick={async () => {
+                                                    const bank = t.cardId && t.ownsBalance ? await DB.getBankState().catch(() => null) : null;
+                                                    await DB.deleteTransaction(t.id);
+                                                    if (bank) {
+                                                        const nextCards = rollbackTxBalance(bank.cards || [], t);
+                                                        if (nextCards !== (bank.cards || [])) await DB.saveBankState({ ...bank, cards: nextCards });
+                                                    }
+                                                    await reload();
+                                                    addToast('记录已删除', 'success');
+                                                }}
+                                                className="px-1 text-slate-300 hover:text-rose-400"
+                                            >✕</button>
+                                        </div>
+                                    );
+                                })}
                             </div>
                         )}
                     </LedgerCard>

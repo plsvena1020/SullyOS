@@ -303,7 +303,8 @@ export default function TakeoutApp() {
     const nextBank = { ...(bank || { config: { dailyBudget: 100, currencySymbol: '¥' }, shop: {} as any, goals: [] }), cards: nextCards };
     await DB.saveBankState(nextBank as any);
     await DB.saveTransaction({
-      id: 'tx_' + Date.now(), amount: -order.total, category: '购物', ownerId: actorIsChar ? actor : undefined,
+      id: 'tx_' + Date.now(), amount: -order.total, category: 'shopping', ownerId: actorIsChar ? actor : undefined,
+      cardId: payCard.id,
       note: `${order.shopName} × ${order.itemCount} 件（${actorIsChar ? target.name + '自己点单的' : target.type === 'char' ? '给' + target.name + '点的' : '自购'}）`,
       timestamp: order.createdAt, dateStr: new Date(order.createdAt).toISOString().slice(0, 10),
     });

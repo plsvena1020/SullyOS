@@ -25,6 +25,7 @@ import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } fr
 import { getCheckPhoneApi, resolveCheckPhoneApi, setCheckPhoneApi } from '../utils/checkPhoneApi';
 import { buildPurchaseGenPrompt, parsePurchaseGenJson, extractInterestKeywords } from '../utils/phonePurchaseGen';
 import { appendCharPurchaseTxn } from '../utils/charLedger';
+import { resolveCategory } from '../utils/bankCategories';
 import { isPhoneAutoRefreshDue, maybeAutoRefreshPhone } from '../utils/phoneAutoRefresh';
 import { generateRelationshipContacts, type ContactGenApiConfig } from '../utils/relationshipContactGen';
 import {
@@ -2752,11 +2753,13 @@ ${olderText}
                     {bankTxns.length === 0 && <EmptyState text="暂无流水" />}
                     {bankTxns.map(t => {
                         const neg = t.amount < 0;
+                        const resolved = resolveCategory(t);
+                        const card = t.cardId ? bankCards.find(c => c.id === t.cardId) : undefined;
                         return (
                             <div key={t.id} className="rounded-2xl p-3 bg-white/[0.035] border border-white/[0.06] flex items-center gap-3">
                                 <div className="flex-1 min-w-0">
-                                    <div className="text-[13px] font-medium text-white/95 truncate">{t.note || t.category}</div>
-                                    <div className="text-[10px] text-white/35 mt-0.5">{t.dateStr} · {fmtClock(t.timestamp)} · {t.category}</div>
+                                    <div className="text-[13px] font-medium text-white/95 truncate">{t.note || resolved.meta.label}</div>
+                                    <div className="text-[10px] text-white/35 mt-0.5">{t.dateStr} · {fmtClock(t.timestamp)} · {resolved.meta.label}{card ? ` · ${card.name}·${card.tailNo}` : ''}</div>
                                 </div>
                                 <span className="text-[14px] font-bold tabular-nums shrink-0" style={{ color: neg ? '#fb7185' : '#4ade80' }}>
                                     {neg ? '-' : '+'}¥{Math.abs(t.amount).toFixed(2)}

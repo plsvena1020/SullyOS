@@ -273,7 +273,8 @@ export default function ShoppingApp() {
     const nextBank = { ...(bank || { config: { dailyBudget: 100, currencySymbol: '¥' }, shop: {} as any, goals: [] }), cards: nextCards };
     await DB.saveBankState(nextBank as any);
     await DB.saveTransaction({
-      id: 'tx_' + Date.now(), amount: -order.total, category: '购物', ownerId: actorIsChar ? actor : undefined,
+      id: 'tx_' + Date.now(), amount: -order.total, category: 'shopping', ownerId: actorIsChar ? actor : undefined,
+      cardId: payCard.id,
       note: `购物订单 × ${order.itemCount} 件（${target.type === 'char' ? '给' + target.name + '买的' : '自购'}）`,
       timestamp: order.createdAt, dateStr: new Date(order.createdAt).toISOString().slice(0, 10),
     });
