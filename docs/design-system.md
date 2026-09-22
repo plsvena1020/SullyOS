@@ -32,6 +32,7 @@
 - 阴影三档：默认卡 `shadow-sm`，CTA `shadow-md/lg + shadow-primary/30`，浮层 `shadow-2xl`。浅浮层定制只用 `shadow-[0_12px_40px_rgba(15,23,42,0.22)]`，深浮层只用 `shadow-[0_18px_60px_rgba(0,0,0,.58)]`。
 - 页面模板：`flex-1 overflow-y-auto p-5 space-y-6 no-scrollbar` + 头部 `flex items-center px-4 py-3` + 分组 `divide-y divide-slate-100`（见 `apps/Appearance.tsx:947-950`）。
 - 桌面形态信息密度（2026-09-11 起）：手机版式 App 的卡片/清单网格（相册人物、照片墙、书架、商品、日记选本等）在桌面档走 `useLayoutMode` 分支改 `grid-cols-[repeat(auto-fill,minmax(132-176px,1fr))]` 自适应小卡；空占位页限宽限高居中（日记空白角色页 `max-w-sm max-h-[420px] m-auto`）；手机端类名必须零变化。
+- 布局形态与矮窗规则（2026-09-12 起）：电脑屏幕上，窗口宽于半屏（`width * 2 >= screen.width`，贴靠半屏也算）或达到 900 宽即进电脑版；手机/平板屏幕（`screen.width < 1000`）不参与半屏比例，仍按宽度 ≥ 1024 判定。高度不参与——宽而矮的窗口留电脑版，靠左栏/网格/Dock 各自内部滚动托底（见 `utils/layoutMode.ts`）。手机形态主页有「紧凑档 + 整页缩放到一屏」两级兜底：页面可视区高度 < 540px 时缩小时钟/角色卡/图标并收紧留白（`apps/Launcher.tsx` 的 `phoneCompact`）；仍装不下时由 `FitPage` 等比缩小整页（scale = 可视高 / 内容自然高），**不做纵向滚动**，所有按钮组件始终一屏可见。手机正常尺寸与装得下的窗口 scale=1、外观零变化。
 
 ## 四、字体 / 图标
 

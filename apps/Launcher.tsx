@@ -259,15 +259,23 @@ const AppGridPage = React.memo(({
     acnh = false,
     editing = false,
     columns = 4,
+    compact = false,
 }: {
     apps: typeof INSTALLED_APPS,
     openApp: (id: AppID) => void,
     acnh?: boolean,
     editing?: boolean,
     columns?: 4 | 6,
+    compact?: boolean,
 }) => {
+    const gapClass = (apps.length > 8)
+        ? (compact ? 'gap-y-3.5 gap-x-2 content-center' : 'gap-y-5 gap-x-2 content-center')
+        : (compact ? 'gap-y-4 gap-x-2' : 'gap-y-6 gap-x-2');
     return (
-        <div className={`grid place-items-center animate-fade-in relative ${columns === 6 ? 'grid-cols-6' : 'grid-cols-4'} ${(apps.length > 8) ? 'gap-y-5 gap-x-2 content-center' : 'gap-y-6 gap-x-2'}`}>
+        <div
+            className={`grid place-items-center animate-fade-in relative ${columns === 6 ? 'grid-cols-6' : 'grid-cols-4'} ${gapClass}`}
+            style={compact ? ({ '--app-icon-size': 'clamp(2.5rem, calc((100vw - 6.5rem) / 4), 2.875rem)' } as React.CSSProperties) : undefined}
+        >
              {apps.map(app => (
                  <div
                     key={app.id}
@@ -285,6 +293,73 @@ const AppGridPage = React.memo(({
         </div>
     );
 });
+
+// 3d. 手机版页适配容器：内容装不下时整页等比缩小到一屏内（scale = 1 时零变化）。
+// 正常手机尺寸一定装得下、永远 scale=1；宽而矮的窗口也不再出现「内容被裁 / 需要滚动」。
+const FitPage = ({ active, className, style, children }: {
+    active: boolean;
+    className?: string;
+    style?: React.CSSProperties;
+    children: React.ReactNode;
+}) => {
+    const pageRef = useRef<HTMLDivElement | null>(null);
+    const contentRef = useRef<HTMLDivElement | null>(null);
+    const [scale, setScale] = useState(1);
+
+    const measure = useCallback(() => {
+        const content = contentRef.current;
+        if (!content) return;
+        const available = content.clientHeight;
+        const natural = content.scrollHeight;
+        const next = available > 1 && natural > available + 1 ? available / natural : 1;
+        setScale(prev => (Math.abs(prev - next) > 0.002 ? next : prev));
+    }, []);
+
+    useEffect(() => {
+        const page = pageRef.current;
+        if (!page) return;
+        let raf = 0;
+        const schedule = () => {
+            if (raf) return;
+            raf = requestAnimationFrame(() => { raf = 0; measure(); });
+        };
+        measure();
+        const ro = new ResizeObserver(schedule);
+        ro.observe(page);
+        // 内容变化（数据加载、文案更新、图片挂载）也要重量：只监听尺寸变化会漏。
+        const mo = new MutationObserver(schedule);
+        mo.observe(page, { childList: true, subtree: true, characterData: true });
+        return () => {
+            ro.disconnect();
+            mo.disconnect();
+            if (raf) cancelAnimationFrame(raf);
+        };
+    }, [measure]);
+
+    // 离屏页被 content-visibility 跳过，滚到当前页后补量一次（等渲染完成）。
+    useEffect(() => {
+        if (!active) return;
+        measure();
+        const raf = requestAnimationFrame(measure);
+        const timer = window.setTimeout(measure, 180);
+        return () => {
+            cancelAnimationFrame(raf);
+            window.clearTimeout(timer);
+        };
+    }, [active, measure]);
+
+    return (
+        <div ref={pageRef} className={className} style={style}>
+            <div
+                ref={contentRef}
+                className="w-full h-full flex flex-col"
+                style={scale < 1 ? { transform: `scale(${scale})`, transformOrigin: 'top center' } : undefined}
+            >
+                {children}
+            </div>
+        </div>
+    );
+};
 
 // 3b. Small 2x2 app grid for pinwheel cells
 const AppQuadGrid = React.memo(({ apps, openApp, editing = false }: { apps: typeof INSTALLED_APPS, openApp: (id: AppID) => void, editing?: boolean }) => {
@@ -394,7 +469,7 @@ const WidgetsPage = React.memo(({ contentColor, openApp, anniversaries, characte
     const pagedEvents = upcomingEvents.slice(eventPage * EVENTS_PER_PAGE, eventPage * EVENTS_PER_PAGE + EVENTS_PER_PAGE);
 
     return (
-        <div className={`w-full flex flex-col ${compact ? 'px-0 pt-0 pb-0 space-y-4 h-auto' : 'flex-shrink-0 snap-center snap-always px-6 pt-24 pb-8 space-y-6 h-full overflow-y-auto no-scrollbar'}`}>
+        <div className={`w-full flex flex-col ${compact ? 'px-0 pt-0 pb-0 space-y-4 h-auto' : 'px-6 pt-24 pb-8 space-y-6 h-full'}`}>
               <div className={`rounded-3xl ${compact ? 'p-4' : 'p-6'} ${acnh ? 'shadow-sm' : paper ? '' : 'bg-white/25 border border-white/25 shadow-xl'}`} style={paper ? { background: 'rgba(224,221,215,0.36)', border: '1px solid rgba(91,72,51,0.07)', boxShadow: '0 5px 16px rgba(91,72,51,0.05)' } : acCard}>
                   <div className="flex justify-between items-center mb-4" style={{ color: contentColor }}>
                       <h3 className="text-xl font-bold tracking-widest">{monthName} {currentYear}</h3>
@@ -480,6 +555,10 @@ const WidgetsPage = React.memo(({ contentColor, openApp, anniversaries, characte
 // --- Persist scroll page across remounts (e.g. returning from apps) ---
 let _lastPageIndex = 0;
 
+// 手机版页面可视区（横向翻页容器）高度低于此值 → 启动紧凑档：
+// 缩小时钟/组件/图标并收紧页面留白；仍装不下时页面自身可纵向滚动（见页容器 class）。
+const PHONE_COMPACT_MAX_HEIGHT = 540;
+
 // --- Main Launcher ---
 
 const Launcher: React.FC<{ desktop?: boolean }> = ({ desktop = false }) => {
@@ -498,6 +577,23 @@ const Launcher: React.FC<{ desktop?: boolean }> = ({ desktop = false }) => {
   const [activePageIndex, setActivePageIndex] = useState(_lastPageIndex);
   const activePageIndexRef = useRef(_lastPageIndex);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // 量出页面可视区高度（桌面分支没有这个容器，切回手机形态时再挂观察器）。
+  const [pageViewportHeight, setPageViewportHeight] = useState(0);
+  useEffect(() => {
+      if (desktop) {
+          setPageViewportHeight(0);
+          return;
+      }
+      const el = scrollContainerRef.current;
+      if (!el) return;
+      const measure = () => setPageViewportHeight(el.clientHeight);
+      measure();
+      const ro = new ResizeObserver(measure);
+      ro.observe(el);
+      return () => ro.disconnect();
+  }, [desktop]);
+  const phoneCompact = !desktop && pageViewportHeight > 0 && pageViewportHeight < PHONE_COMPACT_MAX_HEIGHT;
 
   // Mouse Drag Logic refs
   const isDragging = useRef(false);
@@ -921,15 +1017,16 @@ const Launcher: React.FC<{ desktop?: boolean }> = ({ desktop = false }) => {
       >
           {/* Render App Pages */}
           {appPages.map((pageApps, idx) => (
-              <div
+              <FitPage
                 key={idx}
-                className="w-full flex-shrink-0 snap-center snap-always flex flex-col px-6 pt-12 pb-8 h-full"
+                active={activePageIndex === idx}
+                className={`w-full flex-shrink-0 snap-center snap-always flex flex-col h-full overflow-hidden ${phoneCompact ? 'px-4 pt-7 pb-6' : 'px-6 pt-12 pb-8'}`}
                 style={{ contentVisibility: 'auto', contain: 'layout paint', transform: 'translateZ(0)' }}
               >
                   {idx === 0 ? (
                       // Page 1 (original): Clock + Chat + 4x2 App Grid (keep)
                       <>
-                        <DesktopClock />
+                        <DesktopClock compact={phoneCompact} />
                         <CharacterWidget
                             char={widgetChar}
                             unreadCount={widgetUnread}
@@ -937,14 +1034,17 @@ const Launcher: React.FC<{ desktop?: boolean }> = ({ desktop = false }) => {
                             onClick={() => openApp(AppID.Chat)}
                             contentColor={contentColor}
                             paper={paper}
+                            compact={phoneCompact}
                         />
                         <div className="flex-1">
-                            <AppGridPage apps={pageApps} openApp={openApp} acnh={acnh} editing={layoutEditing} />
+                            <AppGridPage apps={pageApps} openApp={openApp} acnh={acnh} editing={layoutEditing} compact={phoneCompact} />
                         </div>
                       </>
                   ) : idx === 1 ? (
                       // Page 2: Schedule 4x2 widget on top + Pinwheel (Music / 2x2 icons / 2x2 icons / Image) below
-                      <div className="flex-1 min-h-0 w-full flex flex-col gap-5 justify-center">
+                      // 安全居中：装得下时内容居中，溢出时从顶部开始（justify-center 会让顶部溢出部分滚不到）。
+                      <div className="flex-1 min-h-0 w-full flex flex-col">
+                        <div className="w-full my-auto flex flex-col gap-5">
                           {scheduleChar && (
                               <ScheduleHomeWidget
                                   schedule={scheduleData}
@@ -955,7 +1055,7 @@ const Launcher: React.FC<{ desktop?: boolean }> = ({ desktop = false }) => {
                                   paper={paper}
                               />
                           )}
-                          <div className="grid grid-cols-2 gap-x-3 gap-y-5 w-full">
+                          <div className={`grid grid-cols-2 gap-x-3 w-full mx-auto ${phoneCompact ? 'gap-y-4 max-w-[19rem]' : 'gap-y-5 max-w-[24.75rem]'}`}>
                               {pinwheelOrder.map(cell => (
                                   <div
                                       key={cell}
@@ -980,10 +1080,11 @@ const Launcher: React.FC<{ desktop?: boolean }> = ({ desktop = false }) => {
                                   </div>
                               ))}
                           </div>
+                        </div>
                       </div>
                   ) : (
                       // Page 3+: Widget Images (idx===2 only) + Free Decorations + Apps
-                      <div className="pt-10 flex-1 flex flex-col relative">
+                      <div className={`flex-1 flex flex-col relative ${phoneCompact ? 'pt-6' : 'pt-10'}`}>
                           {idx === 2 && (() => {
                             const raw = theme.launcherWidgets || {};
                             const w = { ...raw };
@@ -992,18 +1093,18 @@ const Launcher: React.FC<{ desktop?: boolean }> = ({ desktop = false }) => {
                             return (
                               <>
                                 {hasAny && (
-                                  <div className="mb-3 space-y-2 relative z-10">
+                                  <div className={`mb-3 space-y-2 relative z-10 ${phoneCompact ? 'mx-auto w-full max-w-[22rem]' : ''}`}>
                                     {hasTopRow && (
-                                      <div className="flex gap-2">
+                                      <div className="flex justify-center gap-2">
                                         {['tl', 'tr'].map(key => w[key] ? (
-                                          <div key={key} className="flex-1 aspect-square rounded-2xl overflow-hidden shadow-md border border-white/20">
+                                          <div key={key} className="flex-1 max-w-[11rem] aspect-square rounded-2xl overflow-hidden shadow-md border border-white/20">
                                             <TokenImg value={w[key]} className="w-full h-full object-cover" alt="" loading="lazy" />
                                           </div>
-                                        ) : <div key={key} className="flex-1"></div>)}
+                                        ) : <div key={key} className="flex-1 max-w-[11rem]"></div>)}
                                       </div>
                                     )}
                                     {w['wide'] && (
-                                      <div className="w-full h-32 rounded-2xl overflow-hidden shadow-md border border-white/20">
+                                      <div className={`w-full rounded-2xl overflow-hidden shadow-md border border-white/20 ${phoneCompact ? 'h-24' : 'h-32'}`}>
                                         <TokenImg value={w['wide']} className="w-full h-full object-cover" alt="" loading="lazy" />
                                       </div>
                                     )}
@@ -1040,22 +1141,28 @@ const Launcher: React.FC<{ desktop?: boolean }> = ({ desktop = false }) => {
                                 openApp={openApp}
                                 acnh={acnh}
                                 editing={layoutEditing}
-                          />
+                                compact={phoneCompact}
+                            />
                           <div className="flex-1"></div>
                       </div>
                   )}
-              </div>
+              </FitPage>
           ))}
 
           {/* Final Page: Widgets */}
-          <WidgetsPage
-            contentColor={contentColor}
-            openApp={openApp}
-            anniversaries={anniversaries}
-            characters={characters}
-            acnh={acnh}
-            paper={paper}
-          />
+          <FitPage
+            active={activePageIndex === totalPages - 1}
+            className="w-full flex-shrink-0 snap-center snap-always h-full overflow-hidden"
+          >
+            <WidgetsPage
+              contentColor={contentColor}
+              openApp={openApp}
+              anniversaries={anniversaries}
+              characters={characters}
+              acnh={acnh}
+              paper={paper}
+            />
+          </FitPage>
 
       </div>
 

@@ -39,7 +39,7 @@ export const DesktopDock: React.FC = () => {
 
     return (
         <aside
-            className="absolute left-0 top-0 z-[30] flex h-full w-[68px] shrink-0 flex-col items-center gap-1.5 border-r border-white/10 bg-black/30 py-4 backdrop-blur-2xl"
+            className="absolute left-0 top-0 z-[30] flex h-full w-[68px] shrink-0 flex-col items-center gap-1.5 overflow-y-auto no-scrollbar border-r border-white/10 bg-black/30 py-4 backdrop-blur-2xl"
             {...drag.handlers}
         >
             <DockItem app={HOME_APP} active={activeApp === AppID.Launcher} blockClick={false} onClick={() => openApp(AppID.Launcher)} />

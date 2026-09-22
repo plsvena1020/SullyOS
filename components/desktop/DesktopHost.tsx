@@ -5,7 +5,7 @@ import { DesktopBackdrop } from './DesktopBackdrop';
 
 /**
  * 桌面外壳两态：
- *   1. desktop（宽 >= 1024 且高 >= 600，或用户强制）→ 全屏电脑版 UI（左侧 Dock 由 PhoneShell 内部渲染）；
+ *   1. desktop（电脑屏幕上宽于半屏或 >= 900，或用户强制）→ 全屏电脑版 UI（左侧 Dock 由 PhoneShell 内部渲染）；
  *   2. 其余（手机/平板竖屏/窄窗）→ 透传，手机 UI 铺满窗口。
  * 2026-09-11 起移除「窗口化手机框」仿真层，不再有居中金属外框。
  */

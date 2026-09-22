@@ -1358,7 +1358,7 @@ const Appearance: React.FC = () => {
                         })}
                     </div>
                     <p className="mt-3 text-[10px] leading-relaxed text-slate-400">
-                        窗口宽 ≥ 1024 且高 ≥ 600 时自动用电脑版布局；手机与平板竖屏不受影响。
+                        电脑屏幕上，窗口宽于半屏或达到 900 宽时自动用电脑版布局；手机与平板竖屏不受影响。
                     </p>
                 </section>
 
