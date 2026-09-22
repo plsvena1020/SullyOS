@@ -20,6 +20,19 @@
 cookie 存在本地，每次请求经 `X-Xhs-Cookie` 头发给 Worker；Worker 无状态，
 一个部署服务所有用户。
 
+## VPS 托管模式（免复制 cookie）
+
+VPS 上常驻 camofox 浏览器维护小红书登录态，cookie AES-256-GCM 加密只存
+VPS 本地（`/var/lib/sullyos-xhs/session/`），永不进前端 localStorage、日志与响应。
+
+- 调用链：前端/amsg（`mode:'vps'`）→ Caddy `ethernet-vps.bot.cd/xhs-api/*` →
+  sessionBridge（127.0.0.1:8836，`X-Bridge-Token` 鉴权）→ 服务器内解密注入
+  `X-Xhs-Cookie` → 中心 Worker `/api/*`（业务唯一真源，本方案零改动）。
+- 前端设置页切「VPS 托管」，填 `XHS_BRIDGE_TOKEN`（见 `docs/xhs-vps-session.md`），
+  测试连接显示昵称即通。失效时只需去服务器浏览器扫一次码，无需复制 cookie。
+- 回退：设置页切回「云端 Lite」即恢复手工 cookie 路径，代码零删除。
+- 部署与扫码流程见 `docs/xhs-vps-session.md`；实现见 `vps-backend/src/xhs/`。
+
 国内小红书和全球 RedNote 是两套不共享会话的后端：前者请求
 `edith.xiaohongshu.com`，后者请求 `webapi.rednote.com`。当前 RedNote 支持搜索、
 浏览、详情、点赞、收藏和评论；图片发布仍只对已验证的国内后端开放。
