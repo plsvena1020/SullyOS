@@ -4609,6 +4609,27 @@ const Settings: React.FC = () => {
                               <input type="password" value={rtXhsBridgeToken} onChange={e => setRtXhsBridgeToken(e.target.value)} className="w-full bg-white/80 border border-rose-200 rounded-xl px-3 py-2 text-[11px] font-mono" placeholder="XHS_BRIDGE_TOKEN（见 docs/xhs-vps-session.md）" />
                           </div>
                           )}
+                          {rtXhsMode === 'vps' && (
+                          <div>
+                              <button type="button" onClick={async () => {
+                                  setRtTestStatus('正在同步...');
+                                  try {
+                                      const base = XHS_VPS_URL.replace(/\/+$/, '').replace(/\/api$/, '');
+                                      const resp = await fetch(`${base}/api/session/refresh`, {
+                                          method: 'POST',
+                                          headers: { 'x-bridge-token': rtXhsBridgeToken.trim() },
+                                      });
+                                      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                                      const st = await resp.json();
+                                      setRtTestStatus(st.configured
+                                          ? `会话已同步（版本 ${String(st.version).slice(0, 8)}，更新于 ${new Date(st.updatedAt).toLocaleString()}）`
+                                          : '服务器上还没有登录会话：请在服务器浏览器完成扫码登录');
+                                  } catch (e: any) {
+                                      setRtTestStatus(`同步失败: ${e.message}`);
+                                  }
+                              }} className="w-full py-1.5 bg-rose-50 text-rose-500 text-[11px] font-bold rounded-xl active:scale-95 transition-transform">立即同步</button>
+                          </div>
+                          )}
                           <button onClick={testXhsMcp} className="w-full py-2 bg-rose-100 text-rose-600 text-xs font-bold rounded-xl active:scale-95 transition-transform">测试连接</button>
                           <div className="grid grid-cols-2 gap-2">
                               <div>
@@ -4634,6 +4655,9 @@ const Settings: React.FC = () => {
                           <p className="text-[10px] text-slate-400 leading-relaxed bg-slate-100/60 rounded-lg px-2 py-1.5">
                               使用说明：Cookie 保存在本机配置中；使用 Lite 时会随请求发送到网络 Worker，用于登录校验和接口签名，当前开源 Worker 不主动留存。建议使用小号，并在退出账号或 Cookie 失效后及时更新。
                               {rtXhsMode === 'vps' && 'VPS 模式：登录态由服务器浏览器维护，失效时去服务器扫码即可，无需复制 cookie。'}
+                              {rtXhsMode === 'vps' && (rtTestStatus?.includes('未登录') || rtTestStatus?.includes('登录已失效') || rtTestStatus?.includes('重新登录') || rtTestStatus?.includes('还没有登录会话'))
+                                  ? '登录已失效：请在服务器浏览器里重新扫码（运行 vps-backend/deploy/xhs-login.sh 后经 SSH 隧道访问）。'
+                                  : ''}
                           </p>
                       </div>
                   )}
