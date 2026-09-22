@@ -25,6 +25,7 @@ import { ensureRelationLink, listJoinableHomes } from '../utils/relationshipHome
 import type { WorldProfile } from '../types';
 import { normalizeElevenLabsVoiceId, synthesizeSpeechElevenLabsDetailed } from '../utils/elevenLabsTts';
 import { normalizeUserImpression } from '../utils/impression';
+import { extractAppearanceFromPersona, extractAppearanceFromReferenceImage } from '../utils/imageGenFlow';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
 import { COMMON_TIMEZONES } from '../utils/timezone';
 import { fetchOpenMeteoWeather, geocodeCityOpenMeteo } from '../utils/realtimeWorldCore';
@@ -139,6 +140,8 @@ const Character: React.FC = () => {
   const [editingId, setEditingId] = useState<string | null>(() => launchIntent?.charId || null);
   const [formData, setFormData] = useState<CharacterProfile | null>(null);
   const [isCompressing, setIsCompressing] = useState(false);
+  // 神经链接 · AI 生图外貌提示词：提取 / 上传图片解析共用一份 busy 态。
+  const [isImageProfileBusy, setIsImageProfileBusy] = useState(false);
   // 头像 URL 输入的 draft, 不逐字 commit 到 formData.avatar —— 否则每输入一个字符,
   // 所有引用 char.avatar 的 <img> 都会拿到不完整字符串当相对路径请求根目录,
   // 导致打字时疯狂 GET / 和满屏破图. 失焦 / 回车才校验 + commit.
@@ -392,6 +395,43 @@ const Character: React.FC = () => {
           if (!prev) return null;
           return { ...prev, [field]: value };
       });
+  };
+
+  // 神经链接 · AI 生图外貌提示词：从人设或参考图一键生成 tag，写回 formData
+  // 由下面的自动保存链路落库。手动入口失败要能重试，所以不吃自动提取的失败缓存。
+  const handleExtractImageProfileFromPersona = async () => {
+      if (!formData || isImageProfileBusy) return;
+      if (!apiConfig.baseUrl || !apiConfig.apiKey || !apiConfig.model) {
+          addToast('请先在设置里配置主 API（baseUrl / Key / 模型）', 'error');
+          return;
+      }
+      setIsImageProfileBusy(true);
+      try {
+          const tags = await extractAppearanceFromPersona(formData, apiConfig);
+          handleChange('imageGenProfile', tags);
+          addToast('已从角色设定提取外貌提示词', 'success');
+      } catch (e: any) {
+          addToast(e?.message || '提取失败，稍后再试', 'error');
+      } finally {
+          setIsImageProfileBusy(false);
+      }
+  };
+
+  const handleParseImageProfile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      e.target.value = ''; // 允许连续选同一张图重试
+      if (!file || !formData || isImageProfileBusy) return;
+      setIsImageProfileBusy(true);
+      try {
+          const dataUrl = await processImage(file, { maxWidth: 1024, forceJpeg: true, quality: 0.85 });
+          const tags = await extractAppearanceFromReferenceImage(dataUrl, apiConfig);
+          handleChange('imageGenProfile', tags);
+          addToast('已按参考图解析出外貌提示词', 'success');
+      } catch (err: any) {
+          addToast(err?.message || '图片解析失败，稍后再试', 'error');
+      } finally {
+          setIsImageProfileBusy(false);
+      }
   };
 
   // ── 人物关系（神经连接 · 生成 NPC 群像注入人设）──
@@ -2031,7 +2071,72 @@ ${isInitialGeneration ? `
                                )}
                            </div>
 
-                           {/* Worldbook Section */}
+                            {/* AI 生图 · 外貌提示词（防串脸）：生图时 prompt 里的 @名字
+                                会替换成这串 tag，保证同一角色每张图长一个样。全局开关与
+                                Latent Key 在「设置 → AI 生图」，这里只管角色长什么样。 */}
+                            <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-100 space-y-3">
+                                <div>
+                                    <label className="text-[10px] font-bold text-fuchsia-600 uppercase tracking-widest block">AI 生图 · 外貌提示词</label>
+                                    <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">聊天和主动消息里生图时，@名字 会换成这串 tag，保证每张图长一个样。可以从角色设定自动提取，或上传一张参考图让模型解析；也能手填。开关与 Key 在「设置 → AI 生图」。</p>
+                                </div>
+                                <textarea
+                                    value={formData.imageGenProfile || ''}
+                                    onChange={(e) => handleChange('imageGenProfile', e.target.value)}
+                                    spellCheck={false}
+                                    className="w-full h-16 bg-slate-50 rounded-2xl px-3 py-2 text-xs font-mono border border-slate-200 outline-none focus:ring-1 focus:ring-fuchsia-300 resize-none"
+                                    placeholder="cat girl, silver hair, green eyes（英文 tag，逗号分隔）"
+                                />
+                                <div className="flex gap-2">
+                                    <button
+                                        type="button"
+                                        disabled={isImageProfileBusy}
+                                        onClick={() => void handleExtractImageProfileFromPersona()}
+                                        className="flex-1 py-2 rounded-2xl text-[11px] font-bold bg-fuchsia-50 text-fuchsia-600 border border-fuchsia-200/60 disabled:opacity-50 active:scale-95 transition-all"
+                                    >
+                                        {isImageProfileBusy ? '处理中…' : '从角色设定提取'}
+                                    </button>
+                                    <label className={`flex-1 py-2 rounded-2xl text-[11px] font-bold text-center transition-all ${isImageProfileBusy ? 'bg-slate-50 text-slate-300 border border-slate-200' : 'bg-fuchsia-500 text-white border border-fuchsia-500 active:scale-95 cursor-pointer'}`}>
+                                        上传图片解析
+                                        <input type="file" accept="image/*" hidden disabled={isImageProfileBusy} onChange={(e) => void handleParseImageProfile(e)} />
+                                    </label>
+                                </div>
+                                {/* 画风：所有生图都固定注入（含纯景色）；性别：只在画面里出现该角色时注入 */}
+                                <div className="border-t border-slate-100 pt-3 space-y-3">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <p className="text-xs font-bold text-slate-700">生图性别</p>
+                                            <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">画面里出现这个角色时注入（修 AI 认错性别）；纯景色不注入。</p>
+                                        </div>
+                                        <div className="flex bg-slate-100 rounded-xl p-1 gap-1 shrink-0">
+                                            {([['none', '不注入'], ['female', '女'], ['male', '男']] as const).map(([v, label]) => {
+                                                const active = v === 'none' ? !formData.imageGenGender : formData.imageGenGender === v;
+                                                return (
+                                                    <button
+                                                        key={v}
+                                                        type="button"
+                                                        onClick={() => handleChange('imageGenGender', v === 'none' ? undefined : v)}
+                                                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition-all ${active ? 'bg-fuchsia-500 text-white shadow-sm' : 'text-slate-500 active:bg-white/60'}`}
+                                                    >
+                                                        {label}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">生图画风 / 画师（固定注入）</label>
+                                        <input
+                                            value={formData.imageGenStyleTags || ''}
+                                            onChange={(e) => handleChange('imageGenStyleTags', e.target.value)}
+                                            spellCheck={false}
+                                            className="w-full bg-slate-50 rounded-2xl px-3 py-2 text-xs font-mono border border-slate-200 outline-none focus:ring-1 focus:ring-fuchsia-300"
+                                            placeholder="by wlop, watercolor, soft lighting（所有生图都带，纯景色也带）"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Worldbook Section */}
                            <div>
                                <div className="flex justify-between items-center mb-2 px-1">
                                    <label className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest block flex items-center gap-1"><Books size={12} /> 扩展设定 (Worldbooks)</label>

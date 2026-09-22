@@ -7,7 +7,6 @@ import ScheduleCard from '../schedule/ScheduleCard';
 import EmotionSettingsPanel from './EmotionSettingsPanel';
 import { isTranslationLangPreset, normalizeTranslationLangLabel, TRANSLATION_LANG_MAX_LENGTH, TRANSLATION_LANG_PRESETS } from '../../utils/translationLang';
 import type { ContextRangeMode, ContextRangeSnapshot } from '../../utils/chatContextRange';
-import type { ImageGenResolution } from '../../utils/imageGenTags';
 import { CANTONESE_VOICE_SUPPORT_NOTE, VOICE_LANGUAGE_OPTIONS } from '../../utils/voiceLanguage';
 import { chatMessageFuzzyMatchesKeyword } from '../../utils/chatMessageSearch';
 
@@ -109,6 +108,9 @@ interface ChatModalsProps {
     // HTML mode
     htmlModeEnabled?: boolean;
     onToggleHtmlMode?: () => void;
+    /** 允许该角色自己生图（聊天设置里的 per-character 开关）。 */
+    imageGenCharEnabled?: boolean;
+    onToggleImageGenChar?: () => void;
     htmlModeCustomPrompt?: string;
     setHtmlModeCustomPrompt?: (v: string) => void;
     // Voice TTS
@@ -126,13 +128,14 @@ interface ChatModalsProps {
     voiceCollectable?: boolean; // true for a generated voice or an unsynthesized <语音> message
     onToggleVoiceFavorite?: () => void;
     voiceFavorited?: boolean;
-    // AI 生图（手动：楼层长按 → 生成图片 → tag 弹窗确认）
-    onGenerateImage?: () => void;
-    imageGenAvailable?: boolean;
-    imageGenDraft?: { prompt: string; resolution: ImageGenResolution } | null;
-    setImageGenDraft?: (d: { prompt: string; resolution: ImageGenResolution }) => void;
-    imageGenSuggesting?: boolean;
-    onConfirmImageGen?: () => void;
+    // 聊天相册：上传 or 生成（生成只填描述；画风/性别在神经链接角色页配，画幅由模型选）
+    imageSourceStep?: 'menu' | 'generate';
+    setImageSourceStep?: (v: 'menu' | 'generate') => void;
+    imageGenerateDesc?: string;
+    setImageGenerateDesc?: (v: string) => void;
+    imageGenerateBusy?: '' | 'analyzing' | 'generating';
+    onPickImageUpload?: () => void;
+    onConfirmImageGenerate?: () => void;
     // Schedule
     scheduleData?: DailySchedule | null;
     isScheduleGenerating?: boolean;
@@ -273,9 +276,10 @@ const ChatModals: React.FC<ChatModalsProps> = ({
     xhsEnabled, onToggleXhs,
     perspectiveEnabled, onTogglePerspective,
     htmlModeEnabled, onToggleHtmlMode, htmlModeCustomPrompt, setHtmlModeCustomPrompt,
+    imageGenCharEnabled, onToggleImageGenChar,
     chatVoiceEnabled, onToggleChatVoice, chatVoiceAutoPlay, onToggleChatVoiceAutoPlay, chatVoiceLang, onSetChatVoiceLang,
     onGenerateVoice, voiceAvailable, onDownloadVoice, voiceDownloadable, voiceCollectable, onToggleVoiceFavorite, voiceFavorited,
-    onGenerateImage, imageGenAvailable, imageGenDraft, setImageGenDraft, imageGenSuggesting, onConfirmImageGen,
+    imageSourceStep, setImageSourceStep, imageGenerateDesc, setImageGenerateDesc, imageGenerateBusy, onPickImageUpload, onConfirmImageGenerate,
     scheduleData, isScheduleGenerating, onScheduleEdit, onScheduleDelete, onScheduleReroll, onScheduleCoverChange,
     onScheduleStyleChange, onPlayTheater,
     isScheduleFeatureEnabled, onToggleScheduleFeature,
@@ -619,6 +623,19 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                                  <p className="text-[10px] text-slate-400 mt-1">留空则只使用内置提示词。</p>
                              </div>
                          )}
+                     </div>
+
+                     {/* 角色生图（per-character）：关掉后角色自己写的生图标签只剥离不执行 */}
+                     <div className="pt-2 border-t border-slate-100">
+                         <div className="flex justify-between items-center cursor-pointer" onClick={onToggleImageGenChar}>
+                             <label className="text-xs font-bold text-slate-400 uppercase pointer-events-none">角色生图</label>
+                             <div className={`w-10 h-6 rounded-full p-1 transition-colors flex items-center ${imageGenCharEnabled ? 'bg-fuchsia-500' : 'bg-slate-200'}`}>
+                                 <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${imageGenCharEnabled ? 'translate-x-4' : ''}`}></div>
+                             </div>
+                         </div>
+                         <p className="text-[10px] text-slate-400 mt-2 leading-relaxed">
+                             开启后，这个角色会在聊天里自己发照片 / 自拍 / 画画（需要在「设置 → AI 生图」开总开关并填 Latent Key）。关掉只挡它自己发图，你在相册里的手动生成不受影响。
+                         </p>
                      </div>
 
                      {/* Voice TTS */}
@@ -1030,50 +1047,52 @@ const ChatModals: React.FC<ChatModalsProps> = ({
                             {voiceFavorited ? '取消收藏语音' : '收藏语音'}
                         </button>
                     )}
-                    {selectedMessage?.type === 'text' && imageGenAvailable && onGenerateImage && (
-                        <button onClick={() => { onGenerateImage(); setModalType('none'); }} className="w-full py-3 bg-fuchsia-50 text-fuchsia-600 font-medium rounded-2xl active:bg-fuchsia-100 transition-colors flex items-center justify-center gap-2">
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.125-11.625a1.875 1.875 0 1 1-3.75 0 1.875 1.875 0 0 1 3.75 0Z" /></svg>
-                            生成图片
-                        </button>
-                    )}
                     <button onClick={onDeleteMessage} className="w-full py-3 bg-red-50 text-red-500 font-medium rounded-2xl active:bg-red-100 transition-colors flex items-center justify-center gap-2">
                         删除消息
                     </button>
                 </div>
             </Modal>
 
-            {/* AI 生图确认弹窗：tag 可编辑 + 画幅三选 */}
+            {/* 聊天相册：上传图片 or 生成图片（生成只填描述；画风/性别在神经链接角色页配） */}
             <Modal
-                isOpen={modalType === 'image-gen'} title="生成图片" onClose={() => setModalType('none')}
-                footer={<><button onClick={() => setModalType('none')} className="flex-1 py-3 bg-slate-100 rounded-2xl">取消</button><button onClick={onConfirmImageGen} disabled={!imageGenDraft?.prompt.trim() || imageGenSuggesting} className="flex-1 py-3 bg-fuchsia-500 text-white font-bold rounded-2xl disabled:opacity-40">生成图片</button></>}
+                isOpen={modalType === 'image-source'}
+                title={imageSourceStep === 'generate' ? '生成图片' : '相册'}
+                onClose={() => { if (!imageGenerateBusy) setModalType('none'); }}
+                footer={imageSourceStep === 'generate' && !imageGenerateBusy ? (
+                    <>
+                        <button onClick={() => setImageSourceStep?.('menu')} className="flex-1 py-3 bg-slate-100 text-slate-500 font-bold rounded-2xl active:scale-95 transition-transform">返回</button>
+                        <button onClick={() => void onConfirmImageGenerate?.()} disabled={!imageGenerateDesc?.trim()} className="flex-1 py-3 bg-fuchsia-500 text-white font-bold rounded-2xl disabled:opacity-40 active:scale-95 transition-transform">生成</button>
+                    </>
+                ) : undefined}
             >
-                {imageGenSuggesting || !imageGenDraft ? (
-                    <div className="py-8 text-center text-sm text-slate-400">正在按这段剧情写 tag…</div>
+                {imageSourceStep === 'generate' ? (
+                    imageGenerateBusy ? (
+                        <div className="py-10 text-center text-sm text-slate-400">
+                            {imageGenerateBusy === 'analyzing' ? '正在把描述转成生图 tag…' : '正在生成，可能需要半分钟到几分钟…'}
+                        </div>
+                    ) : (
+                        <div className="space-y-3">
+                            <textarea
+                                value={imageGenerateDesc || ''}
+                                onChange={(e) => setImageGenerateDesc?.(e.target.value)}
+                                placeholder="用一句话描述画面，比如：傍晚的湖边，她穿着白色长裙回头笑"
+                                className="w-full h-28 bg-slate-100 rounded-2xl p-4 resize-none focus:ring-1 focus:ring-fuchsia-300 transition-all text-sm leading-relaxed"
+                            />
+                            <p className="text-[11px] text-slate-400 leading-relaxed">画面里出现角色时会自动套用她的外貌与性别（在「神经链接 → 角色 → 设定」里配）；画幅由模型按描述自选。生成后会作为你发的图进入聊天并存进相册。</p>
+                        </div>
+                    )
                 ) : (
                     <div className="space-y-3">
-                        <textarea
-                            value={imageGenDraft.prompt}
-                            onChange={e => setImageGenDraft?.({ ...imageGenDraft, prompt: e.target.value })}
-                            placeholder="英文 tag，逗号分隔；@名字 会自动换成他的固定外貌"
-                            className="w-full h-32 bg-slate-100 rounded-2xl p-4 resize-none focus:ring-1 focus:ring-fuchsia-300 transition-all text-sm leading-relaxed font-mono"
-                        />
-                        <div className="flex bg-slate-100 rounded-xl p-1 gap-1">
-                            {([['portrait', '竖图'], ['landscape', '横图'], ['square', '方图']] as Array<[ImageGenResolution, string]>).map(([v, label]) => (
-                                <button
-                                    key={v}
-                                    type="button"
-                                    onClick={() => setImageGenDraft?.({ ...imageGenDraft, resolution: v })}
-                                    className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-all ${imageGenDraft.resolution === v ? 'bg-fuchsia-500 text-white shadow-sm' : 'text-slate-600 active:bg-white/60'}`}
-                                >
-                                    {label}
-                                </button>
-                            ))}
-                        </div>
-                        <p className="text-[11px] text-slate-400 leading-relaxed">图生成好后会追加进聊天并自动存相册，大概要等半分钟到几分钟（看站点排队）。</p>
+                        <button onClick={() => onPickImageUpload?.()} className="w-full py-4 bg-slate-50 rounded-2xl flex items-center justify-center gap-2 text-slate-700 font-bold active:scale-[0.98] transition-transform">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 text-slate-500"><path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V3m0 0L7.5 7.5M12 3l4.5 4.5M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5" /></svg> 上传图片
+                        </button>
+                        <button onClick={() => setImageSourceStep?.('generate')} className="w-full py-4 bg-fuchsia-50 rounded-2xl flex items-center justify-center gap-2 text-fuchsia-600 font-bold active:scale-[0.98] transition-transform">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5"><path d="M12 2.5l1.9 6.1 6.1 1.9-6.1 1.9L12 18.5l-1.9-6.1L4 10.5l6.1-1.9L12 2.5z" /></svg> 生成图片
+                        </button>
                     </div>
                 )}
             </Modal>
-            
+
              <Modal
                 isOpen={modalType === 'delete-emoji'} title="删除表情包" onClose={() => setModalType('none')}
                 footer={<><button onClick={() => setModalType('none')} className="flex-1 py-3 bg-slate-100 rounded-2xl">取消</button><button onClick={onDeleteEmoji} className="flex-1 py-3 bg-red-500 text-white font-bold rounded-2xl">删除</button></>}

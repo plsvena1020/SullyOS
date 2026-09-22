@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useLayoutEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect, useMemo, useCallback, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { getPortalHost } from '../utils/portalHost';
 import { useOS } from '../context/OSContext';
@@ -45,6 +45,7 @@ import ChatInputArea from '../components/chat/ChatInputArea';
 import InstantChatRouteNotice from '../components/chat/InstantChatRouteNotice';
 import MemoryRepairPortal from '../components/chat/MemoryRepairPortal';
 import FavoritesPortal from '../components/chat/VoiceFavoritesPortal';
+import ImageLightbox from '../components/os/ImageLightbox';
 import McpMemoryModal from '../components/chat/McpMemoryModal';
 import ChatModals from '../components/chat/ChatModals';
 import Modal from '../components/os/Modal';
@@ -65,8 +66,8 @@ import {
 import { shouldAutoGenerateVoice, shouldAutoPlayGeneratedVoice } from '../utils/voicePlayback';
 import { voiceLanguagePromptLabel } from '../utils/voiceLanguage';
 import { fetchBlobForShare, shareOrDownloadBlob } from '../utils/shareExport';
-import { runImageGenReply, suggestImageTags } from '../utils/imageGenFlow';
-import type { ImageGenResolution } from '../utils/imageGenTags';
+import { suggestImageTags, generateImageBlobOnly } from '../utils/imageGenFlow';
+import { subscribeImageGenPending, getPendingImageGenCount } from '../utils/imageGenPending';
 import { CollaborationStore } from '../features/collaboration/store';
 import { resolveTtsProvider } from '../utils/ttsProvider';
 import { isInstantConfigReady, loadInstantConfig } from '../utils/instantPushClient';
@@ -218,7 +219,7 @@ const Chat: React.FC = () => {
     // Reply Logic
     const [replyTarget, setReplyTarget] = useState<Message | null>(null);
 
-    const [modalType, setModalType] = useState<'none' | 'transfer' | 'emoji-import' | 'chat-settings' | 'message-options' | 'image-gen' | 'edit-message' | 'delete-emoji' | 'delete-category' | 'add-category' | 'history-manager' | 'archive-settings' | 'prompt-editor' | 'category-options' | 'category-visibility' | 'emoji-options' | 'rename-emoji' | 'schedule' | 'chrome-css' | 'chrome-sound' | 'memory-vectorize-confirm' | 'memory-vectorize-result'>('none');
+    const [modalType, setModalType] = useState<'none' | 'transfer' | 'emoji-import' | 'chat-settings' | 'message-options' | 'image-source' | 'edit-message' | 'delete-emoji' | 'delete-category' | 'add-category' | 'history-manager' | 'archive-settings' | 'prompt-editor' | 'category-options' | 'category-visibility' | 'emoji-options' | 'rename-emoji' | 'schedule' | 'chrome-css' | 'chrome-sound' | 'memory-vectorize-confirm' | 'memory-vectorize-result'>('none');
     // 「聊天装扮」悬浮态：不走全屏 modal——圆气泡挂在聊天上，点开小面板边看真聊天边调。
     const [fineTuneOpen, setFineTuneOpen] = useState(false);          // 圆气泡在场
     const [fineTunePanelOpen, setFineTunePanelOpen] = useState(false); // 小面板展开/收起
@@ -258,9 +259,11 @@ const Chat: React.FC = () => {
         waterlineAlreadyAhead: boolean;
     } | null>(null);
     const [selectedMessage, setSelectedMessage] = useState<Message | null>(null);
-    // AI 生图手动弹窗：tag 草稿（LLM 联想后可编辑）+ 联想中状态。
-    const [imageGenDraft, setImageGenDraft] = useState<{ prompt: string; resolution: ImageGenResolution } | null>(null);
-    const [imageGenSuggesting, setImageGenSuggesting] = useState(false);
+    // 聊天相册：上传 or 生成（生成只填描述；画风/性别在神经链接角色页配，画幅由模型选）
+    const [imageSourceStep, setImageSourceStep] = useState<'menu' | 'generate'>('menu');
+    const [imageGenDesc, setImageGenDesc] = useState('');
+    const [imageGenBusy, setImageGenBusy] = useState<'' | 'analyzing' | 'generating'>('');
+    const chatUploadInputRef = useRef<HTMLInputElement>(null);
     const [selectedEmoji, setSelectedEmoji] = useState<Emoji | null>(null);
     const [selectedCategory, setSelectedCategory] = useState<EmojiCategory | null>(null); // For deletion modal
     const [editContent, setEditContent] = useState('');
@@ -280,6 +283,11 @@ const Chat: React.FC = () => {
     // 思维链是 metadata.thinkingChain，没有独立 id，所以用宿主消息 id 作为键，
     // 与 selectedMsgIds 并行存在 —— 只勾思维链时只清 metadata，宿主消息保留。
     const [selectedThinkingMsgIds, setSelectedThinkingMsgIds] = useState<Set<number>>(new Set());
+
+    // --- Image Lightbox State ---
+    // 聊天图片点击放大：只持有一个灯箱实例挂在页面根部（见 components/os/ImageLightbox），
+    // 不给每条消息各挂一个 portal。
+    const [previewImage, setPreviewImage] = useState<string | null>(null);
 
     // --- Translation State (per-character) ---
     const [translationEnabled, setTranslationEnabled] = useState(() => {
@@ -440,6 +448,14 @@ const Chat: React.FC = () => {
         luckinChatRef,
         updateCharacter,
     });
+
+    // 「正在加载图片…」：角色生图期间的页面会话内存态（见 utils/imageGenPending.ts）。
+    // 订阅式读取，生成开始/结束时自动刷新；刷新页面时生图任务本身也结束了，提示不会残留。
+    const imageGenPendingCount = useSyncExternalStore(
+        subscribeImageGenPending,
+        () => getPendingImageGenCount(char?.id || ''),
+        () => 0,
+    );
 
     // --- Voice TTS for chat messages ---
     interface VoiceData { url: string; originalText: string; spokenText?: string; lang?: string; favorite?: boolean; }
@@ -1313,7 +1329,7 @@ const Chat: React.FC = () => {
                 scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
             }
         }
-    }, [messages, isTyping, streamingBubbles, streamingThinking, recallStatus, searchStatus, diaryStatus, selectionMode, windowedFocusMsgId]);
+    }, [messages, isTyping, streamingBubbles, streamingThinking, recallStatus, searchStatus, diaryStatus, selectionMode, windowedFocusMsgId, imageGenPendingCount]);
 
     // 白框提示音：当 char 新发的消息成为会话最后一条时播放一次（用户自己/历史/翻旧消息都不响）。
     // 声音配置编码在白框 CSS 注释里（角色 chromeCustomCss 覆盖全局 chatChromeCustomCss），随白框分享一起走。
@@ -1745,6 +1761,45 @@ const Chat: React.FC = () => {
         }
     };
 
+    // 聊天相册 · 生成：描述 → LLM 分析成 tag + 画幅 → 生图（画风/性别由角色档案在内核注入）
+    // → 与上传同一条路：作为「我发的图」上屏 + 存相册 + 触发角色回应。
+    const handleConfirmImageGenerate = async () => {
+        const desc = imageGenDesc.trim();
+        if (!desc || imageGenBusy || !char) return;
+        if (apiConfig.imageGenEnabled !== true || !(apiConfig.latentImageKey || '').trim()) {
+            addToast('先去「设置 → AI 生图」打开自动生图并填 Latent Key', 'error');
+            return;
+        }
+        setImageGenBusy('analyzing');
+        try {
+            const { tags, resolution } = await suggestImageTags(desc, char, apiConfig);
+            setImageGenBusy('generating');
+            const result = await generateImageBlobOnly({ prompt: tags, resolution }, {
+                apiConfig,
+                char,
+                characters,
+                saveCharProfile: (id, profile) => updateCharacter(id, { imageGenProfile: profile } as any),
+            });
+            setModalType('none');
+            setImageGenDesc('');
+            setImageSourceStep('menu');
+            await handleSendText(result.token, 'image');
+        } catch (e: any) {
+            if (e?.name === 'AbortError') return;
+            addToast(`生成失败：${e?.message || '未知错误'}`, 'error');
+        } finally {
+            setImageGenBusy('');
+        }
+    };
+
+    const handleChatImageUploadPick = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        e.target.value = ''; // 允许连续选同一张
+        if (!file) return;
+        setModalType('none');
+        void handleImageSelect(file);
+    };
+
     const handlePanelAction = (type: string, payload?: any) => {
         // 只统计「打开某个面板 / 开关某个能力」这几个固定入口，名单写死在这里；
         // 选表情、选分类之类的动作不上报。
@@ -1762,6 +1817,7 @@ const Chat: React.FC = () => {
             case 'memory-link': setShowPanel('none'); setMemoryRepairOpen(true); break;
             case 'mcp-memory': setShowPanel('none'); setMcpMemoryOpen(true); break;
             case 'favorites': setShowPanel('none'); setFavoritesOpen(true); break;
+            case 'image-source': setShowPanel('none'); setImageSourceStep('menu'); setImageGenDesc(''); setImageGenBusy(''); setModalType('image-source'); break;
             case 'transfer': setModalType('transfer'); break;
             case 'poke': handleSendText('[戳一戳]', 'interaction'); break;
             case 'archive': setModalType('archive-settings'); break;
@@ -3052,46 +3108,9 @@ const Chat: React.FC = () => {
         setModalType('message-options');
     }, []);
 
-    // AI 生图（手动）：楼层长按 → 生成图片 → LLM 按场景写 tag → 弹窗确认 → 后台生成落库。
-    const buildImageGenScene = (msg: Message): string => {
-        const idx = messages.findIndex(m => m.id === msg.id);
-        const win = (idx >= 0 ? messages.slice(Math.max(0, idx - 6), idx + 1) : [msg])
-            .filter(m => m.type === 'text');
-        return win
-            .map(m => `${m.role === 'user' ? userProfile.name : char.name}：${String(m.content || '').slice(0, 300)}`)
-            .join('\n');
-    };
-
-    const handleManualImageGen = async (msg: Message) => {
-        setImageGenDraft({ prompt: '', resolution: 'portrait' });
-        setImageGenSuggesting(true);
-        setModalType('image-gen');
-        try {
-            const tags = await suggestImageTags(buildImageGenScene(msg), char, apiConfig);
-            setImageGenDraft({ prompt: tags, resolution: 'portrait' });
-        } catch (e: any) {
-            addToast(`写 tag 失败：${e?.message || '未知错误'}`, 'error');
-            setModalType('none');
-        } finally {
-            setImageGenSuggesting(false);
-        }
-    };
-
-    const handleConfirmImageGen = () => {
-        const draft = imageGenDraft;
-        if (!draft || !draft.prompt.trim()) return;
-        setModalType('none');
-        setImageGenDraft(null);
-        void runImageGenReply({ prompt: draft.prompt.trim(), resolution: draft.resolution }, {
-            apiConfig,
-            char,
-            userProfile,
-            characters: [char],
-            contextMsgs: messages,
-            hooks: { addToast },
-            saveCharProfile: (id, profile) => updateCharacter(id, { imageGenProfile: profile } as any),
-        });
-    };
+    const handleMessageImageClick = useCallback((url: string) => {
+        setPreviewImage(url);
+    }, []);
 
     const handleBatchDelete = async () => {
         const msgIdsToDelete = new Set<number>(selectedMsgIds);
@@ -3836,6 +3855,9 @@ const Chat: React.FC = () => {
                  </div>
              )}
 
+             {/* 聊天相册生成的隐藏上传入口：弹窗里的「上传图片」按钮点它 */}
+             <input ref={chatUploadInputRef} type="file" accept="image/*" hidden onChange={handleChatImageUploadPick} />
+
              <ChatModals
                 modalType={modalType} setModalType={setModalType}
                 transferAmt={transferAmt} setTransferAmt={setTransferAmt}
@@ -3894,8 +3916,10 @@ const Chat: React.FC = () => {
                 onTogglePerspective={() => updateCharacter(char.id, { perspectiveEnabled: !char.perspectiveEnabled })}
                 htmlModeEnabled={!!(char as any).htmlModeEnabled}
                 onToggleHtmlMode={() => updateCharacter(char.id, { htmlModeEnabled: !((char as any).htmlModeEnabled) } as any)}
-                htmlModeCustomPrompt={settingsHtmlModeCustomPrompt}
-                setHtmlModeCustomPrompt={setSettingsHtmlModeCustomPrompt}
+                 htmlModeCustomPrompt={settingsHtmlModeCustomPrompt}
+                 setHtmlModeCustomPrompt={setSettingsHtmlModeCustomPrompt}
+                 imageGenCharEnabled={char.imageGenCharEnabled !== false}
+                 onToggleImageGenChar={() => updateCharacter(char.id, { imageGenCharEnabled: char.imageGenCharEnabled === false } as any)}
                 chatVoiceEnabled={!!char.chatVoiceEnabled}
                 onToggleChatVoice={() => updateCharacter(char.id, { chatVoiceEnabled: !char.chatVoiceEnabled })}
                 chatVoiceAutoPlay={!!char.chatVoiceAutoPlay}
@@ -3911,12 +3935,13 @@ const Chat: React.FC = () => {
                 onDownloadVoice={selectedMessage ? () => handleDownloadVoice(selectedMessage) : undefined}
                 voiceFavorited={!!(selectedMessage?.id && chatFavoriteKeys.has(chatFavoriteSourceKey(selectedMessage)))}
                 onToggleVoiceFavorite={selectedMessage ? () => handleToggleVoiceFavorite(selectedMessage) : undefined}
-                imageGenAvailable={apiConfig.imageGenEnabled !== false}
-                onGenerateImage={selectedMessage ? () => handleManualImageGen(selectedMessage) : undefined}
-                imageGenDraft={imageGenDraft}
-                setImageGenDraft={setImageGenDraft}
-                imageGenSuggesting={imageGenSuggesting}
-                onConfirmImageGen={handleConfirmImageGen}
+                imageSourceStep={imageSourceStep}
+                setImageSourceStep={setImageSourceStep}
+                imageGenerateDesc={imageGenDesc}
+                setImageGenerateDesc={setImageGenDesc}
+                imageGenerateBusy={imageGenBusy}
+                onPickImageUpload={() => chatUploadInputRef.current?.click()}
+                onConfirmImageGenerate={handleConfirmImageGenerate}
                 scheduleData={scheduleData}
                 isScheduleGenerating={isScheduleGenerating}
                 onScheduleEdit={handleScheduleEdit}
@@ -4201,6 +4226,7 @@ const Chat: React.FC = () => {
                             userAvatar={userProfile.perCharAvatars?.[char.id] || userProfile.avatar}
                             isLatestMessage={!nextMessage}
                             onMediaLoad={handleMessageMediaLoad}
+                            onImageClick={handleMessageImageClick}
                             moduleAlign={mergedFineTune.chatModuleAlign || 'center'}
                             onLongPress={handleMessageLongPress}
                             onReply={handleQuickReply}
@@ -4291,6 +4317,20 @@ const Chat: React.FC = () => {
                                     <svg className="animate-spin h-3 w-3 shrink-0 text-indigo-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
                                 )}
                                 <span>{instantToolStatus.text}</span>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* 角色生的图还在路上：气泡口吻装成"图片正在加载"，不提生图/画图属性；
+                    生成完（图片落库）/ 失败 / 取消时由 imageGenPending 熄灭。 */}
+                {imageGenPendingCount > 0 && !selectionMode && (
+                    <div className="flex items-end gap-3 px-3 mb-4 animate-fade-in">
+                        <TokenImg value={char.avatar} className={chatPendingAvatarClass} />
+                        <div className="bg-white px-4 py-3 rounded-2xl shadow-sm">
+                            <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
+                                <svg className="animate-spin h-3 w-3 shrink-0 text-slate-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                                正在加载图片…
                             </div>
                         </div>
                     </div>
@@ -4453,7 +4493,6 @@ const Chat: React.FC = () => {
                     customThemes={customThemes} onUpdateTheme={(id) => updateCharacter(char.id, { bubbleStyle: id })}
                     onRemoveTheme={removeCustomTheme} activeThemeId={currentThemeId}
                     onPanelAction={handlePanelAction}
-                    onImageSelect={handleImageSelect}
                     isSummarizing={isSummarizing}
                     categories={visibleCategories}
                     activeCategory={activeCategory}
@@ -4819,6 +4858,11 @@ const Chat: React.FC = () => {
                     );
                 })()}
             </Modal>
+
+            {/* 图片放大查看（组件 portal 到 body，位置不影响定位） */}
+            {previewImage && (
+                <ImageLightbox value={previewImage} onClose={() => setPreviewImage(null)} />
+            )}
         </div>
     );
 };

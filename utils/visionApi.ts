@@ -53,9 +53,17 @@ const cleanDescription = (value: string): string => value
   .slice(0, 4000);
 
 /** 调用 OpenAI 兼容视觉端点，把一张图片变成可交给纯文本模型的描述。 */
+export interface VisionDescribeOptions {
+  /** 覆盖默认的通用描述 prompt（默认 VISION_PROMPT）。 */
+  prompt?: string;
+  maxTokens?: number;
+  temperature?: number;
+}
+
 export async function describeImageWithVisionApi(
   imageUrl: string,
   config: VisionApiConfig,
+  options?: VisionDescribeOptions,
 ): Promise<string> {
   if (!isVisionApiReady(config)) {
     throw new Error('识图 API 已开启，但 URL、Key 或 Model 尚未填写完整');
@@ -80,12 +88,12 @@ export async function describeImageWithVisionApi(
         messages: [{
           role: 'user',
           content: [
-            { type: 'text', text: VISION_PROMPT },
+            { type: 'text', text: options?.prompt || VISION_PROMPT },
             { type: 'image_url', image_url: { url: imageUrl } },
           ],
         }],
-        temperature: 0,
-        max_tokens: 1200,
+        temperature: options?.temperature ?? 0,
+        max_tokens: options?.maxTokens ?? 1200,
         stream: false,
       }),
     }, 1, 60_000, { appName: '消息', purpose: '识图' });

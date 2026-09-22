@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CharacterProfile, Message, UserProfile, VisionApiConfig } from '../types';
 import { ChatPrompts } from './chatPrompts';
 import { DB } from './db';
-import { materializeVisionDescriptions, visionApiConfigFromPreset } from './visionApi';
+import { materializeVisionDescriptions, visionApiConfigFromPreset, describeImageWithVisionApi } from './visionApi';
 
 const config: VisionApiConfig = {
   enabled: true,
@@ -99,6 +99,27 @@ describe('independent vision API', () => {
     expect(Array.isArray(apiMessages[0].content)).toBe(true);
     expect(JSON.stringify(apiMessages)).toContain('image_url');
     expect(JSON.stringify(apiMessages)).toContain(image);
+  });
+
+  // 角色生图提示词的「上传图片解析」复用这条调用，但要求模型输出 danbooru tag
+  // 而不是通用描述——prompt / 采样参数必须能透传，且默认行为不受影响。
+  it('custom prompt / maxTokens / temperature 透传（外貌 tag 解析用）', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: 'cat girl, silver hair' } }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const out = await describeImageWithVisionApi(image, config, {
+      prompt: '解析外貌 tag',
+      maxTokens: 300,
+      temperature: 0.2,
+    });
+
+    expect(out).toBe('cat girl, silver hair');
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    expect(body.messages[0].content[0].text).toBe('解析外貌 tag');
+    expect(body.max_tokens).toBe(300);
+    expect(body.temperature).toBe(0.2);
   });
 
   describe('webpage_card 帧拼图识图（B站预览帧）', () => {

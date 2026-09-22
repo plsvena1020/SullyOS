@@ -70,11 +70,39 @@ describe('generateLatentImage 完整链路', () => {
         expect(res.mimeType).toBe('image/png');
         expect(res.blob.size).toBeGreaterThan(0);
         expect(calls).toEqual(['GET status', 'POST submit', 'GET poll', 'GET poll', 'GET media']);
-        // 提交体：prompt / resolution / steps；鉴权头 Bearer
+        // 提交体：prompt / resolution / 默认采样器·调度器·步数；鉴权头 Bearer
         expect(seen[1].body.prompt).toBe('1girl, silver hair');
         expect(seen[1].body.resolution).toBe('landscape');
         expect(seen[1].body.steps).toBe(12);
+        expect(seen[1].body.sampler).toBe('er_sde');
+        expect(seen[1].body.scheduler).toBe('linear_quadratic');
         expect(seen[1].auth).toBe('Bearer lat_sk_test');
+    });
+
+    it('步数超站点上限被 422 打回 → 按上限自动降级重提一次', async () => {
+        const calls: string[] = [];
+        const fetchImpl = makeFetch([
+            jsonResp(200, { workersOnline: 1, queued: 0 }),
+            jsonResp(422, { error: 'invalid_steps', message: 'steps must be <= 12' }),
+            jsonResp(202, { id: 'job-1', status: 'queued' }),
+            jsonResp(200, { id: 'job-1', status: 'succeeded', artworkId: 'art-1', seed: 7 }),
+            jsonResp(200, {}),
+        ], calls);
+        const submitted: any[] = [];
+        const spy = vi.fn(async (url: string, init?: any) => {
+            if (init?.body) submitted.push(JSON.parse(init.body));
+            return fetchImpl(url, init);
+        });
+
+        const res = await generateLatentImage({ ...BASE, steps: 16, fetchImpl: spy });
+
+        expect(res.artworkId).toBe('art-1');
+        expect(calls.filter(c => c === 'POST submit')).toHaveLength(2);
+        expect(submitted[0].steps).toBe(16);
+        expect(submitted[1].steps).toBe(12);
+        // 降级只降步数，采样器/调度器照常
+        expect(submitted[1].sampler).toBe('er_sde');
+        expect(submitted[1].scheduler).toBe('linear_quadratic');
     });
 
     it('prompt 超 2000 字符被截断', async () => {

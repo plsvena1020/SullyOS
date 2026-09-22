@@ -14,7 +14,7 @@ const SOCIAL_APP = readFileSync(path.resolve(__dirname, '../apps/SocialApp.tsx')
 describe('Spark 主页背景与头像存 blobref 令牌', () => {
     it('写端产出令牌，不再往 assets 行里塞 data URL', () => {
         expect(SOCIAL_APP).toContain("import { processImageToBlob } from '../utils/file'");
-        expect(SOCIAL_APP).toContain("import { putImageBlob } from '../utils/blobRef'");
+        expect(SOCIAL_APP).toMatch(/import \{[^}]*\bputImageBlob\b[^}]*\} from '\.\.\/utils\/blobRef'/);
 
         // 背景图：blob → 令牌 → 存 assets 行
         expect(SOCIAL_APP).toContain("const blob = await processImageToBlob(file, { skipCompression: true })");
@@ -36,6 +36,9 @@ describe('Spark 主页背景与头像存 blobref 令牌', () => {
         // blobref 令牌原样透传，读端依然认令牌。
         expect(SOCIAL_APP).toContain('<TokenImg value={socialProfile.avatar}');
         expect(SOCIAL_APP).toContain('<TokenImg value={doubanImgUrl(post.authorAvatar)}');
+        // 角色帖 AI 首图（blobref 令牌）同样走 TokenImg 铺封面，而不是当 emoji 大字渲染。
+        expect(SOCIAL_APP).toContain('generateImageBlobOnly');
+        expect(SOCIAL_APP).toMatch(/isBlobRef\(firstImage\)[\s\S]{0,1200}value=\{firstImage\}/);
     });
 
     it('spark_* 所在的 assets 表在孤儿 GC 的引用面清单里（否则转出的图会被当垃圾删）', () => {

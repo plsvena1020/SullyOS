@@ -23,12 +23,32 @@ export type LatentFetch = (url: string, init?: any) => Promise<{
     headers: { get: (name: string) => string | null };
 }>;
 
+/** latent.moe 采样器枚举（openapi：euler / res_multistep / er_sde）。 */
+export type LatentSampler = 'euler' | 'res_multistep' | 'er_sde';
+/** latent.moe 调度器枚举（openapi：sgm_uniform / beta / beta57 / linear_quadratic）。 */
+export type LatentScheduler = 'sgm_uniform' | 'beta' | 'beta57' | 'linear_quadratic';
+
+/**
+ * 全站生图默认参数：采样器 ER SDE + 调度器 Linear Quadratic + 12 步（latent.moe
+ * 当前文档上限，openapi 2026-09-12：8–12）。采样器/调度器是官方枚举值，直接生效。
+ * 提交值若超过上限会被 422 参数校验打回，此时按上限自动降级重提一次（见 LATENT_STEPS_MAX）。
+ */
+export const DEFAULT_LATENT_STEPS = 12;
+export const LATENT_STEPS_MAX = 12;
+export const LATENT_STEPS_MIN = 8;
+export const DEFAULT_LATENT_SAMPLER: LatentSampler = 'er_sde';
+export const DEFAULT_LATENT_SCHEDULER: LatentScheduler = 'linear_quadratic';
+
 export interface LatentGenerateOptions {
     apiKey: string;
     prompt: string;
     negativePrompt?: string;
     resolution?: ImageGenResolution;
     seed?: number;
+    /** 默认 DEFAULT_LATENT_STEPS(12)；超过站点上限时会被 422 打回并自动按上限重提。 */
+    steps?: number;
+    sampler?: LatentSampler;
+    scheduler?: LatentScheduler;
     signal?: AbortSignal;
     /** 轮询状态回调（UI 进度用）。 */
     onStatus?: (stage: string, progress?: number) => void;
@@ -51,7 +71,6 @@ export interface LatentGenerateResult {
 const PROMPT_MAX_LEN = 2000;
 const DEFAULT_POLL_INTERVAL_MS = 2000;
 const DEFAULT_POLL_TIMEOUT_MS = 5 * 60 * 1000;
-const DEFAULT_STEPS = 12;
 
 class AbortError extends Error {
     constructor() { super('aborted'); this.name = 'AbortError'; }
@@ -133,18 +152,36 @@ export async function generateLatentImage(opts: LatentGenerateOptions): Promise<
 
     // ── 1. 提交 ──
     onStatus?.('queued');
-    const submitRes = await fetchImpl(`${latentBase()}/generate`, {
+    const requestedSteps = Math.max(
+        LATENT_STEPS_MIN,
+        Math.round(opts.steps ?? DEFAULT_LATENT_STEPS),
+    );
+    const buildSubmitBody = (steps: number) => JSON.stringify({
+        prompt: prompt.slice(0, PROMPT_MAX_LEN),
+        ...(opts.negativePrompt?.trim() ? { negativePrompt: opts.negativePrompt.trim().slice(0, PROMPT_MAX_LEN) } : {}),
+        resolution: opts.resolution ?? 'portrait',
+        steps,
+        sampler: opts.sampler ?? DEFAULT_LATENT_SAMPLER,
+        scheduler: opts.scheduler ?? DEFAULT_LATENT_SCHEDULER,
+        ...(typeof opts.seed === 'number' ? { seed: opts.seed } : {}),
+    });
+    let submitRes = await fetchImpl(`${latentBase()}/generate`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({
-            prompt: prompt.slice(0, PROMPT_MAX_LEN),
-            ...(opts.negativePrompt?.trim() ? { negativePrompt: opts.negativePrompt.trim().slice(0, PROMPT_MAX_LEN) } : {}),
-            resolution: opts.resolution ?? 'portrait',
-            steps: DEFAULT_STEPS,
-            ...(typeof opts.seed === 'number' ? { seed: opts.seed } : {}),
-        }),
+        body: buildSubmitBody(requestedSteps),
         signal,
     });
+    // 默认 12 步就是站点文档上限；万一调用方给了更大的值被 422 参数校验打回，
+    // 按上限降级重提一次，别让功能因此整个不可用。
+    if (!submitRes.ok && submitRes.status === 422 && requestedSteps > LATENT_STEPS_MAX) {
+        console.warn(`[imageGen] Latent 拒绝 ${requestedSteps} 步（当前上限 ${LATENT_STEPS_MAX}），按上限重提`);
+        submitRes = await fetchImpl(`${latentBase()}/generate`, {
+            method: 'POST',
+            headers,
+            body: buildSubmitBody(LATENT_STEPS_MAX),
+            signal,
+        });
+    }
     const submitData = await readJsonSafe(submitRes);
     if (!submitRes.ok) throw new Error(mapSubmitError(submitRes.status, submitData));
     const jobId: string | undefined = submitData?.id;

@@ -54,6 +54,7 @@ import { readAgentRoutingConfig } from '../utils/agentRouting';
 import type { APIConfig, BridgeConfig, TtsProvider } from '../types';
 import { getEffectiveBridges, normalizeBridges, makeBridgeId } from '../utils/bridgeRegistry';
 import { describeImageWithVisionApi, VISION_API_TEST_IMAGE_DATA_URL, visionApiConfigFromPreset } from '../utils/visionApi';
+import { runImageGenTest } from '../utils/imageGenFlow';
 import {
     FIRECRAWL_API_KEYS_URL,
     getFirecrawlApiKey,
@@ -657,8 +658,12 @@ const Settings: React.FC = () => {
   const [localImageGenEnabled, setLocalImageGenEnabled] = useState(apiConfig.imageGenEnabled === true);
   const [showLatentGuide, setShowLatentGuide] = useState(false);
   const [imageGenStatusMsg, setImageGenStatusMsg] = useState('');
-  // 角色外貌档案编辑草稿：charId → tag 串（提交时只写改过的）。
-  const [profileDrafts, setProfileDrafts] = useState<Record<string, string>>({});
+  // 「测试生图」：固定测试词跑一次真实生图，只在这里预览，不落相册 / 聊天。
+  const [isTestingImageGen, setIsTestingImageGen] = useState(false);
+  const [imageGenTestStage, setImageGenTestStage] = useState('');
+  const [imageGenTestError, setImageGenTestError] = useState('');
+  const [imageGenTestPreview, setImageGenTestPreview] = useState<{ url: string; prompt: string; seed: number } | null>(null);
+  const imageGenTestPreviewUrlRef = useRef<string | null>(null);
   const [localTtsProvider, setLocalTtsProvider] = useState<TtsProvider>(
     apiConfig.ttsProvider === 'fishaudio' || apiConfig.ttsProvider === 'elevenlabs'
       ? apiConfig.ttsProvider
@@ -1299,20 +1304,58 @@ const Settings: React.FC = () => {
     setTimeout(() => setOtherStatusMsg(''), 2000);
   };
 
-  // AI 生图板块独立保存：key + 总开关进 apiConfig，外貌档案逐角色写回（只提交改过的）。
+  // AI 生图板块独立保存：key + 总开关进 apiConfig。角色外貌提示词已迁到
+  // 神经链接（角色 App → 设定），那里改完即时落库，不再从这里批量写回。
   const handleSaveImageGen = () => {
     updateApiConfig({ latentImageKey: localLatentKey, imageGenEnabled: localImageGenEnabled });
-    for (const c of characters) {
-      const draft = profileDrafts[c.id];
-      if (draft === undefined) continue;
-      const next = draft.trim();
-      const cur = ((c as any).imageGenProfile || '').trim();
-      if (next !== cur) updateCharacter(c.id, { imageGenProfile: next } as any);
-    }
-    setProfileDrafts({});
     setImageGenStatusMsg('已保存');
     setTimeout(() => setImageGenStatusMsg(''), 2000);
-    };
+  };
+
+  /** 测试生图的阶段文案：把 latent 客户端的英文 stage 翻成给人看的话。 */
+  const describeImageGenTestStage = (stage: string, progress?: number): string => {
+    if (stage === 'checking') return '检查 GPU 队列…';
+    if (stage === 'queued') return '排队中…';
+    if (stage === 'running' || stage === 'leased') return `生成中${typeof progress === 'number' ? ` ${progress}%` : ''}…`;
+    if (stage === 'downloading') return '下载图片…';
+    if (stage === 'done') return '完成';
+    return '生成中…';
+  };
+
+  // 「测试生图」：用草稿里的 Key（不必先保存）跑一次固定测试词的真实生图。
+  // 结果只在本板块内联预览；重新测试 / 卸载时回收上一张的 object URL。
+  const handleTestImageGen = async () => {
+    const key = localLatentKey.trim();
+    if (!key) {
+      setImageGenTestError('先填 Latent API Key 再测试');
+      return;
+    }
+    if (isTestingImageGen) return;
+    setIsTestingImageGen(true);
+    setImageGenTestError('');
+    setImageGenTestStage('准备中…');
+    try {
+      const result = await runImageGenTest({ ...apiConfig, latentImageKey: key }, {
+        onStatus: (stage, progress) => setImageGenTestStage(describeImageGenTestStage(stage, progress)),
+      });
+      setImageGenTestPreview(prev => {
+        if (prev) URL.revokeObjectURL(prev.url);
+        const url = URL.createObjectURL(result.blob);
+        imageGenTestPreviewUrlRef.current = url;
+        return { url, prompt: result.prompt, seed: result.seed };
+      });
+    } catch (e: any) {
+      setImageGenTestError(`测试失败：${e?.message || '未知错误'}`);
+    } finally {
+      setIsTestingImageGen(false);
+      setImageGenTestStage('');
+    }
+  };
+
+  // 离开设置页时把预览图的 object URL 回收掉，别漏内存。
+  useEffect(() => () => {
+    if (imageGenTestPreviewUrlRef.current) URL.revokeObjectURL(imageGenTestPreviewUrlRef.current);
+  }, []);
 
   // 选「谁来做语音生成」立即落库——不需要再点下面的保存。
   // 连同当前「其他 API」草稿一起提交（与保存按钮同一份 payload）：一是即时生效，
@@ -3339,7 +3382,7 @@ const Settings: React.FC = () => {
             }
         >
             <p className="text-[11px] text-slate-400 mb-4 leading-relaxed pl-1">
-                聊天时角色会在关键场面自动配图（回复里写 <span className="font-mono font-semibold text-slate-500">[[GEN_IMAGE:]]</span> 标签触发）。图片走 latent.moe 生图、自动存进相册。
+                聊天和主动消息里，角色想发照片 / 自拍 / 画画时会自动配图（回复里写 <span className="font-mono font-semibold text-slate-500">[[GEN_IMAGE:]]</span> 标签触发）。图片走 latent.moe 生图、自动存进相册。每个角色的外貌提示词在「神经链接 → 角色 → 设定」里维护。
             </p>
 
             <div className="space-y-4">
@@ -3347,7 +3390,7 @@ const Settings: React.FC = () => {
                     <div className="flex items-center justify-between bg-white/50 border border-slate-200/60 rounded-xl px-4 py-3">
                         <div>
                             <div className="text-sm font-bold text-slate-700">自动生图</div>
-                            <div className="text-[11px] text-slate-400 mt-0.5">关掉后标签只剥离不执行（楼层上的手动生图按钮仍可用）</div>
+                            <div className="text-[11px] text-slate-400 mt-0.5">关掉后标签只剥离不执行（相册里仍可手动上传或生成）</div>
                         </div>
                         <button
                             type="button"
@@ -3388,28 +3431,30 @@ const Settings: React.FC = () => {
                     )}
                 </div>
 
+                {/* 测试生图：固定测试词真跑一次，内联预览（不落相册 / 聊天） */}
                 <div className="group">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block pl-1">角色外貌档案（防串脸）</label>
-                    <p className="text-[11px] text-slate-400 pl-1 leading-relaxed">生图提示词里写 @名字 时自动替换成这里的外貌 tag，保证同一角色每张图长一个样。首次生图会自动从人设提取，之后可再手动改。</p>
-                    <div className="space-y-2 mt-2">
-                        {characters.map(c => (
-                            <div key={c.id} className="bg-white/50 border border-slate-200/60 rounded-xl px-3 py-2.5">
-                                <div className="text-xs font-bold text-slate-600 mb-1.5">{c.name}</div>
-                                <input
-                                    type="text"
-                                    spellCheck={false}
-                                    value={profileDrafts[c.id] ?? (c as any).imageGenProfile ?? ''}
-                                    onChange={(e) => setProfileDrafts(prev => ({ ...prev, [c.id]: e.target.value }))}
-                                    placeholder="cat girl, silver hair, green eyes（英文 tag，逗号分隔）"
-                                    className="w-full bg-white/70 border border-slate-200/60 rounded-lg px-3 py-2 text-xs font-mono focus:bg-white transition-all"
-                                />
-                            </div>
-                        ))}
-                        {characters.length === 0 && (
-                            <p className="text-[11px] text-slate-400 pl-1">还没有角色，先去捏一个吧。</p>
-                        )}
-                    </div>
+                    <button
+                        type="button"
+                        onClick={() => void handleTestImageGen()}
+                        disabled={isTestingImageGen || !localLatentKey.trim()}
+                        className="w-full py-3 rounded-2xl font-bold text-fuchsia-600 border border-fuchsia-200 bg-fuchsia-50 active:scale-95 transition-all disabled:opacity-40"
+                    >
+                        {isTestingImageGen ? (imageGenTestStage || '测试中…') : '🧪 测试生图'}
+                    </button>
+                    <p className="text-[11px] text-slate-400 mt-1 pl-1">用固定测试词真实生成一张方图，会消耗一次生图额度；结果只显示在这里，不存相册、不进聊天。</p>
+                    {imageGenTestError && (
+                        <div className="mt-2 text-xs px-3 py-2 rounded-xl leading-relaxed bg-red-50 text-red-600">{imageGenTestError}</div>
+                    )}
+                    {imageGenTestPreview && (
+                        <div className="mt-3 space-y-2">
+                            <img src={imageGenTestPreview.url} alt="测试生图结果" className="w-full max-h-80 object-contain rounded-2xl border border-fuchsia-100 bg-white" />
+                            <p className="text-[10px] text-slate-400 font-mono break-all leading-relaxed">{imageGenTestPreview.prompt}</p>
+                            <p className="text-[10px] text-slate-400">seed {imageGenTestPreview.seed}</p>
+                        </div>
+                    )}
                 </div>
+
+                <p className="text-[11px] text-slate-400 pl-1 leading-relaxed">角色外貌档案（防串脸）已迁到「神经链接 → 角色 → 设定 → AI 生图 · 外貌提示词」，可一键从人设提取或上传参考图解析。</p>
 
                 <button onClick={handleSaveImageGen} className="w-full py-3 rounded-2xl font-bold text-white shadow-lg shadow-fuchsia-500/20 bg-fuchsia-500 active:scale-95 transition-all mt-2">
                     {imageGenStatusMsg || '保存生图配置'}

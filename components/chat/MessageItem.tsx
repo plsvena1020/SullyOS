@@ -1424,6 +1424,8 @@ interface MessageItemProps {
     onResolveLifeRecord?: (m: Message, action: 'confirmed' | 'rejected') => void;
     /** 打开协同文件柜里的原始 Blob；消息本身只保存 assetId 引用。 */
     onOpenCollaborationFile?: (m: Message) => void | Promise<void>;
+    /** 点图片气泡看大图；状态由调用方持有（Chat 挂唯一灯箱实例）。 */
+    onImageClick?: (url: string) => void;
     /** 思考链卡片视觉与交互 */
     thinkingChainOptions?: {
         styleId?: ThinkingChainStyleId;
@@ -1474,6 +1476,7 @@ const MessageItem = React.memo(({
     onResolveTransfer,
     onResolveLifeRecord,
     onOpenCollaborationFile,
+    onImageClick,
     thinkingChainOptions,
 }: MessageItemProps) => {
     const isUser = m.role === 'user';
@@ -3379,14 +3382,22 @@ const MessageItem = React.memo(({
         return commonLayout(
             <div className="relative group">
                 {m.content ? (
-                    <TokenImg
-                        value={m.content}
-                        className="max-w-[200px] max-h-[300px] rounded-2xl"
-                        alt="Uploaded"
-                        loading={isLatestMessage ? 'eager' : 'lazy'}
-                        decoding="async"
-                        onLoad={() => onMediaLoad?.(m.id)}
-                    />
+                    <button
+                        type="button"
+                        onClick={() => onImageClick?.(m.content)}
+                        disabled={!onImageClick}
+                        className="block border-0 bg-transparent p-0 cursor-zoom-in transition-transform active:scale-[0.98] disabled:cursor-default"
+                        aria-label="查看大图"
+                    >
+                        <TokenImg
+                            value={m.content}
+                            className="max-w-[200px] max-h-[300px] rounded-2xl"
+                            alt="Uploaded"
+                            loading={isLatestMessage ? 'eager' : 'lazy'}
+                            decoding="async"
+                            onLoad={() => onMediaLoad?.(m.id)}
+                        />
+                    </button>
                 ) : (
                     <div className="px-4 py-6 rounded-2xl bg-slate-100 text-slate-400 text-xs italic text-center min-w-[120px]">[图片已丢失]</div>
                 )}
@@ -3885,6 +3896,7 @@ const MessageItem = React.memo(({
            prev.userAvatar === next.userAvatar &&
            prev.isLatestMessage === next.isLatestMessage &&
            prev.onMediaLoad === next.onMediaLoad &&
+           prev.onImageClick === next.onImageClick &&
            prev.selectionMode === next.selectionMode &&
            prev.isSelected === next.isSelected &&
            prev.translationEnabled === next.translationEnabled &&

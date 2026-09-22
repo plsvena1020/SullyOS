@@ -33,7 +33,6 @@ interface ChatInputAreaProps {
     /** 提供时整体替换内置 actions 双页网格——群聊传自己的功能格。不传 = 原行为 */
     actionsContent?: React.ReactNode;
     onPanelAction: (type: string, payload?: any) => void;
-    onImageSelect: (file: File) => void;
     isSummarizing: boolean;
     // Categories Support
     categories?: EmojiCategory[];
@@ -66,7 +65,7 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
     unreadMessages = {},
     customThemes = [], onUpdateTheme = () => {}, onRemoveTheme = () => {}, activeThemeId = '',
     actionsContent,
-    onPanelAction, onImageSelect, isSummarizing,
+    onPanelAction, isSummarizing,
     categories = [], activeCategory = 'default',
     onReroll, canReroll,
     mcdConfigured = false,
@@ -80,7 +79,6 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
     chromeStyle = 'soft',
     acnh = false,
 }) => {
-    const chatImageInputRef = useRef<HTMLInputElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const [actionsPage, setActionsPage] = useState<0 | 1 | 2>(0);
     const onActionsPanelWheel = useWheelPager((delta: 1 | -1) => {
@@ -123,16 +121,7 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
         }
     };
 
-    const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>, type: 'chat' | 'bg') => {
-        const file = e.target.files?.[0];
-        if (file) {
-            onImageSelect(file);
-        }
-        if (e.target) e.target.value = ''; // Reset
-    };
-
-    // --- Unified Touch/Long-Press Logic ---
-    
+    // --- Unified Touch/Long-Press Logic ---    
     const clearTimer = () => {
         if (longPressTimer.current) {
             clearTimeout(longPressTimer.current);
@@ -823,15 +812,13 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
 
                           {/* Page 2: 更多 */}
                           <div className="w-1/3 shrink-0 p-6 grid grid-cols-4 gap-8">
-                            <button onClick={() => chatImageInputRef.current?.click()} className={`flex flex-col items-center gap-2 active:scale-95 transition-all duration-200 ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}>
+                            <button onClick={() => onPanelAction('image-source')} className={`flex flex-col items-center gap-2 active:scale-95 transition-all duration-200 ${acnh ? 'text-[#725d42]' : isDiscordStyle ? 'text-slate-200' : 'text-slate-600'}`}>
                                 {acnh ? <AcnhActionTile kind="image" /> : (
                                 <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm border ${isDiscordStyle ? 'bg-slate-800 text-pink-300 border-pink-400/20' : 'bg-pink-50 text-pink-400 border-pink-100'}`}>
                                     <Image className="w-6 h-6" weight="bold" />
                                 </div>)}
                                 <span className="text-xs font-bold">相册</span>
                             </button>
-                            <input type="file" ref={chatImageInputRef} className="hidden" accept="image/*" onChange={(e) => handleImageChange(e, 'chat')} />
-
                             {/* 提示音：打开该角色专属的「白框提示音」弹窗（挨着白框，独立于白框可绑定/解绑） */}
                             <button
                               onClick={() => onPanelAction('chrome-sound')}

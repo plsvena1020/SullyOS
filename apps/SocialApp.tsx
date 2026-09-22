@@ -5,7 +5,9 @@ import { DB } from '../utils/db';
 import { CharacterProfile, SocialPost, SocialComment, SubAccount, SocialAppProfile } from '../types';
 import { ContextBuilder } from '../utils/context';
 import { processImageToBlob } from '../utils/file';
-import { putImageBlob } from '../utils/blobRef';
+import { putImageBlob, isBlobRef } from '../utils/blobRef';
+import { extractGenImageTags } from '../utils/imageGenTags';
+import { generateImageBlobOnly } from '../utils/imageGenFlow';
 import Modal from '../components/os/Modal';
 import { safeResponseJson } from '../utils/safeApi';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
@@ -466,6 +468,29 @@ const SocialApp: React.FC = () => {
         setSelectedPost(current => (current?.id === postId ? null : current));
     };
 
+    // 角色帖首图：生图要排队 + 轮询（几十秒到几分钟），不阻塞刷新流；出图后原地替换封面。
+    // 跟聊天生图共用同一份内核（外貌档案替换、串行队列、开关/Key 门都在里面）。
+    const generatePostCover = async (job: { postId: string; char: CharacterProfile; raw: string }) => {
+        try {
+            // 模型有时会直接抄完整的 [[GEN_IMAGE: ...]]；两种写法都接住，解析复用聊天那条同一份。
+            const wrapped = /\[\[GEN_IMAGE/i.test(job.raw) ? job.raw : `[[GEN_IMAGE: ${job.raw}]]`;
+            const req = extractGenImageTags(wrapped)[0];
+            if (!req) return;
+            const result = await generateImageBlobOnly(req, {
+                apiConfig,
+                char: job.char,
+                characters,
+                saveCharProfile: (id, profile) => updateCharacter(id, { imageGenProfile: profile } as any),
+            });
+            if (!mountedRef.current) return;
+            updatePostInFeed(job.postId, p => ({ ...p, images: [result.token, ...(p.images || [])] }));
+        } catch (e: any) {
+            if (e?.name === 'AbortError') return;
+            console.warn('[Spark] 帖子首图生成失败', e);
+            if (mountedRef.current) addToast(`「${job.char.name}」的帖子首图生成失败：${e?.message || '未知错误'}`, 'error');
+        }
+    };
+
     // --- AI Logic (Updated for Multi-Handle) ---
     // 每次刷新随机挑 2 个小组、每组取最新 8 条混入，避免刷屏和打爆豆瓣
     const DOUBAN_REFRESH_GROUPS = 2;
@@ -543,6 +568,16 @@ const SocialApp: React.FC = () => {
                 charContexts += `\n<<< 角色档案: ${char.name} >>>\n${coreContext}\n${recentStatus}${momentsMaterialSection}\n<<< 档案结束 >>>\n`;
             }
 
+            // 生图总开关 + Latent Key 都在才教模型配图；关着时提示词里一个字段都不提，
+            // 免得模型写了 image 却没有执行路径。
+            const imageGenReady = apiConfig.imageGenEnabled === true && !!(apiConfig.latentImageKey || '').trim();
+            const coverRule = imageGenReady
+                ? `
+3. **角色帖配图 (可选，最多 1-2 条)**:
+   - 角色帖如果是在「发照片 / 自拍 / 晒图 / 画画 / 分享眼前画面」，给它配一张生成图：填 "image" 字段（英文 danbooru 风格 tag，画幅写在最后一段，如 \`1girl, silver hair, sunset | portrait\`），"emojis" 留 ["✨"] 即可。
+   - 只有真正要展示画面的帖子才配图；日常吐槽、自说自话不要配。路人帖永远不填 "image"。`
+                : '';
+
             const prompt = `### 任务: 模拟社交APP "Spark" 的推荐流
 你需要生成 6-8 条新的社交媒体帖子。
 
@@ -556,6 +591,7 @@ const SocialApp: React.FC = () => {
 2. **路人/网友发帖 (70%)**: 
     - 模拟真实的互联网生态：吃瓜群众、技术宅、美妆博主、情感树洞。
     - 如果下方有【小组实时热点】，优先围绕热点方向编帖子（租房/美食/情感/电影/同城生活等），更像真实信息流。
+${coverRule}
 
 ### 🔥 小组实时热点（真实世界正在聊的话题，可蹭）
 ${doubanHotTitles.length > 0 ? doubanHotTitles.map(t => `- ${t}`).join('\n') : '(本次未同步到豆瓣热点)'}
@@ -582,7 +618,7 @@ ${charContexts}
     "title": "简短吸睛的标题",
     "content": "正文内容...",
     "emojis": ["🎈", "✨"],
-    "likes": 随机数 (0 - 10000)
+${imageGenReady ? '    "image": "（可选，仅角色帖）生图 tag | 画幅，不配图就整行删掉",\n' : ''}    "likes": 随机数 (0 - 10000)
   },
   ...
 ]`;
@@ -599,6 +635,8 @@ ${charContexts}
             const json = safeParseJSON(data.choices[0].message.content);
             if (!Array.isArray(json)) throw new Error('Parsed data is not an array');
             
+            const MAX_COVERS = 2;
+            const coverJobs: Array<{ postId: string; char: CharacterProfile; raw: string }> = [];
             const newPosts: SocialPost[] = json
                 .filter((item: any) => {
                     // Defense in depth: drop any AI-generated post that tries to impersonate the user.
@@ -625,7 +663,7 @@ ${charContexts}
                 // Normalize emoji content. AI usually returns real emoji chars; fall back to a ✨ char (not codepoint) for safety.
                 const rawEmojis = Array.isArray(item.emojis) && item.emojis.length > 0 ? item.emojis : ['✨'];
                 const images = rawEmojis.map((e: any) => codepointToEmoji(String(e ?? '✨')));
-                return {
+                const post: SocialPost = {
                     id: `post-${Date.now()}-${Math.random()}`,
                     authorName: item.authorName || 'Unknown',
                     authorAvatar: avatar,
@@ -642,6 +680,13 @@ ${charContexts}
                     authorType: isCharacterPost ? 'character' : 'stranger',
                     authorCharId: matchedChar?.id,
                 };
+                // 角色帖要配图：先占位 ✨，图在后台生成完再换成真封面（见 generatePostCover）。
+                // 路人帖永远不配 —— 提示词里让模型只给角色帖填 image，这里再兜一道。
+                const rawImage = typeof item.image === 'string' ? item.image.trim() : '';
+                if (imageGenReady && isCharacterPost && matchedChar && rawImage && coverJobs.length < MAX_COVERS) {
+                    coverJobs.push({ postId: post.id, char: matchedChar, raw: rawImage });
+                }
+                return post;
             });
             // AIRP 投影锚点：这次发帖喂过素材的角色帖才写 airpEventIds（没用素材的帖子保持缺省，
             // 与老帖子数据逐字节一致），供下次刷新扫 feed 去重。
@@ -655,6 +700,8 @@ ${charContexts}
                 if (usedEventIds && usedEventIds.length > 0) post.airpEventIds = [...usedEventIds];
             }
             prependPostsToFeed(newPosts);
+            // 封面生成是长耗时（排队 + 轮询），fire-and-forget，出图后原地更新帖子。
+            for (const job of coverJobs) void generatePostCover(job);
             addToast('首页已刷新: 冲浪模式开启', 'success');
         } catch (e: any) {
             if (e?.name !== 'AbortError') addToast('刷新失败: ' + e.message, 'error');
@@ -1032,21 +1079,35 @@ ${identityMap}
 
     // --- Renderers ---
 
-    // 帖子封面：豆瓣真实帖首图是真实图片（经 worker 代理防盗链），加载失败
-    // 自动隐藏露出底下的渐变 + ✨；其他帖沿用 emoji 大字卡。
+    // 帖子封面：豆瓣真实帖首图是真实图片（经 worker 代理防盗链）；角色帖的 AI 首图是
+    // blobref 令牌（生图产物，走 TokenImg）。两者都加载失败时自动隐藏，露出底下的渐变 + ✨；
+    // 其他帖沿用 emoji 大字卡。
     const renderPostCover = (post: SocialPost, emojiClass: string, emojiWrap = 'drop-shadow-xl filter saturate-150 transform transition-transform group-hover:scale-110 duration-500') => {
         const firstImage = post.images?.[0];
-        if (post.origin === 'douban' && typeof firstImage === 'string' && /^https?:\/\//i.test(firstImage)) {
+        const isHttpImage = typeof firstImage === 'string' && /^https?:\/\//i.test(firstImage);
+        const isLocalImage = typeof firstImage === 'string' && (isBlobRef(firstImage) || /^data:image\//i.test(firstImage));
+        const isRealImage = (post.origin === 'douban' && isHttpImage) || isLocalImage;
+        if (isRealImage && typeof firstImage === 'string') {
             return (
                 <>
                     <div className="absolute inset-0 flex items-center justify-center"><span className={emojiClass}>✨</span></div>
-                    <img
-                        src={doubanImgUrl(firstImage)}
-                        alt={post.title}
-                        loading="lazy"
-                        className="absolute inset-0 w-full h-full object-cover z-10"
-                        onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
-                    />
+                    {post.origin === 'douban' && isHttpImage ? (
+                        <img
+                            src={doubanImgUrl(firstImage)}
+                            alt={post.title}
+                            loading="lazy"
+                            className="absolute inset-0 w-full h-full object-cover z-10"
+                            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                        />
+                    ) : (
+                        <TokenImg
+                            value={firstImage}
+                            alt={post.title}
+                            loading="lazy"
+                            className="absolute inset-0 w-full h-full object-cover z-10"
+                            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                        />
+                    )}
                 </>
             );
         }
