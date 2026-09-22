@@ -16,6 +16,8 @@ export default defineConfig({
       'worker/**/*.test.ts',
       'scripts/**/*.test.ts',
       'api/**/*.test.ts',
+      // xhs session bridge(vps-backend 纯 JS 服务):任务 6/7 单测位
+      'vps-backend/**/*.test.ts',
     ],
     // 排除 React 组件 / 浏览器集成测 (没装 jsdom)
     exclude: ['node_modules', '**/node_modules/**', '.worktrees', 'dist'],
