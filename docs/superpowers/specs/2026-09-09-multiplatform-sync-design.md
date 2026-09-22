@@ -169,13 +169,11 @@ utils/sync/
 
 | 里程碑 | 内容 | 计划文件 |
 |---|---|---|
-| M1 | 适配层 + Capacitor android 壳重建 + Actions | `docs/superpowers/plans/2026-09-09-m1-capacitor-apk.md`（已执行：Task 1-4 完成，Task 5 装机冒烟待用户） |
+| M1 | 适配层 + Capacitor + Actions | `docs/superpowers/plans/2026-09-09-m1-capacitor-apk.md`（已写） |
 | M2+M3 | VPS 同步 API（含 `/agent/*`、`/amsg/*` 反代，覆盖中转依赖）+ 客户端引擎 + UI | M1 验收后编写（依赖 M1 的 platform 层与真实 dist 形态） |
 | M4+M5 | Tauri 壳（含 Tauri 原生通知，覆盖 PC 推送）+ 桌面形态 | M3 验收后编写 |
-| ~~M6~~ | **FCM 推送迁移——审查发现上游已实现**（worker FCM HTTP v1 + `utils/nativeAmsgPush.ts` + capacitor mode 隔离，见 `docs/capacitor-fcm-tiao.md`），从路线图划掉；剩余动作仅「用户自建 Firebase 项目 + google-services.json + Worker 三件套 Secrets」 | 无需计划 |
+| M6 | FCM 推送迁移（1~2 天，M3 后）：worker 加 FCM 通道 + `@capacitor/push-notifications` + Android 13+ 通知权限；附赠锁屏全屏来电（full-screen intent）解锁 | M3 验收后编写 |
 | M7 | 蓝牙原生适配（1~2 天，可插队）：`bleEngine` 加原生适配器路由（`@capacitor-community/bluetooth-le`），恢复 APK/平板蓝牙感知与角色蓝牙工具 | M1 验收后即可编写 |
-
-**CHICK2 结论（2026-09-09 执行期发现）**：上游的 APK 构建依赖作者私有 wrapper 仓 `D:\CHICK\CHICK2`（`scripts/sync-tiao-capacitor.ps1` 硬编码路径，本机不存在，用户手里也没有）。重建方案已落地：上游公开的 `capacitor.config.json`（包名 `com.aetheros.simulator`）+ `npx cap add android` 动态生成壳（`android/` 已入库，仅 53 文件 0.3MB，构建产物 gitignore），CI 用 `vite build --mode capacitor` + `gradlew assembleDebug` 单仓全自动出 debug APK，不再需要 CHICK2。CI 产物为 debug 签名，与上游签名 APK 不兼容覆盖装；`.env.capacitor` 的 OTA 清单仍指上游 Pages，fork 自用需改址或留空（见 `docs/apk-build.md`）。
 
 ## 7. 风险登记
 
@@ -208,7 +206,7 @@ utils/sync/
 
 - **PC 蓝牙**：WebView2 无 Web Bluetooth，Tauri 侧需 Rust btleplug 插件（3~5 天）——用户已确认不做，除非将来需求变化
 - **mediaSession / navigator.share 原生化**：明确放弃（守卫降级已足够，见 §7.1）
-- **锁屏全屏来电**（full-screen intent）：依赖 FCM 配置完成（worker 代码已实现，见 §6 M6 条目）
+- **锁屏全屏来电**（full-screen intent）：依赖 M6（FCM 迁移已升格为正式里程碑，见 §6）
 - **SQLite 迁移**：WebView IndexedDB 若出现实际损坏再启动
 - **掌心窗感知**（零代码可插队）：自部署其 server+MCP（github.com/linzhi-524/linjian-peek-public，许可禁止再分发、允许自用），SullyOS 现有 MCP 客户端直连，角色获 `peek_screen`/通知/App 感知工具；amsg2 worker 直连 MCP 可支撑主动关怀
 - **多窗口**（Tauri）：聊天/笔记独立窗口
