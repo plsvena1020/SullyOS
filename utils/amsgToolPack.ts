@@ -75,6 +75,7 @@ export interface AmsgToolConfig extends AgenticToolRealtimeConfig {
     enabled: boolean;
     serverUrl: string;
     cookie?: string;
+    bridgeToken?: string;
     platform?: 'xhs' | 'rednote';
     loggedInUserId?: string;
     loggedInNickname?: string;
@@ -212,7 +213,9 @@ export const buildToolConfig = (
           xhsMcpConfig: {
             enabled: !!xhs.enabled,
             serverUrl: xhs.serverUrl,
-            ...(xhs.cookie ? { cookie: xhs.cookie } : {}),
+            // vps 模式:cookie 永不上云(服务器托管会话);manual/lite 模式行为不变。
+            ...((xhs as any).mode === 'vps' ? {} : (xhs.cookie ? { cookie: xhs.cookie } : {})),
+            ...((xhs as any).mode === 'vps' && xhs.bridgeToken ? { bridgeToken: xhs.bridgeToken } : {}),
             ...(xhs.platform ? { platform: xhs.platform } : {}),
             ...(xhs.loggedInUserId ? { loggedInUserId: xhs.loggedInUserId } : {}),
             ...(xhs.loggedInNickname ? { loggedInNickname: xhs.loggedInNickname } : {}),

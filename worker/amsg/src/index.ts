@@ -355,6 +355,8 @@ interface FireStash {
   toolCtx: AgenticToolCtx;
   proxyWorkerUrl: string | null;
   xhsCookie: string;
+  /** vps 模式的 bridge 鉴权 token(cookie 留在 VPS,不在云端)。 */
+  xhsBridgeToken: string;
   /** 本次触发时刻（任务行 next_send_at）；透传给每条 push 的 metadata.amsgOccurrenceMs。 */
   occurrenceMs: number;
   /**
@@ -482,7 +484,7 @@ const laterOf = (a: number | null, b: number | null): number | null =>
 const buildToolCtx = (
   pack: AmsgToolPack,
   config: AmsgToolConfig,
-): { toolCtx: AgenticToolCtx; proxyWorkerUrl: string | null; xhsCookie: string } => {
+): { toolCtx: AgenticToolCtx; proxyWorkerUrl: string | null; xhsCookie: string; xhsBridgeToken: string } => {
   // AgenticToolChar 就是 agenticTools 真正会读的那几个字段（runRecall / resolveXhsConfig /
   // 日记按角色名查）。用它当类型而不是硬转 CharacterProfile：那边多读一个字段这里就编译不过，
   // 不会等到 worker 到点才拿到 undefined。
@@ -513,6 +515,7 @@ const buildToolCtx = (
     },
     proxyWorkerUrl: config.proxyWorkerUrl ?? null,
     xhsCookie: config.xhsMcpConfig?.cookie ?? '',
+    xhsBridgeToken: ((config.xhsMcpConfig as any)?.bridgeToken as string) ?? '',
   };
 };
 
@@ -1862,7 +1865,7 @@ export const amsgHooks = {
     // 任务归属键：self_log 的条目 id、以及「排程清单里排除掉自己这条」都用它。
     const clientTaskId = typeof taskMeta.amsgClientTaskId === 'string' ? taskMeta.amsgClientTaskId : '';
 
-    const { toolCtx, proxyWorkerUrl, xhsCookie } = buildToolCtx(toolPack, toolConfig);
+    const { toolCtx, proxyWorkerUrl, xhsCookie, xhsBridgeToken } = buildToolCtx(toolPack, toolConfig);
     // 连发额度里「先前排了还没响」那一份的快照：条数进 plannedSelfSends，uuid 留一份
     // 给排程闸退额度用（本轮取消掉快照里的任务时按交集抵扣，cancel + 重排额度中性）。
     const plannedSelfSendTasks = livePendingTasks
@@ -1874,6 +1877,7 @@ export const amsgHooks = {
       toolCtx,
       proxyWorkerUrl,
       xhsCookie,
+      xhsBridgeToken,
       occurrenceMs,
       selfLog,
       selfLogDirty: false,
@@ -2439,6 +2443,7 @@ export const amsgHooks = {
     // 同一分钟并发的两个角色会互相串凭据，而且不会报错。
     if (stash.proxyWorkerUrl) setProxyWorkerUrlOverride(stash.proxyWorkerUrl);
     if (stash.xhsCookie) XhsMcpClient.setCookie(stash.xhsCookie);
+    if (stash.xhsBridgeToken) XhsMcpClient.setBridgeToken(stash.xhsBridgeToken);
 
     const results = [];
     for (const toolCall of toolCalls) {

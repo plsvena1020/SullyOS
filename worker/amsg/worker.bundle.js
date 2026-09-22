@@ -6770,7 +6770,7 @@ function createSingleUserCloudflareWorker(buildConfig, options = {}) {
 }
 
 // utils/amsgBundleVersion.ts
-var AMSG_BUNDLE_VERSION = "2026-09-13";
+var AMSG_BUNDLE_VERSION = "2026-09-15";
 
 // worker/shared/cors.ts
 var CORS_BASE_HEADERS = ["Content-Type", "Authorization", "X-Client-Token", "Accept"];
@@ -14475,7 +14475,8 @@ var buildToolCtx = (pack, config) => {
       lastXhsNotesRef: { current: [] }
     },
     proxyWorkerUrl: config.proxyWorkerUrl ?? null,
-    xhsCookie: config.xhsMcpConfig?.cookie ?? ""
+    xhsCookie: config.xhsMcpConfig?.cookie ?? "",
+    xhsBridgeToken: config.xhsMcpConfig?.bridgeToken ?? ""
   };
 };
 var fireStateError = (reason, detail) => {
@@ -15180,13 +15181,14 @@ var amsgHooks = {
     const canSelfSchedule = typeof ctx.scheduleTask === "function" && selfScheduleAllowed;
     const tz = { tzId: pack.tzId };
     const clientTaskId = typeof taskMeta.amsgClientTaskId === "string" ? taskMeta.amsgClientTaskId : "";
-    const { toolCtx, proxyWorkerUrl, xhsCookie } = buildToolCtx(toolPack, toolConfig);
+    const { toolCtx, proxyWorkerUrl, xhsCookie, xhsBridgeToken } = buildToolCtx(toolPack, toolConfig);
     const plannedSelfSendTasks = livePendingTasks.filter((t) => t.source === "character" && isPendingTask(t, ctx.now.getTime()));
     const stash = {
       session: createFireSessionState(),
       toolCtx,
       proxyWorkerUrl,
       xhsCookie,
+      xhsBridgeToken,
       occurrenceMs,
       selfLog,
       selfLogDirty: false,
@@ -15547,6 +15549,7 @@ var amsgHooks = {
     }
     if (stash.proxyWorkerUrl) setProxyWorkerUrlOverride(stash.proxyWorkerUrl);
     if (stash.xhsCookie) XhsMcpClient.setCookie(stash.xhsCookie);
+    if (stash.xhsBridgeToken) XhsMcpClient.setBridgeToken(stash.xhsBridgeToken);
     const results = [];
     for (const toolCall of toolCalls) {
       const name = toolCall?.function?.name || "";
