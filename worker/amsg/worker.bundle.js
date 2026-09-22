@@ -10979,6 +10979,26 @@ var classifyFetchFailure = (ctx) => {
   return "unknown";
 };
 
+// utils/xhsSession.ts
+var RETRYABLE_COMMANDS = /* @__PURE__ */ new Set([
+  "check-login",
+  "list-feeds",
+  "search",
+  "get-feed-detail",
+  "user-profile"
+]);
+var classifyXhsBridgeFailure = (obs) => {
+  const { httpStatus, errorText = "", endpoint, body } = obs;
+  if (httpStatus === 401) return "NO_SESSION";
+  if (httpStatus === 429) return "RATE_LIMITED";
+  if (httpStatus === 406 || httpStatus === 461 || httpStatus === 471) return "UPSTREAM_REJECTED";
+  if (errorText.includes("\u6CA1\u6709\u901A\u8FC7\u767B\u5F55\u6821\u9A8C")) return "SESSION_EXPIRED";
+  if (endpoint === "check-login" && body && body.logged_in === false) return "SESSION_EXPIRED";
+  if (errorText.includes("XHS_REQUEST_TIMEOUT")) return "NETWORK_FAILURE";
+  return "UNKNOWN";
+};
+var isSessionExpiry = (code) => code === "SESSION_EXPIRED";
+
 // utils/xhsMcpClient.ts
 var XHS_SPIDER_V3_EXPERIMENT = Object.freeze({
   optInValue: "spider-v3-isolated-cookie",
@@ -10992,6 +11012,9 @@ var detectMode = (serverUrl) => {
 };
 var liteCookie = "";
 var litePlatform = "auto";
+var liteBridgeToken = "";
+var lastSessionTag = "";
+var inflightLoginCheck = null;
 var resolveLiteCookie = () => {
   if (liteCookie) return liteCookie;
   try {
@@ -11059,7 +11082,7 @@ var trySpiderV3CommentPatch = async (baseUrl, requestBody, cookie, detail) => {
   if (!storage || detail?.data?.comments_status === "loaded" || detail?.platform === "rednote" || detail?.data?.platform === "rednote") {
     return detail;
   }
-  const a1Tag = await spiderCookieTag(cookie);
+  const a1Tag = await spiderCookieTag(cookie) || lastSessionTag;
   if (!a1Tag) return detail;
   let sessionState = readSpiderJson(XHS_SPIDER_V3_EXPERIMENT.sessionKey);
   if (sessionState?.a1Tag !== a1Tag) {
@@ -11080,6 +11103,7 @@ var trySpiderV3CommentPatch = async (baseUrl, requestBody, cookie, detail) => {
         "Content-Type": "application/json",
         "x-xhs-cookie": cookie,
         ...litePlatform !== "auto" ? { "x-xhs-platform": litePlatform } : {},
+        ...liteBridgeToken ? { "x-bridge-token": liteBridgeToken } : {},
         "x-xhs-experiment-ack": XHS_SPIDER_V3_EXPERIMENT.optInValue
       },
       body: JSON.stringify({
@@ -11116,19 +11140,21 @@ var trySpiderV3CommentPatch = async (baseUrl, requestBody, cookie, detail) => {
     return detail;
   }
 };
-var bridgePost = async (serverUrl, endpoint, body = {}) => {
+var rawBridgePost = async (serverUrl, endpoint, body = {}) => {
   const baseUrl = serverUrl.replace(/\/+$/, "").replace(/\/api$/, "");
   const url = `${baseUrl}/api/${endpoint}`;
   const headers = { "Content-Type": "application/json" };
   const ck = resolveLiteCookie();
   if (ck) headers["x-xhs-cookie"] = ck;
+  if (liteBridgeToken) headers["x-bridge-token"] = liteBridgeToken;
   const requestPlatform = endpoint === "check-login" ? litePlatform : litePlatform === "auto" ? resolvePersistedLitePlatform() : litePlatform;
   if (requestPlatform !== "auto") headers["x-xhs-platform"] = requestPlatform;
   try {
     const resp = await fetch(url, {
       method: "POST",
       headers,
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      signal: typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(2e4) : void 0
     });
     if (resp.status === 401) {
       return { success: false, error: "\u672A\u767B\u5F55\uFF0C\u8BF7\u5148\u767B\u5F55\u5C0F\u7EA2\u4E66" };
@@ -11138,6 +11164,7 @@ var bridgePost = async (serverUrl, endpoint, body = {}) => {
       return { success: false, error: errData.error || `HTTP ${resp.status}` };
     }
     let data = await resp.json();
+    if (data?.xhs_session_tag) lastSessionTag = String(data.xhs_session_tag);
     if (data.error) {
       return { success: false, error: data.error };
     }
@@ -11150,8 +11177,41 @@ var bridgePost = async (serverUrl, endpoint, body = {}) => {
     }
     return { success: true, data };
   } catch (e) {
-    return { success: false, error: e.message };
+    if (e?.name === "TimeoutError" || e?.name === "AbortError") {
+      return { success: false, error: "\u8BF7\u6C42\u8D85\u65F6\uFF0C\u8BF7\u68C0\u67E5\u7F51\u7EDC\u540E\u91CD\u8BD5" };
+    }
+    return { success: false, error: e?.message };
   }
+};
+var refreshSessionProbe = async (serverUrl) => {
+  if (inflightLoginCheck) return inflightLoginCheck;
+  inflightLoginCheck = (async () => {
+    try {
+      const probe = await rawBridgePost(serverUrl, "check-login");
+      return !!(probe.success && probe.data?.logged_in);
+    } catch {
+      return false;
+    }
+  })();
+  try {
+    return await inflightLoginCheck;
+  } finally {
+    inflightLoginCheck = null;
+  }
+};
+var bridgePost = async (serverUrl, endpoint, body = {}) => {
+  const first = await rawBridgePost(serverUrl, endpoint, body);
+  if (first.success) return first;
+  const failureCode = classifyXhsBridgeFailure({ errorText: first.error, endpoint });
+  if (!isSessionExpiry(failureCode) || !RETRYABLE_COMMANDS.has(endpoint)) return first;
+  if (endpoint === "check-login") return first;
+  const ck = resolveLiteCookie();
+  if (!ck && !liteBridgeToken) return first;
+  if (ck) {
+    const stillValid = await refreshSessionProbe(serverUrl);
+    if (!stillValid) return first;
+  }
+  return rawBridgePost(serverUrl, endpoint, body);
 };
 var mcpRequestIdCounter = 0;
 var mcpSessionId = null;
@@ -11416,6 +11476,10 @@ var XhsMcpClient = {
     const nextCookie = cookie || "";
     if (nextCookie !== liteCookie) litePlatform = "auto";
     liteCookie = nextCookie;
+  },
+  // vps-bridge 模式鉴权:bridge 对除 health 外的端点校验 X-Bridge-Token。
+  setBridgeToken: (token) => {
+    liteBridgeToken = (token || "").trim();
   },
   testConnection: async (serverUrl, cookie) => {
     if (cookie !== void 0) XhsMcpClient.setCookie(cookie);
