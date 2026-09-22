@@ -377,3 +377,29 @@ describe('bridgePost timeout / refresh single-flight (session hardening)', () =>
         expect(fetchSpy).toHaveBeenCalledTimes(2); // search 失败 + search 重试(无 check-login)
     });
 });
+
+describe('vps bridge transport', () => {
+    afterEach(() => { XhsMcpClient.setCookie(''); XhsMcpClient.setBridgeToken(''); vi.restoreAllMocks(); });
+
+    it('testConnection probes health then check-login on the vps bridge URL', async () => {
+        XhsMcpClient.setBridgeToken('bridge-tok');
+        const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: any) => {
+            const url = String(input);
+            if (url.endsWith('/api/health')) {
+                return new Response(JSON.stringify({ status: 'ok', backend: 'xhs-session-bridge' }), { headers: { 'content-type': 'application/json' } });
+            }
+            if (url.endsWith('/api/check-login')) {
+                return new Response(JSON.stringify({ logged_in: true, nickname: '喵', user_id: 'u9', platform: 'xhs', xhs_session_tag: 'deadbeef' }), { headers: { 'content-type': 'application/json' } });
+            }
+            if (url.endsWith('/api/list-feeds')) {
+                return new Response(JSON.stringify({ success: true, feeds: [] }), { headers: { 'content-type': 'application/json' } });
+            }
+            throw new Error(`unexpected url: ${url}`);
+        });
+        const result = await XhsMcpClient.testConnection('https://ethernet-vps.bot.cd/xhs-api/api', undefined);
+        expect(result.connected).toBe(true);
+        expect(result.loggedIn).toBe(true);
+        expect(result.nickname).toBe('喵');
+        expect(String(fetchSpy.mock.calls[0][0])).toContain('/xhs-api/api/health');
+    });
+});
