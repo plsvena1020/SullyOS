@@ -21,6 +21,7 @@ export enum AppID {
   Room = 'room',
   CheckPhone = 'check_phone',
   Social = 'social',
+  Moments = 'moments',
   Study = 'study',
   FAQ = 'faq',
   Game = 'game',
@@ -3650,6 +3651,8 @@ export interface UserProfile {
      *  私聊里「你」的头像取 perCharAvatars[charId] || avatar（上面的整体头像作宏观默认）；
      *  群聊/其他场合仍用整体头像。删角色留下的孤儿键无害，读取端永远按当前 charId 取。 */
     perCharAvatars?: Record<string, string>;
+    /** 朋友圈封面（blobref/dataURL，与 avatar 同一图片管线）。 */
+    momentsCover?: string;
     /**
      * 用户本人接入「彼方」的状态：捏的 chibi、此刻所在房间、在干嘛。可随时改。
      * enabled=false（登出）时，聊天里给角色的"用户在彼方"提示词随之消失。

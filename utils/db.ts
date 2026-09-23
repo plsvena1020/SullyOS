@@ -3472,7 +3472,8 @@ export const DB = {
       const userProfile = userProfiles.length > 0 ? {
           name: userProfiles[0].name,
           avatar: userProfiles[0].avatar,
-          bio: userProfiles[0].bio
+          bio: userProfiles[0].bio,
+          momentsCover: userProfiles[0].momentsCover
       } : undefined;
 
       const mainState = bankData.find((d: any) => d.id === 'main_state');
