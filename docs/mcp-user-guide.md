@@ -139,6 +139,15 @@ Token 会随配置同步到你自己的 amsg worker（走端到端加密通道�
 单次工具调用限时 25 秒、一次主动消息内全部调用共享 120 秒预算——预算用完
 角色会用手上已有的信息收尾，不会一直等。
 
+## 八、朋友圈一键绑定 Mastodon
+
+朋友圈（Moments App）个人页点「用 Mastodon 登录」：填实例域名 → 跳实例授权页登录 → 跳回自动完成绑定，全程不用手抄 token。
+
+- 授权只申请最小 scope：`profile read:statuses write:statuses write:media write:favourites`（`write:follows` / `write:blocks` / `write:mutes` 永不申请，角色不能关注/拉黑/屏蔽）。
+- 发帖默认仅粉丝可见（`private`）；想进公开流才需单独确认。
+- 手动兜底：实例站 Preferences → Development → New application，scope 照抄上面，token 贴到绑定页。
+- 绑定成功后去设置 → MCP 点「测试连接」，看到 8 个工具即生效。MCP 服务器跑在你自己的 VPS 上（部署见 `vps-backend/src/mastodon-mcp/README.md`），浏览器关了主动消息照样能用。
+
 ---
 
 *开发者视角的实现细节（两层容错、工具循环、代码地图）见 [`docs/mcp-client.md`](./mcp-client.md)。*
