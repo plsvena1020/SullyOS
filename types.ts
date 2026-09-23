@@ -24,7 +24,6 @@ export enum AppID {
   Study = 'study',
   FAQ = 'faq',
   Game = 'game',
-  Worldbook = 'worldbook', 
   Novel = 'novel', 
   Bank = 'bank', // New App
   XhsStock = 'xhs_stock', // XHS image stock for publishing

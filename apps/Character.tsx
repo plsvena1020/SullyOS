@@ -2480,7 +2480,7 @@ ${isInitialGeneration ? `
             <div className="max-h-[50vh] overflow-y-auto no-scrollbar space-y-3 p-1">
                 {worldbooks.length === 0 ? (
                     <div className="text-center text-slate-400 text-xs py-8">
-                        还没有世界书，请去桌面【世界书】App 创建。
+                        还没有世界书，请去【预设】App · 世界书页创建。
                     </div>
                 ) : (
                     <>

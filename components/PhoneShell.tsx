@@ -35,7 +35,6 @@ const PomodoroApp = lazyApp(() => import('../apps/PomodoroApp'));
 const TarotApp = lazyApp(() => import('../apps/TarotApp'));
 const FAQApp = lazyApp(() => import('../apps/FAQApp'));
 const GameApp = lazyApp(() => import('../apps/GameApp'));
-const WorldbookApp = lazyApp(() => import('../apps/WorldbookApp'));
 const NovelApp = lazyApp(() => import('../apps/NovelApp'));
 const BankApp = lazyApp(() => import('../apps/BankApp'));
 const XhsStockApp = lazyApp(() => import('../apps/XhsStockApp'));
@@ -65,7 +64,7 @@ const TerminalApp = lazyApp(() => import('../apps/TerminalApp'));
 const APP_IDLE_PRELOAD_ORDER: PreloadableLazy[] = [
   Chat, Character, Settings, Appearance, GroupChat, RoomApp, CheckPhone,
   JournalApp, ScheduleApp, SocialApp, MusicApp, CallApp, Gallery, DateApp, UserApp,
-  StudyApp, PomodoroApp, GameApp, NovelApp, BankApp, WorldbookApp, MemoryPalaceApp, HandbookApp,
+  StudyApp, PomodoroApp, GameApp, NovelApp, BankApp, MemoryPalaceApp, HandbookApp,
   VRWorldApp, WorldHomeApp, LifeSimApp, SongwritingApp, GuidebookApp, FAQApp, HotNewsApp,
   XhsStockApp, XhsFreeRoamApp, BrowserApp, VoiceDesignerApp, ThemeMaker, QQBridge,
   SpecialMomentsApp, CharCreatorDevApp, TarotApp,
@@ -85,7 +84,7 @@ const APP_BY_ID: Partial<Record<AppID, PreloadableLazy>> = {
   [AppID.CheckPhone]: CheckPhone, [AppID.Social]: SocialApp, [AppID.Study]: StudyApp,
   [AppID.Pomodoro]: PomodoroApp, [AppID.Tarot]: TarotApp,
   [AppID.Preset]: PresetApp,
-  [AppID.FAQ]: FAQApp, [AppID.Game]: GameApp, [AppID.Worldbook]: WorldbookApp,
+  [AppID.FAQ]: FAQApp, [AppID.Game]: GameApp,
   [AppID.Novel]: NovelApp, [AppID.Bank]: BankApp, [AppID.XhsStock]: XhsStockApp,
   [AppID.XhsFreeRoam]: XhsFreeRoamApp, [AppID.Browser]: BrowserApp, [AppID.Songwriting]: SongwritingApp,
   [AppID.Music]: MusicApp, [AppID.Call]: CallApp, [AppID.VoiceDesigner]: VoiceDesignerApp,
@@ -850,7 +849,6 @@ const PhoneShell: React.FC = () => {
       case AppID.Tarot: return <TarotApp />;
       case AppID.FAQ: return <FAQApp />; 
       case AppID.Game: return <GameApp />; 
-      case AppID.Worldbook: return <WorldbookApp />;
       case AppID.Preset: return <PresetApp />;
       case AppID.Novel: return <NovelApp />; 
       case AppID.Bank: return <BankApp />;
