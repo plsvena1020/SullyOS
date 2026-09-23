@@ -1,13 +1,11 @@
 /**
- * 「预设」App —— 预设套组（Preset Kit）管理。
+ * 「预设」App —— 预设套组（Preset Kit）管理 + 提示词统合观测。
  *
- * 四个页签：
- * - 套组：多套预设的切换 / 新建 / 重命名 / 删除 / 导出 / 导入。
- * - 条目：当前套组的 Prompt 条目（顺序=注入顺序），逐条编辑 role / tags /
- *   落位（角色卡后 / 历史后 / 历史内深度 / 分界），上下移只改套组 entryIds。
- * - 内置模板：不进套组的技术模板行（记忆/主动消息/语音/钢印），沿用旧卡片
- *   编辑 + 恢复默认；钢印仍在 recency 原生位注入。
- * - 预览：当前套组在某角色身上的逐块注入预览（含字数统计）。
+ * 三个页签：
+ * - 提示词：当前套组条目（顺序=注入顺序）+ 内置常驻段（可接管落位）+
+ *   未入套组 + 正则 + 真实发送查看（抓取视图，唯一完整 prompt 来源）。
+ * - 世界书：现有 WorldbookApp 原样嵌入（embedded 隐藏自带顶栏）。
+ * - 调用地图：注册表按分类渲染调用卡（门三态 + 抓取直达 + 云端卡）。
  *
  * 数据存 IndexedDB `prompt_presets`（条目）+ `preset_packs`（套组顺序）+
  * `preset_pack_active`（当前指针），随备份动态枚举自动带走。
@@ -17,8 +15,8 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
     ArrowLeft, Plus, Trash, CaretUp, CaretDown, PencilSimple,
-    Check, X, NoteBlank, Eye, Info, DownloadSimple, UploadSimple,
-    SquaresFour, ListBullets, BookOpen, MapPin, PaperPlaneTilt, Flask, BracketsCurly,
+    Check, X, NoteBlank, Info, DownloadSimple, UploadSimple,
+    SquaresFour, ListBullets, BookOpen, MapPin, PaperPlaneTilt, BracketsCurly,
 } from '@phosphor-icons/react';
 import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
@@ -30,7 +28,6 @@ import { invalidatePromptPresetCache, applyBuiltinDefaultsToPreset } from '../ut
 import { DEFAULT_PACK_ID, DEFAULT_PACK_NAME } from '../utils/presetKitsMigration';
 import { exportPresetKit, parsePresetKitShare } from '../utils/presetKitShare';
 import { shareOrDownloadBlob } from '../utils/shareExport';
-import { composePromptPreview, type PromptPreviewResult } from '../utils/promptPreviewComposer';
 import { applyRegexPlacement, getActiveRegexKitId, invalidatePresetRegexCache, setActiveRegexKitId } from '../utils/presetRegex';
 import WorldbookApp from './WorldbookApp';
 import { effectiveStatus } from '../utils/presetEffective';
@@ -38,6 +35,7 @@ import { getTtsProvider, getElevenLabsModel } from '../utils/ttsProvider';
 import { isElevenLabsV3Model } from '../utils/elevenLabsTts';
 import { getCaptured, renderCapturedText } from '../utils/promptCallCapture';
 import { CALL_REGISTRY } from '../utils/promptCallRegistry';
+import type { CallSite, CallGate } from '../utils/promptCallRegistry';
 
 /** 内置条目在各注入点的位置说明（与 chatPrompts 实际逻辑同步维护） */
 const BUILTIN_INJECTION_WHERE: Record<string, string> = {
@@ -102,6 +100,9 @@ const CAPTURE_SITES: { site: string; name: string }[] = [
     { site: 'date-session', name: '见面主回复' },
 ];
 
+/** 调用地图时序（顶部时序卡按此顺序列数）。 */
+const MAP_TRIGGERS = ['发送前', '每轮回复后', '手动按钮', '定时 fire', '工具轮内'] as const;
+
 type PageId = 'prompt' | 'worldbook' | 'map';
 
 const PAGES: { id: PageId; label: string; icon: React.ReactNode }[] = [
@@ -157,9 +158,6 @@ const PresetApp: React.FC = () => {
     const [overlayOpen, setOverlayOpen] = useState(false);
     const [overlaySite, setOverlaySite] = useState<string | null>(null);
     const [regexOpen, setRegexOpen] = useState(false);
-    const [previewOpen, setPreviewOpen] = useState(false);
-    const [preview, setPreview] = useState<PromptPreviewResult | null>(null);
-    const [previewLoading, setPreviewLoading] = useState(false);
     // 正则页
     const [regexKits, setRegexKits] = useState<PresetRegexKit[]>([]);
     const [activeRegexId, setActiveRegexId] = useState<string | null>(null);
@@ -222,7 +220,6 @@ const PresetApp: React.FC = () => {
         setSelectedCharId(id);
         if (id) localStorage.setItem('preset_preview_char', id);
         else localStorage.removeItem('preset_preview_char');
-        setPreview(null);
     };
 
     /** 内置常驻行：按目录 order 全局排序，分组时再按分类切分。 */
@@ -323,6 +320,152 @@ const PresetApp: React.FC = () => {
         } catch (e: any) {
             addToast(e?.message || '导出失败', 'error');
         }
+    };
+
+    // ── 调用地图：分组 + 门三态 + 抓取直达 + sourceKey 跳转 ──
+    /** 注册表按分类分组（保持登记顺序，即 spec §7 清单顺序）。 */
+    const mapGroups = useMemo(() => {
+        const groups: { category: string; sites: CallSite[] }[] = [];
+        for (const s of CALL_REGISTRY) {
+            const g = groups.find(x => x.category === s.category);
+            if (g) g.sites.push(s);
+            else groups.push({ category: s.category, sites: [s] });
+        }
+        return groups;
+    }, []);
+
+    /** 当前角色各本地站点的抓取（最近一条时间 + 条数；打开 overlay 即重算）。 */
+    const mapCaptures = useMemo(() => {
+        const m = new Map<string, { at: number; count: number }>();
+        if (selectedCharId) {
+            for (const s of CALL_REGISTRY) {
+                if (s.visibility !== 'local') continue;
+                const list = getCaptured(s.site).filter(e => e.meta.charId === selectedCharId);
+                if (list[0]) m.set(s.site, { at: list[0].meta.at, count: list.length });
+            }
+        }
+        return m;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedCharId, page, overlayOpen]);
+
+    /**
+     * 门三态（按当前角色实时算）：
+     * - manual/global 门不随角色变 → 'idle'（中性徽标：手动 / 全局）。
+     * - char 门读选中角色同名字段 → 有/开='on'，无/关='off'，未选角色='idle'。
+     */
+    const gateTone = (g: CallGate): 'on' | 'off' | 'idle' => {
+        if (g.kind !== 'char') return 'idle';
+        if (!selectedChar) return 'idle';
+        let cur: any = selectedChar;
+        for (const k of g.ref.replace(/^char\./, '').split('.')) {
+            if (cur == null) return 'off';
+            cur = cur[k];
+        }
+        return cur ? 'on' : 'off';
+    };
+
+    const gateChip = (g: CallGate, i: number) => {
+        const tone = gateTone(g);
+        const mark = g.kind === 'manual'
+            ? '手动'
+            : g.kind === 'global'
+                ? '全局'
+                : tone === 'on' ? '开' : tone === 'off' ? '关' : '未选角色';
+        const cls = tone === 'on'
+            ? 'bg-emerald-50 text-emerald-600'
+            : tone === 'off'
+                ? 'bg-red-50 text-red-500'
+                : 'bg-slate-100 text-slate-400';
+        return (
+            <span
+                key={i}
+                title={`${g.label} · ${g.ref}`}
+                className={`px-1.5 py-0.5 rounded-md text-[9px] font-bold shrink-0 ${cls}`}
+            >
+                {g.label} · {mark}
+            </span>
+        );
+    };
+
+    /** sourceKey 点跳页1对应卡：切页 + 展开分类 + 展开卡 + 滚到卡位。 */
+    const jumpToSource = (key: string) => {
+        const row = rows.find(r => r.sourceKey === key);
+        if (!row) {
+            addToast('该条目尚未播种', 'error');
+            return;
+        }
+        setCollapsedCats(prev => ({ ...prev, [row.category || 'chat']: false }));
+        setExpandedId(row.id);
+        setPage('prompt');
+        setTimeout(() => {
+            document.getElementById(`preset-row-${row.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 80);
+    };
+
+    const renderMapCard = (s: CallSite) => {
+        const cap = mapCaptures.get(s.site);
+        return (
+            <div key={s.site} className={cardCls(true)}>
+                <div className="flex items-center gap-1.5 px-3 pt-2.5 pb-1">
+                    <p className="flex-1 min-w-0 text-sm font-bold text-slate-800 truncate" title={s.anchor}>{s.name}</p>
+                    {s.visibility === 'local' && (
+                        <span className="px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-emerald-50 text-emerald-600 shrink-0">本地</span>
+                    )}
+                    {s.visibility === 'local-uncaptured' && (
+                        <span className="px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-slate-100 text-slate-400 shrink-0">未接入抓取</span>
+                    )}
+                    {s.visibility === 'cloud' && (
+                        <span className="px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-sky-50 text-sky-600 shrink-0">云端</span>
+                    )}
+                </div>
+                <p className="px-3 text-[11px] leading-relaxed text-slate-500">{s.blurb}</p>
+                <div className="flex items-center gap-1 px-3 pt-1.5 flex-wrap">
+                    {s.gates.map((g, i) => gateChip(g, i))}
+                </div>
+                {s.visibility === 'cloud' ? (
+                    <div className="px-3 pt-1.5 pb-2.5">
+                        <p className="text-[9px] font-bold text-slate-400">补段清单</p>
+                        <p className="text-[11px] text-slate-500 mt-0.5">
+                            {s.sources.length > 0 ? s.sources.join('、') : '占位提示：到点由 worker 下发真实 prompt，无补段'}
+                        </p>
+                    </div>
+                ) : (
+                    s.sources.length > 0 && (
+                        <div className="flex items-center gap-1 px-3 pt-1.5 pb-2.5 flex-wrap">
+                            <span className="text-[9px] font-bold text-slate-400">消费</span>
+                            {s.sources.map(src => src.startsWith('hardcoded:') ? (
+                                <span key={src} className="px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-slate-100 text-slate-500 shrink-0">
+                                    {src.slice('hardcoded:'.length)}
+                                </span>
+                            ) : (
+                                <button
+                                    key={src}
+                                    onClick={() => jumpToSource(src)}
+                                    title="跳到提示词页对应条目卡"
+                                    className="px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-violet-50 text-violet-600 shrink-0 active:scale-95 transition-transform"
+                                >
+                                    {src}
+                                </button>
+                            ))}
+                        </div>
+                    )
+                )}
+                {s.visibility === 'local' && (
+                    <div className="px-3 pb-2.5">
+                        {cap ? (
+                            <button
+                                onClick={() => { setOverlaySite(s.site); setOverlayOpen(true); }}
+                                className="w-full text-left px-2.5 py-1.5 rounded-xl bg-violet-50 text-violet-600 text-[10px] font-bold active:scale-[0.99] transition-transform"
+                            >
+                                最近一次 · {new Date(cap.at).toLocaleString()}（{cap.count} 条）→ 查看真实发送
+                            </button>
+                        ) : (
+                            <p className="text-[10px] text-slate-400">暂无抓取：去聊一条消息再回来，绝不拿模拟顶数。</p>
+                        )}
+                    </div>
+                )}
+            </div>
+        );
     };
 
     const refresh = useCallback(async (msg?: string) => {
@@ -723,31 +866,6 @@ const PresetApp: React.FC = () => {
         setExpandedId(p.id);
     };
 
-    // ── 预览 ──
-    const runPreview = useCallback(async (charId: string) => {
-        if (!charId) return;
-        setPreviewLoading(true);
-        try {
-            const list = await DB.getAllCharacters().catch(() => [] as any[]);
-            const char = (list || []).find((c: any) => c.id === charId) as any;
-            if (!char) {
-                addToast('找不到该角色', 'error');
-                return;
-            }
-            setPreview(await composePromptPreview(char));
-        } catch (e: any) {
-            addToast(e?.message || '预览失败', 'error');
-        } finally {
-            setPreviewLoading(false);
-        }
-    }, [addToast]);
-
-    useEffect(() => {
-        if (previewOpen && selectedCharId && !preview && !previewLoading) {
-            void runPreview(selectedCharId);
-        }
-    }, [previewOpen, selectedCharId, preview, previewLoading, runPreview]);
-
     // ── 渲染小件 ──
     const categoryChip = (p: PromptPreset) => {
         if (!p.sourceKey) {
@@ -997,7 +1115,7 @@ const PresetApp: React.FC = () => {
         const adoptable = !!p.sourceKey && ADOPTABLE_KEYS.has(p.sourceKey);
         const adoptPos = p.adoptPosition ?? 'native';
         return (
-            <div key={p.id} className={cardCls(p.enabled)}>
+            <div key={p.id} id={`preset-row-${p.id}`} className={cardCls(p.enabled)}>
                 <div className="flex items-center gap-1.5 px-3 pt-2.5 pb-1.5">
                     {editing ? (
                         <input
@@ -1156,14 +1274,48 @@ const PresetApp: React.FC = () => {
             )}
             {page === 'map' && (
                 <div className="flex-1 overflow-y-auto no-scrollbar px-4 py-3 pb-24 space-y-3">
-                    <div className="rounded-2xl bg-white/70 border border-white/60 px-4 py-5 text-center">
-                        <MapPin size={32} weight="light" className="mx-auto text-slate-300" />
-                        <p className="mt-2 text-sm font-bold text-slate-700">调用地图</p>
-                        <p className="mt-1 text-[11px] text-slate-400 leading-relaxed">
-                            全仓调用点一览在此挂载（Task 9）。<br />
-                            当前登记 {CALL_REGISTRY.length} 个站点 · 本地可抓 {CALL_REGISTRY.filter(s => s.visibility === 'local').length} 个。
-                        </p>
+                    {/* 角色 chip：门三态按当前角色实时算 */}
+                    <div className="flex gap-1.5 overflow-x-auto no-scrollbar px-0.5 py-0.5">
+                        <button
+                            onClick={() => selectChar('')}
+                            className={`px-3 py-1.5 rounded-xl text-[11px] font-bold whitespace-nowrap active:scale-95 transition-transform ${!selectedCharId ? 'bg-slate-700 text-white shadow-sm' : 'bg-white/70 text-slate-500 border border-white/60'}`}
+                        >
+                            全部
+                        </button>
+                        {chars.map(c => (
+                            <button
+                                key={c.id}
+                                onClick={() => selectChar(c.id)}
+                                className={`px-3 py-1.5 rounded-xl text-[11px] font-bold whitespace-nowrap active:scale-95 transition-transform ${c.id === selectedCharId ? 'bg-violet-500 text-white shadow-sm' : 'bg-white/70 text-slate-500 border border-white/60'}`}
+                            >
+                                {c.name}
+                            </button>
+                        ))}
                     </div>
+                    {/* 顶部时序卡：触发时机分组计数 */}
+                    <div className={cardCls(true)}>
+                        <div className="px-3 pt-2.5 pb-1">
+                            <p className="text-sm font-bold text-slate-800">调用时序</p>
+                            <p className="text-[10px] text-slate-400 mt-0.5">
+                                登记 {CALL_REGISTRY.length} 个站点 · 本地可抓 {CALL_REGISTRY.filter(s => s.visibility === 'local').length} 个 · 云端 {CALL_REGISTRY.filter(s => s.visibility === 'cloud').length} 个
+                            </p>
+                        </div>
+                        <div className="flex gap-1.5 px-3 pb-2.5 flex-wrap">
+                            {MAP_TRIGGERS.map(t => (
+                                <span key={t} className="px-2 py-1 rounded-lg text-[10px] font-bold bg-slate-100 text-slate-500">
+                                    {t} × {CALL_REGISTRY.filter(s => s.trigger === t).length}
+                                </span>
+                            ))}
+                        </div>
+                    </div>
+                    {mapGroups.map(g => (
+                        <div key={g.category}>
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5">{g.category}（{g.sites.length}）</p>
+                            <div className="space-y-3">
+                                {g.sites.map(renderMapCard)}
+                            </div>
+                        </div>
+                    ))}
                 </div>
             )}
 
@@ -1552,62 +1704,24 @@ const PresetApp: React.FC = () => {
                 )}
                 {!loading && (
                     <div className="pt-1">
-                        <button onClick={() => setPreviewOpen(!previewOpen)} className="w-full flex items-center gap-1.5 pl-1 mb-1.5 active:opacity-70">
-                            <Eye size={13} weight="bold" className="text-slate-400" />
-                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">注入预览{selectedChar ? ` · ${selectedChar.name}` : ''}</span>
-                            <span className="ml-auto text-slate-300">{previewOpen ? <CaretUp size={13} weight="bold" /> : <CaretDown size={13} weight="bold" />}</span>
-                        </button>
-                        {previewOpen && (
-                            <div className="space-y-3">
-                        <div className="flex items-center gap-2 px-1">
-                            <Flask size={14} weight="bold" className="text-violet-500 shrink-0" />
-                            <select
-                                value={selectedCharId}
-                                onChange={e => selectChar(e.target.value)}
-                                className="flex-1 min-w-0 bg-white/70 border border-white/60 rounded-xl px-2 py-2 text-xs font-bold text-slate-700 outline-none focus:ring-2 ring-violet-300"
-                            >
-                                {chars.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                            </select>
-                            <button onClick={() => { setPreview(null); void runPreview(selectedCharId); }} className="px-3 py-2 rounded-xl bg-violet-500 text-white text-xs font-bold active:scale-95 transition-transform shrink-0">
-                                {previewLoading ? '生成中…' : '刷新'}
-                            </button>
-                        </div>
-                        {previewLoading && <p className="text-center text-xs text-slate-400 pt-6">组装中…</p>}
-                        {preview && (
-                            <>
-                                <div className="rounded-2xl bg-white/70 border border-white/60 px-3 py-2.5">
-                                    <p className="text-[11px] font-bold text-slate-700">共 {preview.blocks.length} 块 · 约 {preview.blocks.reduce((a, b) => a + (b.charEstimate || 0), 0).toLocaleString()} 字</p>
-                                </div>
-                                {(['stable', 'history', 'volatileState', 'recencyTail'] as const).map(seg => {
-                                    const list = preview.blocks.filter(b => b.segment === seg);
-                                    if (list.length === 0) return null;
-                                    const segName = seg === 'stable' ? '角色卡后' : seg === 'history' ? '历史内' : seg === 'volatileState' ? '历史后易变' : '钢印';
-                                    return (
-                                        <div key={seg}>
-                                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1 mb-1.5">{segName}（{list.length}）</p>
-                                            <div className="space-y-2">
-                                                {list.map(b => {
-                                                    const open = expandedId === b.id;
-                                                    return (
-                                                        <div key={b.id} className={cardCls(b.enabled)}>
-                                                            <div onClick={() => setExpandedId(open ? null : b.id)} className="px-3 py-2 cursor-pointer">
-                                                                <p className="text-xs font-bold text-slate-700 truncate">{b.title}</p>
-                                                                <p className="text-[10px] text-slate-400 truncate">{b.sourceLabel}{b.insertionPoint ? ` · ${b.insertionPoint}` : ''} · {(b.charEstimate || 0).toLocaleString()} 字</p>
-                                                            </div>
-                                                            {open && (
-                                                                <p className="px-3 pb-2.5 text-[11px] leading-relaxed text-slate-600 whitespace-pre-wrap max-h-64 overflow-y-auto">{b.content}</p>
-                                                            )}
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </>
-                        )}
+                        <div className={cardCls(true)}>
+                            <div className="flex items-center gap-2 px-3 pt-2.5 pb-1.5">
+                                <PaperPlaneTilt size={15} weight="bold" className="text-violet-500 shrink-0" />
+                                <p className="flex-1 min-w-0 text-sm font-bold text-slate-800 truncate">
+                                    真实发送{selectedChar ? ` · ${selectedChar.name}` : ''}
+                                </p>
+                                <button onClick={() => { setOverlaySite(null); setOverlayOpen(true); }} className="px-2.5 py-1 rounded-lg bg-violet-500 text-white text-[10px] font-bold active:scale-95 transition-transform shrink-0">
+                                    查看
+                                </button>
                             </div>
-                        )}
+                            <p className="px-3 pb-2.5 text-[10px] leading-relaxed text-slate-400">
+                                {selectedCharId
+                                    ? (overlayRecords.some(s => s.latest)
+                                        ? `本会话已抓 ${overlayRecords.filter(s => s.latest).length}/${overlayRecords.length} 个站点（只标字数，不估 token）。`
+                                        : '本会话尚无真实发送记录：去聊一条消息再回来，绝不拿模拟顶数。')
+                                    : '先在上方选一个角色，再看它的真实发送记录。'}
+                            </p>
+                        </div>
                     </div>
                 )}
                     </>
