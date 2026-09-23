@@ -6,6 +6,7 @@
  * absolute 三组。调用方（chatPrompts）只管落位，不管排序过滤。
  */
 import { DB } from './db';
+import { expandPromptMacros, type PromptMacroCtx } from './promptMacros';
 import type { PresetGeneration, PromptPreset } from '../types';
 
 export type PresetEntryRole = 'system' | 'user' | 'assistant';
@@ -32,6 +33,31 @@ const EMPTY: ResolvedPackEntries = { stable: [], afterHistory: [], absolute: [] 
 export function tagsMatch(entryTags: string[] | undefined, activeTags: string[]): boolean {
     if (!entryTags || entryTags.length === 0) return true;
     return entryTags.every((t) => activeTags.includes(t));
+}
+
+/**
+ * 共享条目渲染（主链路 stable/afterHistory/absolute 与 date/song 接线同源）：
+ * content→trim→宏展开→placement=5 正则（仅发给模型）。
+ *
+ * 正则段走动态 import（presetRegex 反向依赖本模块的 tagsMatch，静态互引成环，
+ * 与 chatPrompts 的旧内联实现同口径）；正则 kit 缺失/失败只 warn 不抛，
+ * 调用方保持「渲染永不挡主链路」语义。
+ */
+export async function renderKitEntryText(content: string, macroCtx: PromptMacroCtx = {}): Promise<string> {
+    const expanded = expandPromptMacros((content || '').trim(), macroCtx);
+    try {
+        const { applyRegexPlacement, getActiveRegexKit } = await import('./presetRegex');
+        const regexKit = await getActiveRegexKit();
+        // 无 kit 时零开销（getActiveRegexKit 缓存空命中），与旧内联路径一致。
+        if (!regexKit) return expanded;
+        return applyRegexPlacement(expanded, regexKit, 5, {
+            charName: macroCtx.charName || '',
+            userName: macroCtx.userName || '',
+        });
+    } catch (e) {
+        console.warn('[PresetRegex] prompt stage skipped:', e);
+        return expanded;
+    }
 }
 
 /** 当前生效套组的采样参数；无套组/无配置返回 undefined（调用方回退 API 设置）。 */

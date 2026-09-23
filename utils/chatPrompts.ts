@@ -419,8 +419,7 @@ export const ChatPrompts = {
         let presetAbsolute: { role: string; content: string; depth: number }[] = [];
         try {
             if (!forFirePack) {
-                const { resolveActivePackEntries } = await import('./presetKits');
-                const { expandPromptMacros } = await import('./promptMacros');
+                const { resolveActivePackEntries, renderKitEntryText } = await import('./presetKits');
                 // 宏上下文：本轮历史尾部的最后 user/assistant 文本 + 用户画像。
                 let lastUser = '';
                 let lastAssistant = '';
@@ -439,34 +438,23 @@ export const ChatPrompts = {
                     lastAssistant,
                 };
                 const kit = await resolveActivePackEntries(promptOptions?.activeTags ?? ['chat']);
-                // 预设正则 placement=5（仅发给模型）：条目渲染后、拼 stable 前再过一遍。
-                // 无 kit 时零开销（getActiveRegexKit 缓存空命中）。
-                let renderText = (t: string): string => t;
-                try {
-                    const { applyRegexPlacement, getActiveRegexKit } = await import('./presetRegex');
-                    const regexKit = await getActiveRegexKit();
-                    if (regexKit) {
-                        const rxCtx = { charName: char?.name || '', userName: userProfile?.name || '' };
-                        renderText = (t: string) => applyRegexPlacement(t, regexKit, 5, rxCtx);
-                    }
-                } catch (e) {
-                    console.warn('[PresetRegex] prompt stage skipped:', e);
-                }
-                const renderEntry = (p: { name: string; content: string }) =>
-                    `【${p.name}】\n${renderText(expandPromptMacros((p.content || '').trim(), macroCtx))}`;
-                const stableBlocks = kit.stable.map(renderEntry);
+                // 条目渲染（content→宏→placement=5 正则）走共享 helper，
+                // 与 date/song 接线同源（utils/presetKits.renderKitEntryText）。
+                const renderEntry = async (p: { name: string; content: string }) =>
+                    `【${p.name}】\n${await renderKitEntryText((p.content || '').trim(), macroCtx)}`;
+                const stableBlocks = await Promise.all(kit.stable.map(renderEntry));
                 if (stableBlocks.length > 0) {
                     baseSystemPrompt += '\n\n' + stableBlocks.join('\n\n');
                 }
-                const afterBlocks = kit.afterHistory.map(renderEntry);
+                const afterBlocks = await Promise.all(kit.afterHistory.map(renderEntry));
                 if (afterBlocks.length > 0) {
                     presetAfterHistory = afterBlocks.join('\n\n');
                 }
-                presetAbsolute = kit.absolute.map((p) => ({
+                presetAbsolute = await Promise.all(kit.absolute.map(async (p) => ({
                     role: p.role,
-                    content: renderText(expandPromptMacros((p.content || '').trim(), macroCtx)),
+                    content: await renderKitEntryText((p.content || '').trim(), macroCtx),
                     depth: p.injectionDepth,
-                }));
+                })));
             }
         } catch (e) {
             console.warn('[PresetPrompt] 预设套组注入失败（忽略）:', e);

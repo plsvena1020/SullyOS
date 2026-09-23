@@ -469,7 +469,7 @@ const SongwritingApp: React.FC = () => {
             }));
 
             await injectMemoryPalace(collaborator, undefined, `${updatedSong.title || ''} ${userMessage}`.trim() || undefined);
-            const systemPrompt = SongPrompts.buildMentorSystemPrompt(collaborator, userProfile, updatedSong, msgContext);
+            const systemPrompt = await SongPrompts.buildMentorSystemPrompt(collaborator, userProfile, updatedSong, msgContext);
             let userPrompt = SongPrompts.buildUserMessage(updatedSong, userMessage, currentSection);
             if (requestedType) {
                 const typeHints: Record<string, string> = {
@@ -840,7 +840,7 @@ const SongwritingApp: React.FC = () => {
                 undefined,
                 `${snapshot.title} 第${slot.index + 1}句 ${snapshot.lines.map(line => line.content).join(' ')}`.trim(),
             );
-            const systemPrompt = SongPrompts.buildMentorSystemPrompt(collaborator, userProfile, snapshot, []);
+            const systemPrompt = await SongPrompts.buildMentorSystemPrompt(collaborator, userProfile, snapshot, []);
             const existing = lineAtSlot(snapshot, slot.index);
             const request = [
                 `请为歌词本的第 ${slot.index + 1} 句${existing ? '重新写一个版本' : '写一句歌词'}。`,

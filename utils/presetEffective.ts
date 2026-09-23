@@ -64,10 +64,12 @@ const VOICE_ROWS: Record<string, TtsProvider> = {
     'voice.elevenlabsStd': 'elevenlabs',
 };
 
-// 停用回退内置的技术模板：memory.* 全系、rel.genGuide、amsg.emotionEval（主模板）。
-// 注意 amsg.emotionEvalMindful/Living 不在此列——它们走 dead（见下）。
+// 停用回退内置的技术模板：memory.* 全系、rel.genGuide、amsg.emotionEval 主模板
+// 与 Mindful/Living 规则行（useChatAI 三选一经 resolveTechnicalPrompt 消费）。
 const isTechnicalFallbackRow = (sourceKey: string): boolean =>
     sourceKey === 'amsg.emotionEval'
+    || sourceKey === 'amsg.emotionEvalMindful'
+    || sourceKey === 'amsg.emotionEvalLiving'
     || sourceKey === 'rel.genGuide'
     || sourceKey.startsWith('memory.');
 
@@ -89,12 +91,6 @@ export function effectiveStatus(entry: EffectiveEntry, ctx: EffectiveCtx): Effec
     const char = ctx?.char ?? ({} as EffectiveChar);
     const provider = ctx?.provider ?? getTtsProvider();
     const activeTags = ctx?.activeTags ?? ['chat'];
-
-    // amsg.emotionEvalMindful/Living：useChatAI 的 scheduleStyle 分支（约 164-167 行）
-    // 仍是硬编码文案、不读这两行（Task 9 附带修复接活前）——无消费点。
-    if (key === 'amsg.emotionEvalMindful' || key === 'amsg.emotionEvalLiving') {
-        return { state: 'dead', reason: '无消费点', adopted: false };
-    }
 
     const adopted = entry.adopted === true || isAdoptedPosition(entry.adoptPosition);
     const adoptedNote = adopted && entry.adoptPosition && entry.adoptPosition !== 'native'

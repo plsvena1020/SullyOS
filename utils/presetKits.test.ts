@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { PresetPack } from '../types';
 import { DB } from './db';
-import { getActivePackGeneration } from './presetKits';
+import { getActivePackGeneration, renderKitEntryText } from './presetKits';
+import { invalidatePresetRegexCache } from './presetRegex';
 
 describe('preset_packs / active / regexes 存取', () => {
     it('pack 存取 round-trip', async () => {
@@ -54,5 +55,21 @@ describe('preset_packs / active / regexes 存取', () => {
         await DB.setActivePackId('default');
         expect(await getActivePackGeneration()).toBeUndefined();
         await DB.deletePresetPack('kit-gen-pack');
+    });
+
+    it('renderKitEntryText：trim→宏展开→placement=5 正则', async () => {
+        invalidatePresetRegexCache();
+        await DB.savePresetRegex({
+            id: 'kit-helper-regex', name: 'H', enabled: true,
+            rules: [{
+                id: 'hr1', scriptName: '叹号转句号', findRegex: '！', replaceString: '。',
+                placement: [5], disabled: false,
+            }],
+            createdAt: 1, updatedAt: 2,
+        });
+        const out = await renderKitEntryText('  {{char}}说：你好！ ', { charName: '阿套', userName: '小明' });
+        expect(out).toBe('阿套说：你好。');
+        await DB.deletePresetRegex('kit-helper-regex');
+        invalidatePresetRegexCache();
     });
 });

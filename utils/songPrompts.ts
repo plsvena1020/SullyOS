@@ -3,6 +3,7 @@ import { CharacterProfile, UserProfile, SongSheet, SongMood, SongGenre, LyricCoW
 import { ContextBuilder } from './context';
 import { extractJson } from './safeApi';
 import { resolveManagedPromptSync } from './promptPresetRuntime';
+import { resolveActivePackEntries, renderKitEntryText } from './presetKits';
 
 // --- Song Genre & Mood Config ---
 
@@ -575,12 +576,12 @@ export const SongPrompts = {
      * Build the system prompt for the songwriting mentor character.
      * Uses context.ts(true) + character context to stay in character.
      */
-    buildMentorSystemPrompt: (
+    buildMentorSystemPrompt: async (
         char: CharacterProfile,
         user: UserProfile,
         song: SongSheet,
         recentMessages: { role: string; content: string }[]
-    ): string => {
+    ): Promise<string> => {
         // Use ContextBuilder with includeDetailedMemories = true
         const charContext = ContextBuilder.buildCoreContext(char, user, true);
 
@@ -596,6 +597,36 @@ export const SongPrompts = {
         const relationshipContext = recentMessages.length > 0
             ? `\n- 你可以延续你和${user.name}既有的熟悉感，但不得让日常聊天记忆盖过本轮歌词任务。`
             : '';
+
+        // 预设套组（song 场景）：stable/afterHistory 经共享 helper 渲染后追加在规则段后。
+        // phone/story/memory tags 的行被 tagsMatch 挡掉，永不注入（主链路同源）。
+        let kitText = '';
+        try {
+            const kit = await resolveActivePackEntries(['chat', 'song']);
+            const entries = [...kit.stable, ...kit.afterHistory];
+            if (entries.length > 0) {
+                let lastUser = '';
+                let lastAssistant = '';
+                for (let i = recentMessages.length - 1; i >= 0; i -= 1) {
+                    const m = recentMessages[i];
+                    if (!lastUser && m?.role === 'user' && m.content) lastUser = m.content;
+                    else if (!lastAssistant && m?.role === 'assistant' && m.content) lastAssistant = m.content;
+                    if (lastUser && lastAssistant) break;
+                }
+                const macroCtx = {
+                    charName: char?.name || '',
+                    userName: user?.name || '',
+                    persona: (user as any)?.bio || '',
+                    lastUser,
+                    lastAssistant,
+                };
+                const blocks = await Promise.all(entries.map(async (e) =>
+                    `【${e.name}】\n${await renderKitEntryText(e.content, macroCtx)}`));
+                kitText = blocks.join('\n\n');
+            }
+        } catch (e) {
+            console.warn('[PresetPrompt] 写歌套组注入失败（忽略）:', e);
+        }
 
         return `${charContext}
 
@@ -623,7 +654,7 @@ ${coWritingStyle.prompt}
 这套规则描述的是歌词写法，不等于强迫用户更换语言，也不能覆盖用户已经明确建立的主题、人设与表达习惯。若风格规则与用户的明确要求冲突，以用户本轮要求为准。
 
 ${resolveManagedPromptSync('song.craftRules', SONG_CRAFT_RULES) ?? ''}
-
+${kitText}
 **回复格式**：
 只输出一个合法 JSON 对象，不要 Markdown 代码块，不要 JSON 之外的任何文字。根据用户的输入判断需要什么：
 

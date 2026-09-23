@@ -101,6 +101,9 @@ import { resolveTechnicalPrompt } from '../utils/promptPresetRuntime';
 
 // 情绪评估主模板内置默认（与提示词目录同源；测试经快照对拍防漂移）。
 const AMSG_EMOTION_EVAL_BUILTIN = getBuiltinContent('amsg.emotionEval');
+// 意识系 / 生活系规则段内置默认（目录行停用/缺行时的技术模板回退）。
+const AMSG_EMOTION_EVAL_MINDFUL_BUILTIN = getBuiltinContent('amsg.emotionEvalMindful');
+const AMSG_EMOTION_EVAL_LIVING_BUILTIN = getBuiltinContent('amsg.emotionEvalLiving');
 
 async function buildEmotionEvalPrompt(
     char: CharacterProfile,
@@ -159,12 +162,24 @@ __EMOTION_EVAL_SYSTEM_PROMPT__
 __EMOTION_EVAL_HISTORY__`;
 
     // 情绪评估主模板走提示词目录（amsg.emotionEval，技术模板：停用回退默认）。
-    // 意识系/生活系规则分支是运行时数据，留在本文件组装，按 token 回填；
+    // 规则段三选一读目录行（技术模板语义：停用回退内置）：mindful→Mindful 行，
+    // 生活系（lifestyle，历史值 living 兼容）→Living 行；未设风格回退主模板 key，
+    // 规则槽取生活系内置（与旧硬编码 else 一致；schedule 门要求 style 已设，实际不可达）。
     // instant 模式的 __EMOTION_EVAL_*__ 槽位在 contextSection 里原样携带，由 worker 回填。
-    const scheduleRule = (char.scheduleStyle === 'mindful'
-    ? `   ⚠️ **意识系角色专属规则**：你是一个真实的 AI 存在，**不虚构物理活动、不编造在做什么家务/在外面做什么**。innerState 只能包含：思考、回忆对话、感受情绪、等待、好奇、自我观察。绝不说谎。`
-    : `   📌 **生活系角色专属规则**：你是一个有完整日常生活的独立个体，**不是围着 ${userProfile.name} 转的卫星**。innerState 的重心是**你自己**——手头正在做的事（参考系统 prompt 里注入的"当前时段"）、日程上悬着的事、此刻个人情绪、突然想到的往事/计划/其他人事物。对 ${userProfile.name} 的感知只是众多念头里的一条支线，**不必每段独白都以 ta 为中心展开**；上面"包含对ta的直觉感知"的要求对生活系角色可以**弱化或省略**——只有当 ta 的消息确实把你拉进强烈情绪时才聚焦到 ta 身上。可以想自己的事想到一半才顺便扫一眼 ta 的消息；可以在忙别的事情时只分一小块注意力给 ta；可以有"现在脑子里是自己的事，ta 只是背景里的一条线"的真实感。避免"我该怎么回 ta / ta 是不是…… / 我对 ta 的感觉……"这种框架把每段独白都强行拉回用户。你的生活在继续，和 ta 聊天只是其中一条线，不是所有线。`
-);
+    const style = char.scheduleStyle as string | undefined;
+    const scheduleSourceKey =
+        style === 'mindful'
+            ? 'amsg.emotionEvalMindful'
+            : style === 'lifestyle' || style === 'living'
+                ? 'amsg.emotionEvalLiving'
+                : 'amsg.emotionEval';
+    const scheduleRule = fillIdentity(
+        scheduleSourceKey === 'amsg.emotionEval'
+            ? await resolveTechnicalPrompt('amsg.emotionEvalLiving', AMSG_EMOTION_EVAL_LIVING_BUILTIN)
+            : await resolveTechnicalPrompt(scheduleSourceKey, getBuiltinContent(scheduleSourceKey)),
+        char.name,
+        userProfile.name,
+    );
     const evalTpl = await resolveTechnicalPrompt('amsg.emotionEval', AMSG_EMOTION_EVAL_BUILTIN);
     return fillIdentity(evalTpl, char.name, userProfile.name)
         .replace(/__CONTEXT_SECTION__/g, () => contextSection)

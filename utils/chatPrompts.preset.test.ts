@@ -60,6 +60,34 @@ describe('预设套组注入（Preset Kit）', () => {
         expect(parts.presetAbsolute).toEqual([]);
     });
 
+    it('phone tags 在 chat 下被滤，date 场景下也不注入', async () => {
+        await DB.savePromptPreset(row({ id: 'kp-phone', name: '手机限定', content: '手机才说。', tags: ['phone'] }));
+        const now = Date.now();
+        await DB.savePresetPack({
+            id: 'kp-phone-pack', name: 'P', createdAt: now, updatedAt: now,
+            entryIds: ['kp-phone'],
+        });
+        await DB.setActivePackId('kp-phone-pack');
+        const chatParts = await build();
+        expect(chatParts.stable).not.toContain('手机才说');
+        const dateParts = await build({ activeTags: ['chat', 'date'] });
+        expect(dateParts.stable).not.toContain('手机才说');
+    });
+
+    it('date/phone 行共存时 date 场景只进 date 行', async () => {
+        await DB.savePromptPreset(row({ id: 'kp-date2', name: '约会限定', content: '约会时才说。', tags: ['date'] }));
+        await DB.savePromptPreset(row({ id: 'kp-phone2', name: '手机限定', content: '手机才说。', tags: ['phone'] }));
+        const now = Date.now();
+        await DB.savePresetPack({
+            id: 'kp-mix-pack', name: 'X', createdAt: now, updatedAt: now,
+            entryIds: ['kp-date2', 'kp-phone2'],
+        });
+        await DB.setActivePackId('kp-mix-pack');
+        const dateParts = await build({ activeTags: ['chat', 'date'] });
+        expect(dateParts.stable).toContain('【约会限定】\n约会时才说。');
+        expect(dateParts.stable).not.toContain('手机才说');
+    });
+
     it('条目里的宏按本轮上下文展开', async () => {
         await DB.savePromptPreset(row({
             id: 'kp-macro', name: '宏', content: '{{char}}记得{{user}}说过{{lastUser}}',

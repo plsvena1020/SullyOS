@@ -64,10 +64,10 @@ describe('song lyric prompt context', () => {
         expect(context).toContain('[第2段·主歌｜第2-3句｜每句建议8-10字]');
     });
 
-    it('injects the selected co-writing grammar into the system prompt', () => {
+    it('injects the selected co-writing grammar into the system prompt', async () => {
         vi.spyOn(ContextBuilder, 'buildCoreContext').mockReturnValue('CHARACTER CONTEXT');
         const song = makeSong({ lyricCoWritingStyle: 'vocaloid' });
-        const prompt = SongPrompts.buildMentorSystemPrompt(
+        const prompt = await SongPrompts.buildMentorSystemPrompt(
             { id: 'char-1', name: 'C' } as any,
             { name: 'U' } as any,
             song,

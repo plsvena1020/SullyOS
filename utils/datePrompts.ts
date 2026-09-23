@@ -38,6 +38,7 @@ export type ApiMessage = { role: string; content: any };
  */
 import { getBuiltinContent } from './promptPresetCatalog';
 import { resolveManagedPromptSync, resolveVoiceGuideSync } from './promptPresetRuntime';
+import { resolveActivePackEntries, renderKitEntryText } from './presetKits';
 export const DATE_VOICE_GUIDE = getBuiltinContent('voice.date');
 
 /**
@@ -784,8 +785,39 @@ ${extraBlock ? `\n${extraBlock}` : ''}${isObserveOn(char) ? `\n${buildObserveBlo
         const geo = placeLib
             ? { cityName: placeLib.city, placeBlock: renderPlaceLibraryDating(placeLib) }
             : ((char.location?.city || '').trim() ? { cityName: (char.location?.city || '').trim() } : undefined);
-        const systemPrompt = ContextBuilder.buildCoreContext(char, userProfile, true, undefined, undefined, { skipTimeAwareness: !isDateTimeAwarenessOn(char), conversational: true })
-            + buildVNModeBlock(char, userProfile?.name || '', geo, input.sceneBlock);
+        const coreContext = ContextBuilder.buildCoreContext(char, userProfile, true, undefined, undefined, { skipTimeAwareness: !isDateTimeAwarenessOn(char), conversational: true });
+        const vnBlock = buildVNModeBlock(char, userProfile?.name || '', geo, input.sceneBlock);
+        // 预设套组（date 场景）：stable/afterHistory 经共享 helper 渲染后插在 VN 块前。
+        // phone/story/memory tags 的行被 tagsMatch 挡掉，永不注入（主链路同源）。
+        let kitText = '';
+        try {
+            const kit = await resolveActivePackEntries(['chat', 'date']);
+            const entries = [...kit.stable, ...kit.afterHistory];
+            if (entries.length > 0) {
+                let lastUser = '';
+                let lastAssistant = '';
+                for (let i = allMsgs.length - 1; i >= 0; i -= 1) {
+                    const m = allMsgs[i] as any;
+                    const text = typeof m?.content === 'string' ? m.content : '';
+                    if (!lastUser && m?.role === 'user' && text) lastUser = text;
+                    else if (!lastAssistant && m?.role === 'assistant' && text) lastAssistant = text;
+                    if (lastUser && lastAssistant) break;
+                }
+                const macroCtx = {
+                    charName: char?.name || '',
+                    userName: userProfile?.name || '',
+                    persona: userProfile?.bio || '',
+                    lastUser,
+                    lastAssistant,
+                };
+                const blocks = await Promise.all(entries.map(async (e) =>
+                    `【${e.name}】\n${await renderKitEntryText(e.content, macroCtx)}`));
+                kitText = blocks.join('\n\n');
+            }
+        } catch (e) {
+            console.warn('[PresetPrompt] 约会套组注入失败（忽略）:', e);
+        }
+        const systemPrompt = coreContext + (kitText ? `\n\n${kitText}\n\n` : '') + vnBlock;
 
         // 每轮轮换的聚焦线索：把注意力推向不同的具体方向，相邻回复天然有差异
         const focusLine = isDigDeeperOn(char.dateStyleConfig) ? ` 本轮线索：${pickFocusHint()}。` : '';
