@@ -27,4 +27,19 @@ describe('tools', () => {
     expect(guard.audit).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
     expect(out.structuredContent.id).toBe('s1');
   });
+  it('READ_ONLY 拒绝也被审计', async () => {
+    const audited: unknown[] = [];
+    const guard = { assertAllowed: () => { throw new Error('只读模式'); }, audit: async (e: unknown) => { audited.push(e); } };
+    const post = TOOL_DEFS.find((t) => t.name === 'moments_post')!;
+    await expect(post.run({ api: {}, accounts: [], guard } as never, { status: 'hi', confirm: true })).rejects.toThrow('只读模式');
+    expect(audited).toHaveLength(1);
+  });
+  it('点赞失败也被审计', async () => {
+    const audited: unknown[] = [];
+    const api = { favouriteStatus: async () => { throw new Error('boom'); } };
+    const guard = { assertAllowed: () => {}, audit: async (e: unknown) => { audited.push(e); } };
+    const fav = TOOL_DEFS.find((t) => t.name === 'status_favourite')!;
+    await expect(fav.run({ api, accounts: [{ ownerId: 'user', instance: 'a.social', handle: '@u', accessToken: 't' }], guard } as never, { id: 's1', confirm: true })).rejects.toThrow('boom');
+    expect(audited).toHaveLength(1);
+  });
 });

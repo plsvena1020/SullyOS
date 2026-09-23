@@ -23,4 +23,12 @@ describe('accounts', () => {
     await saveAccount({ filePath: '/run/acc.json', readFile: (async () => '[]') as never, writeFile: (async (p: string, s: string) => { out[p] = s; }) as never, mkdir: (async () => {}) as never, account: { ownerId: 'c1', instance: 'c.social', handle: '@c', accessToken: 't' } });
     expect(JSON.parse(out['/run/acc.json'])[0].ownerId).toBe('c1');
   });
+  it('文件损坏抛错不静默回退', async () => {
+    const { loadAccounts } = await import('./accounts.js');
+    await expect(loadAccounts({ seedJson: '[]', filePath: '/run/bad.json', readFile: (async () => '{oops') as never })).rejects.toThrow('损坏');
+  });
+  it('saveAccount 不覆盖损坏文件', async () => {
+    const { saveAccount } = await import('./accounts.js');
+    await expect(saveAccount({ filePath: '/run/bad.json', readFile: (async () => '{oops') as never, writeFile: (async () => {}) as never, mkdir: (async () => {}) as never, account: { ownerId: 'u', instance: 'a.social', handle: '@u', accessToken: 't' } })).rejects.toThrow('损坏');
+  });
 });

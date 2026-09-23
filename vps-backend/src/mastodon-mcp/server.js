@@ -25,7 +25,6 @@ const normInstance = (s) => String(s).replace(/^https?:\/\//i, '').replace(/\/+$
 export function startMastodonMcpServer({ port, host = '127.0.0.1', mcpToken, accounts, api, guard, accountStore }) {
   if (!mcpToken) throw new Error('MASTODON_MCP_TOKEN is required');
   const ctx = { api, accounts, guard };
-  const mcp = buildMcpServer(ctx);
   const fileFns = accountStore?.readFile
     ? { readFile: accountStore.readFile, writeFile: accountStore.writeFile, mkdir: accountStore.mkdir }
     : { readFile, writeFile, mkdir };
@@ -63,23 +62,31 @@ export function startMastodonMcpServer({ port, host = '127.0.0.1', mcpToken, acc
       if (!ownerId || !instance || !accessToken) return finish(400, { error: '缺 ownerId/instance/accessToken' });
       try {
         const who = await api.verifyCredentials({ instance: normInstance(instance), accessToken });
-        await saveAccount({
+        const saved = await saveAccount({
           filePath: accountStore.filePath, ...fileFns,
           account: { ownerId: String(ownerId), instance: normInstance(instance), handle: who.acct, accessToken: String(accessToken) },
         });
+        // 内存即时可用：原地 upsert 启动时快照，不重启
+        const i = ctx.accounts.findIndex((x) => x.ownerId === saved.ownerId);
+        if (i >= 0) ctx.accounts[i] = saved; else ctx.accounts.push(saved);
         return finish(200, { ownerId: String(ownerId), username: who.username, acct: who.acct });
       } catch (e) { return finish(502, { error: `绑定失败：${String(e?.message ?? e).slice(0, 200)}` }); }
     }
     if (path !== '/mcp') return finish(404, { error: 'unknown route' });
     if (!authed) return finish(401, { error: 'unauthorized' });
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    const reqMcp = buildMcpServer(ctx);
     try {
       const chunks = [];
       for await (const c of req) chunks.push(c);
       const raw = Buffer.concat(chunks).toString('utf8') || '{}';
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      await mcp.connect(transport);
+      await reqMcp.connect(transport);
       await transport.handleRequest(req, res, JSON.parse(raw));
     } catch (e) { if (!res.headersSent) finish(500, { error: 'mcp internal error' }); }
+    finally {
+      await Promise.resolve(transport.close?.()).catch(() => {});
+      await Promise.resolve(reqMcp.close?.()).catch(() => {});
+    }
   });
   const ready = new Promise((resolve) => httpServer.listen(port, host, () => resolve({ close: () => new Promise((r) => httpServer.close(r)) })));
   return { server: httpServer, ready };
