@@ -225,6 +225,10 @@ const DateApp: React.FC = () => {
 
     // peek / send / reroll 共用的 LLM 调用（提示词构建统一在 utils/datePrompts.ts）
     const callLLM = async (messages: ApiMessage[], temperature: number): Promise<string> => {
+        try {
+            const { captureCall } = await import('../utils/promptCallCapture');
+            captureCall('date-session', messages, { charId: char?.id ?? '', label: '见面主回复' });
+        } catch { /* 抓取永不挡主链路 */ }
         const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },

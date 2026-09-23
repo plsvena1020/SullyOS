@@ -92,6 +92,10 @@ ${taskBlock}`;
 
     let data: any;
     try {
+        try {
+            const { captureCall } = await import('./promptCallCapture');
+            captureCall('rel-gen', [{ role: 'user', content: prompt }], { charId: char?.id ?? '', label: '人物关系生成' });
+        } catch { /* 抓取永不挡主链路 */ }
         data = await safeFetchJson(`${api.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${api.apiKey}` },

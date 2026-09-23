@@ -264,6 +264,7 @@ async function callDigestLLM(
     },
     llmConfig: LightLLMConfig,
     userName?: string,
+    charId?: string,
 ): Promise<DigestAction[]> {
 
     // 如果没有任何待消化的内容，跳过
@@ -331,6 +332,10 @@ ${material.recentContext.map(n => `- (${n.room}, ${n.mood}): ${n.content}`).join
         .replace(/__EPISODES_RULES__/g, () => sectEpisodeRules);
 
     try {
+        try {
+            const { captureCall } = await import('../promptCallCapture');
+            captureCall('memory-digest', [{ role: 'system', content: systemPrompt }, { role: 'user', content: '请开始审视。' }], { charId: charId ?? '', label: '记忆消化' });
+        } catch { /* 抓取永不挡主链路 */ }
         const data = await safeFetchJson(
             `${llmConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`,
             {
@@ -868,7 +873,7 @@ export async function runCognitiveDigestion(
 
     // LLM 统一消化
     onProgress?.('正在审视记忆…');
-    const actions = await callDigestLLM(charName, charPersona, material, llmConfig, userName);
+    const actions = await callDigestLLM(charName, charPersona, material, llmConfig, userName, charId);
 
     // 执行动作：状态机改现有节点；概括类产出汇集为门牌蒸馏候选
     const { result, plateSubmissions } = await executeActions(actions, charId, material);

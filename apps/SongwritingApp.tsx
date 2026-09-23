@@ -498,6 +498,10 @@ const SongwritingApp: React.FC = () => {
 
             apiMessages.push({ role: 'user', content: userPrompt });
 
+            try {
+                const { captureCall } = await import('../utils/promptCallCapture');
+                captureCall('song-mentor', apiMessages, { charId: collaborator?.id ?? '', label: '写歌导师' });
+            } catch { /* 抓取永不挡主链路 */ }
             const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },

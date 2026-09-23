@@ -203,6 +203,10 @@ export async function evaluateEmotionBackground(
             max_tokens: 8000,
         };
         const evalMeta = { appName: '消息', charId: charData.id, charName: charData.name, purpose: '情绪评估' };
+        try {
+            const { captureCall } = await import('../utils/promptCallCapture');
+            captureCall('emotion-eval', [{ role: 'user', content: prompt }], { charId: charData?.id ?? '', label: '情绪评估' });
+        } catch { /* 抓取永不挡主链路 */ }
         let data: any;
         try {
             data = await safeFetchJson(`${baseUrl}/chat/completions`, {
@@ -911,6 +915,10 @@ export const useChatAI = ({
             const systemPrompt = payload.systemPrompt;
             const cleanedApiMessages = payload.cleanedApiMessages;
             const fullMessages = payload.fullMessages;
+            try {
+                const { captureCall } = await import('../utils/promptCallCapture');
+                captureCall('chat-main', fullMessages, { charId: char?.id ?? '', label: '主聊天请求' });
+            } catch { /* 抓取永不挡主链路 */ }
             const promptBuildSkipped = payload.flags.promptBuildSkipped;
             if (payload.flags.mcdActive) {
                 console.log(`🍔 [MCD-MiniApp] 注入协同点餐上下文 step=${mcdMiniSnap?.step} cartItems=${mcdMiniSnap?.cart?.length || 0} menuItems=${mcdMiniSnap?.menuMeals ? Object.keys(mcdMiniSnap.menuMeals).length : 0} nutrition=${mcdMiniSnap?.nutritionData ? mcdMiniSnap.nutritionData.length : 0}字`);

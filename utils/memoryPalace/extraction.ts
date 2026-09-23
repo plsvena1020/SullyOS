@@ -406,6 +406,10 @@ export async function extractMemoriesFromBuffer(
         .replace(/__ENTITIES_LINE__/g, () => includeEntities ? '\n    "entities": [{"name": "明确出现的专名", "type": "person"}],' : '');
 
     try {
+        try {
+            const { captureCall } = await import('../promptCallCapture');
+            captureCall('memory-extract', [{ role: 'system', content: systemPrompt }, { role: 'user', content: `对话内容：\n${conversationText}` }], { charId: charId ?? '', label: '记忆提取' });
+        } catch { /* 抓取永不挡主链路 */ }
         const data = await safeFetchJson(
             `${llmConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`,
             {
