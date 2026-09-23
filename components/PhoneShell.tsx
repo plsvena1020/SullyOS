@@ -5,6 +5,7 @@ import Launcher from '../apps/Launcher';
 import CompanionLockChrome from './os/CompanionLockChrome';
 import { loadCompanionFrameStyle } from './os/companionFrameStyles';
 import { createPreloadableLazy, type PreloadableLazy } from './os/preloadableLazy';
+import { exchangeCode, bindAccount, useCodeGuard } from '../utils/mastodonOAuth';
 
 // 按需懒加载各 App —— 切到对应 App 时才下载/解析其代码块，首屏只加载 Launcher 与外壳，
 // 大体积 App（MemoryPalace / VRWorld / Songwriting 等）不再压在主包里。
@@ -451,7 +452,8 @@ const AppLoadingFallback: React.FC<{ onReturn?: () => void; animationEnabled?: b
 };
 
 const PhoneShell: React.FC = () => {
-  const { theme, isLocked, unlock, activeApp, closeApp, openApp, virtualTime, isDataLoaded, toasts, unreadMessages, characters, handleBack, suspendedCall, resumeCall, activeCharacterId, errorDialog, dismissError } = useOS();
+  const { theme, isLocked, unlock, activeApp, closeApp, openApp, virtualTime, isDataLoaded, toasts, unreadMessages, characters, handleBack, suspendedCall, resumeCall, activeCharacterId, errorDialog, dismissError, addToast } = useOS();
+  const oauthGuardRef = useRef(useCodeGuard());
   const useIOSStandaloneLayout = isIOSStandaloneWebApp();
 
   // 三档顶部状态栏：安全显示 / 紧凑显示 / 隐藏。旧存档仍由 hideStatusBar 兼容解析。
@@ -461,6 +463,36 @@ const PhoneShell: React.FC = () => {
     document.documentElement.classList.toggle('sully-statusbar-hidden', statusBarMode === 'hidden');
     document.documentElement.classList.toggle('sully-statusbar-compact', statusBarMode === 'compact');
   }, [statusBarMode]);
+
+  // Mastodon OAuth 回调：一键绑定的回跳落点（无 react-router，读 location.search）。
+  // code 消费一次即从 URL 清掉；token 只在内存停留，bind 成功即丢弃。
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const code = q.get('code');
+    const err = q.get('error');
+    if (!code && !err) return;
+    window.history.replaceState({}, '', window.location.pathname);
+    if (err) { addToast('已取消 Mastodon 授权', 'info'); return; }
+    if (!code || !oauthGuardRef.current.take(code)) return;
+    (async () => {
+      try {
+        const pending = JSON.parse(sessionStorage.getItem('mastodon-oauth-pending') || 'null');
+        if (!pending?.instance || !pending?.client_id || !pending?.client_secret || !pending?.ownerId) {
+          throw new Error('授权会话已过期，请回朋友圈重新点绑定');
+        }
+        const { access_token } = await exchangeCode(pending.instance, {
+          client_id: pending.client_id, client_secret: pending.client_secret,
+          redirect_uri: pending.redirectUri, code,
+        });
+        const who = await bindAccount(pending.mcpBase, pending.mcpToken, {
+          ownerId: pending.ownerId, instance: pending.instance, accessToken: access_token,
+        });
+        sessionStorage.removeItem('mastodon-oauth-pending');
+        addToast(`已绑定 @${who.acct}`, 'success');
+        openApp(AppID.Moments);
+      } catch (e: any) { addToast(String(e?.message ?? e), 'error'); }
+    })();
+  }, []);
 
   // 冷启动「世界入场」是否已结束。结束前由 BootSequence 接管整屏（同时取代旧的黑屏 spinner）。
   const [bootDone, setBootDone] = useState(false);
