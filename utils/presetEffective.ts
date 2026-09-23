@@ -163,6 +163,13 @@ export function effectiveStatus(entry: EffectiveEntry, ctx: EffectiveCtx): Effec
         return { state: 'on', reason: '生效', adopted: false };
     }
 
+    // chat.appRules：停用→整块不注入（off-disabled，已在 !enabled 分支处理）；
+    // 接管走管道（原生跳过）；native 走原生注入。
+    if (key === 'chat.appRules') {
+        if (adopted) return { state: 'on', reason: `生效·已接管${adoptedNote}`, adopted: true };
+        return { state: 'on', reason: '生效', adopted: false };
+    }
+
     // 技术模板启用态：独立 LLM 调用的整段模板，有启用即生效。
     if (key && isTechnicalFallbackRow(key)) {
         return { state: 'on', reason: '生效', adopted: false };

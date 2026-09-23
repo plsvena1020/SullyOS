@@ -67,6 +67,8 @@ const APP_RULES_SLOTS = [
 
 afterEach(async () => {
     await DB.deletePromptPreset('apprules-disabled').catch(() => undefined);
+    await DB.deletePromptPreset('apprules-adopted').catch(() => undefined);
+    await DB.deletePresetPack('pack-apprules-adopted').catch(() => undefined);
     invalidatePromptPresetCache();
 });
 
@@ -567,5 +569,36 @@ describe('chat.appRules 目录条目', () => {
         expect(stable).not.toContain('### 聊天 App 行为规范 (Chat App Rules)');
         // 块外内容不受影响（[[ACTION:POKE]] 在块内，会跟着一起消失；用语音关闭注脚定位）
         expect(stable).toContain('语音消息功能当前未开启');
+    }, 60000);
+
+    it('接管行只注入一次：原生跳过、管道唯一', async () => {
+        const MARK = 'APPRULES_ADOPTED_PIPELINE_MARKER_Z9';
+        const row: PromptPreset = {
+            id: 'apprules-adopted', name: 'appRules', content: MARK, order: 0,
+            enabled: true, createdAt: 1, updatedAt: 2,
+            sourceKey: 'chat.appRules', adoptPosition: 'stable',
+        };
+        await DB.savePromptPreset(row);
+        // 接管行进套组才走管道：建临时套组并切 active，用完恢复。
+        const prevActive = await DB.getActivePackId().catch(() => null as string | null);
+        await DB.savePresetPack({
+            id: 'pack-apprules-adopted', name: 't-adopted',
+            entryIds: [row.id], createdAt: 1, updatedAt: 2,
+        });
+        await DB.setActivePackId('pack-apprules-adopted');
+        invalidatePromptPresetCache();
+        await getResolvedPromptPresets();
+        try {
+            const stable = await buildStable(charOff, undefined, plainMsgs);
+            // 原生点跳过：行为规范整块不出
+            expect(stable).not.toContain('### 聊天 App 行为规范 (Chat App Rules)');
+            // 管道拥有：标记恰出现一次（无双重注入）
+            expect(stable.split(MARK).length - 1).toBe(1);
+        } finally {
+            if (prevActive) await DB.setActivePackId(prevActive).catch(() => undefined);
+            await DB.deletePresetPack('pack-apprules-adopted').catch(() => undefined);
+            await DB.deletePromptPreset('apprules-adopted').catch(() => undefined);
+            invalidatePromptPresetCache();
+        }
     }, 60000);
 });

@@ -886,7 +886,17 @@ ${uname} 的化身正挂在《彼方》的【${roomName}】${act ? `，状态写
         // 读取链：DB 行（用户编辑/启停）优先 → 内置默认兜底；用户停用（null）→ 整块不注入。
         // 槽位按原条件回填（条件与文案口径与旧硬编码逐字一致）；{{char}}/{{user}} 经 fillIdentity 展开。
         {
-            const appRulesRaw = resolveManagedPromptSync('chat.appRules', getBuiltinContent('chat.appRules'));
+            // 已接管走管道：原生点跳过，避免双重注入（与钢印 resolveSteel 同口径）。
+            let appRulesAdopted = false;
+            try {
+                const rows = await getResolvedPromptPresets();
+                appRulesAdopted = isAdoptedPosition(
+                    rows.find((r) => r.preset.sourceKey === 'chat.appRules')?.preset.adoptPosition,
+                );
+            } catch { /* 读不到行按未接管处理 */ }
+            const appRulesRaw = appRulesAdopted
+                ? null
+                : resolveManagedPromptSync('chat.appRules', getBuiltinContent('chat.appRules'));
             if (appRulesRaw !== null) {
                 const slotScheduleMessage = scheduleMessageTagEnabled ? `   - **定时发送消息**: 如果你想在未来某个时间主动发消息（比如晚安、早安或提醒），请单独起一行输出: \`[schedule_message | YYYY-MM-DD HH:MM:SS | fixed | 消息内容]\`，分行可以多输出很多该类消息。` : '';
                 const slotImageReminder = wantsImageReminder ? `

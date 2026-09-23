@@ -14,7 +14,7 @@ import {
 import { confirmExportSafety } from '../utils/exportGuard';
 import { shareOrDownloadFile } from '../utils/shareExport';
 
-const WorldbookApp: React.FC = () => {
+const WorldbookApp: React.FC<{ embedded?: boolean }> = ({ embedded }) => {
     const { closeApp, worldbooks, addWorldbook, updateWorldbook, deleteWorldbook, addToast } = useOS();
     
     // View State
@@ -558,7 +558,8 @@ const WorldbookApp: React.FC = () => {
             <div className="absolute -top-20 -right-20 w-64 h-64 bg-indigo-200/20 rounded-full blur-3xl pointer-events-none"></div>
             <div className="absolute bottom-0 left-0 w-full h-32 bg-gradient-to-t from-white/80 to-transparent pointer-events-none z-10"></div>
 
-            {/* Header */}
+            {/* Header（嵌入 PresetApp 时隐藏：返回与顶栏由宿主提供） */}
+            {!embedded && (
             <div className="bg-white/70 backdrop-blur-xl border-b border-white/40 shrink-0 sticky top-0 z-20 shadow-sm" style={{ paddingTop: 'var(--safe-top)' }}>
                 <div className="flex items-center px-6 py-3">
                     <div className="flex justify-between items-center w-full">
@@ -597,6 +598,7 @@ const WorldbookApp: React.FC = () => {
                     </div>
                 </div>
             </div>
+            )}
 
             {isSelecting && (
                 <div className="relative z-10 shrink-0 bg-white/90 backdrop-blur-xl border-b border-indigo-100 px-5 py-2.5 flex items-center gap-3 shadow-sm animate-fade-soft">

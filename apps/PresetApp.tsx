@@ -14,11 +14,11 @@
  *
  * UI 遵循原作玻璃拟态风格：slate 底 + 白/20 玻璃卡片 + Phosphor 线性图标。
  */
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
     ArrowLeft, Plus, Trash, CaretUp, CaretDown, PencilSimple,
     Check, X, NoteBlank, Eye, Info, DownloadSimple, UploadSimple,
-    SquaresFour, ListBullets, Stack, Flask, BracketsCurly,
+    SquaresFour, ListBullets, BookOpen, MapPin, PaperPlaneTilt, Flask, BracketsCurly,
 } from '@phosphor-icons/react';
 import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
@@ -32,6 +32,12 @@ import { exportPresetKit, parsePresetKitShare } from '../utils/presetKitShare';
 import { shareOrDownloadBlob } from '../utils/shareExport';
 import { composePromptPreview, type PromptPreviewResult } from '../utils/promptPreviewComposer';
 import { applyRegexPlacement, getActiveRegexKitId, invalidatePresetRegexCache, setActiveRegexKitId } from '../utils/presetRegex';
+import WorldbookApp from './WorldbookApp';
+import { effectiveStatus } from '../utils/presetEffective';
+import { getTtsProvider, getElevenLabsModel } from '../utils/ttsProvider';
+import { isElevenLabsV3Model } from '../utils/elevenLabsTts';
+import { getCaptured, renderCapturedText } from '../utils/promptCallCapture';
+import { CALL_REGISTRY } from '../utils/promptCallRegistry';
 
 /** 内置条目在各注入点的位置说明（与 chatPrompts 实际逻辑同步维护） */
 const BUILTIN_INJECTION_WHERE: Record<string, string> = {
@@ -54,6 +60,7 @@ const BUILTIN_INJECTION_WHERE: Record<string, string> = {
     'amsg.emotionEvalMindful': '主动消息 · 情绪评估（正念模式）',
     'amsg.emotionEvalLiving': '主动消息 · 情绪评估（生活模式）',
     'chat.perspectiveTool': '聊天 · ChatApp 行为规范内（透视窗使用指南）',
+    'chat.appRules': '聊天 · ChatApp 行为规范内（各槽位按条件回填）',
     'rel.genGuide': '人物关系 · 生成任务模板（神经连接 → 人物关系）',
 };
 
@@ -69,14 +76,38 @@ const TAG_DEFS: { id: string; label: string }[] = [
 
 const tagLabel = (id: string): string => TAG_DEFS.find(t => t.id === id)?.label || id;
 
-type TabId = 'packs' | 'entries' | 'builtin' | 'regex' | 'preview';
+/** 可接管的 sourceKey 行：落位下拉切到非 native 即走套组管道（原生点跳过）。 */
+const ADOPTABLE_KEYS = new Set([
+    'chat.steelExpression',
+    'chat.steelYourself',
+    'chat.perspectiveTool',
+    'chat.appRules',
+]);
 
-const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
-    { id: 'packs', label: '套组', icon: <SquaresFour size={16} weight="bold" /> },
-    { id: 'entries', label: '条目', icon: <ListBullets size={16} weight="bold" /> },
-    { id: 'builtin', label: '内置模板', icon: <Stack size={16} weight="bold" /> },
-    { id: 'regex', label: '正则', icon: <BracketsCurly size={16} weight="bold" /> },
-    { id: 'preview', label: '预览', icon: <Eye size={16} weight="bold" /> },
+const ADOPT_OPTIONS: { v: string; label: string }[] = [
+    { v: 'native', label: '原生位' },
+    { v: 'stable', label: '接管·角色卡后' },
+    { v: 'afterHistory', label: '接管·历史后' },
+    { v: 'absolute', label: '接管·历史内' },
+];
+
+/** 真实发送 overlay 列的抓取站点（Task 1 captureCall 的 7 个本地抓取点）。 */
+const CAPTURE_SITES: { site: string; name: string }[] = [
+    { site: 'chat-main', name: '主聊天请求' },
+    { site: 'emotion-eval', name: '情绪评估' },
+    { site: 'memory-extract', name: '记忆提取' },
+    { site: 'memory-digest', name: '记忆消化' },
+    { site: 'rel-gen', name: '人物关系生成' },
+    { site: 'song-mentor', name: '写歌导师' },
+    { site: 'date-session', name: '见面主回复' },
+];
+
+type PageId = 'prompt' | 'worldbook' | 'map';
+
+const PAGES: { id: PageId; label: string; icon: React.ReactNode }[] = [
+    { id: 'prompt', label: '提示词', icon: <ListBullets size={16} weight="bold" /> },
+    { id: 'worldbook', label: '世界书', icon: <BookOpen size={16} weight="bold" /> },
+    { id: 'map', label: '调用地图', icon: <MapPin size={16} weight="bold" /> },
 ];
 
 /** 正则作用域选项（placement 值；4/仅显示 v1 未接，不提供）。 */
@@ -102,7 +133,7 @@ const cardCls = (on: boolean) => `rounded-2xl border backdrop-blur-md transition
 
 const PresetApp: React.FC = () => {
     const { closeApp, addToast } = useOS();
-    const [tab, setTab] = useState<TabId>('entries');
+    const [page, setPage] = useState<PageId>('prompt');
     const [packs, setPacks] = useState<PresetPack[]>([]);
     const [activeId, setActiveId] = useState<string>(DEFAULT_PACK_ID);
     const [rows, setRows] = useState<PromptPreset[]>([]);
@@ -117,9 +148,16 @@ const PresetApp: React.FC = () => {
     const [packDraftName, setPackDraftName] = useState('');
     const [genOpenId, setGenOpenId] = useState<string | null>(null);
     const fileRef = useRef<HTMLInputElement>(null);
-    // 预览页
-    const [chars, setChars] = useState<{ id: string; name: string }[]>([]);
-    const [previewCharId, setPreviewCharId] = useState('');
+    // 角色（全对象：生效判据要读语音/透视窗/深挖开关）+ 统一选中（角色 chip/预览/overlay 共用）
+    const [chars, setChars] = useState<any[]>([]);
+    const [selectedCharId, setSelectedCharId] = useState('');
+    // 套组管理 sheet / 内置分组折叠（聊天组默认展开）/ 真实发送 overlay / 底部正则·预览折叠
+    const [packSheet, setPackSheet] = useState(false);
+    const [collapsedCats, setCollapsedCats] = useState<Record<string, boolean>>({});
+    const [overlayOpen, setOverlayOpen] = useState(false);
+    const [overlaySite, setOverlaySite] = useState<string | null>(null);
+    const [regexOpen, setRegexOpen] = useState(false);
+    const [previewOpen, setPreviewOpen] = useState(false);
     const [preview, setPreview] = useState<PromptPreviewResult | null>(null);
     const [previewLoading, setPreviewLoading] = useState(false);
     // 正则页
@@ -145,10 +183,10 @@ const PresetApp: React.FC = () => {
             setRows(r);
             setRegexKits(rk || []);
             setActiveRegexId(ra ?? (rk && rk[0] ? rk[0].id : null));
-            const list = (cs || []).map(c => ({ id: c.id, name: c.name }));
+            const list = (cs || []) as any[];
             setChars(list);
             const saved = localStorage.getItem('preset_preview_char') || '';
-            setPreviewCharId(saved && list.some(c => c.id === saved) ? saved : (list[0]?.id || ''));
+            setSelectedCharId(saved && list.some(c => c.id === saved) ? saved : (list[0]?.id || ''));
         } finally {
             setLoading(false);
         }
@@ -165,6 +203,125 @@ const PresetApp: React.FC = () => {
         .filter((r): r is PromptPreset => !!r);
     const referencedIds = new Set(packs.flatMap(p => p.entryIds || []));
     const unmanaged = rows.filter(r => !r.sourceKey && !referencedIds.has(r.id));
+
+    // ── 角色选中 + 生效判据上下文（Task 3 三元组：读 {state, reason, adopted}）──
+    const selectedChar = chars.find(c => c.id === selectedCharId) ?? null;
+    const effCtx = useMemo(() => {
+        if (!selectedChar) return null;
+        return {
+            char: selectedChar as any,
+            provider: getTtsProvider(),
+            // 语音互斥用模型级消歧（与 resolveVoiceActingGuide 同源）：elevenlabs 用户恰一行生效。
+            isElevenLabsV3: isElevenLabsV3Model(getElevenLabsModel()),
+            activeTags: ['chat'],
+        };
+    }, [selectedChar]);
+    const selectChar = (id: string) => {
+        setSelectedCharId(id);
+        if (id) localStorage.setItem('preset_preview_char', id);
+        else localStorage.removeItem('preset_preview_char');
+        setPreview(null);
+    };
+
+    /** 内置常驻行：按目录 order 全局排序，分组时再按分类切分。 */
+    const builtinRows = useMemo(
+        () => rows.filter(r => r.sourceKey).sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
+        [rows],
+    );
+    const isCatOpen = (id: string) => !(collapsedCats[id] ?? (id !== 'chat'));
+
+    /** 互斥组头：语音当前供应商/模型；情绪当前 scheduleStyle 三选一（与 useChatAI 同口径）。 */
+    const voiceNow = (() => {
+        try {
+            const p = getTtsProvider();
+            if (p === 'elevenlabs') return isElevenLabsV3Model(getElevenLabsModel()) ? 'ElevenLabs v3' : 'ElevenLabs 标准模型';
+            if (p === 'fishaudio') return 'Fish';
+            return 'MiniMax';
+        } catch {
+            return 'MiniMax';
+        }
+    })();
+    const emoNow = !selectedChar
+        ? '未选角色'
+        : selectedChar.scheduleStyle === 'mindful'
+            ? '意识系规则'
+            : (selectedChar.scheduleStyle === 'lifestyle' || selectedChar.scheduleStyle === 'living')
+                ? '生活系规则'
+                : '主模板';
+
+    /** 生效徽标：off/off-disabled 等价（皆「不注入·已停用」）；已接管只看 adopted 标志。 */
+    const effBadge = (entry: PromptPreset) => {
+        if (!effCtx) return null;
+        let st;
+        try {
+            st = effectiveStatus(entry, effCtx);
+        } catch {
+            return null;
+        }
+        const live = st.state === 'on' || st.state === 'on-fallback' || st.state === 'on-adopted';
+        return (
+            <span className="flex items-center gap-1 shrink-0">
+                {st.adopted && (
+                    <span className="px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-amber-100 text-amber-600 shrink-0">已接管</span>
+                )}
+                <span
+                    title={st.reason}
+                    className={`px-1.5 py-0.5 rounded-md text-[9px] font-bold shrink-0 ${live ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-400'}`}
+                >
+                    {st.reason}
+                </span>
+            </span>
+        );
+    };
+
+    /** 内置行拖动排序：只写回双方 order（不动套组 entryIds）。 */
+    const swapBuiltinOrder = async (a: PromptPreset, b: PromptPreset) => {
+        if (a.id === b.id) return;
+        const na = { ...a, order: b.order, updatedAt: Date.now() };
+        const nb = { ...b, order: a.order, updatedAt: Date.now() };
+        setRows(rows.map(r => r.id === a.id ? na : r.id === b.id ? nb : r));
+        try {
+            await DB.savePromptPreset(na);
+            await DB.savePromptPreset(nb);
+            invalidatePromptPresetCache();
+        } catch {
+            addToast('保存失败', 'error');
+        }
+    };
+
+    // ── 真实发送 overlay 数据：当前角色各抓取站点最近一条 ──
+    const overlayRecords = useMemo(() => {
+        if (!selectedCharId) return [];
+        return CAPTURE_SITES.map(s => {
+            const list = getCaptured(s.site).filter(e => e.meta.charId === selectedCharId);
+            return { ...s, latest: list[0] ?? null, count: list.length };
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedCharId, overlayOpen]);
+
+    const copyCaptureText = async (text: string) => {
+        try {
+            await navigator.clipboard.writeText(text);
+            addToast('已复制全文', 'success');
+        } catch {
+            addToast('复制失败', 'error');
+        }
+    };
+
+    const exportCaptureText = async (site: string, text: string, at: number) => {
+        try {
+            const d = new Date(at);
+            const pad = (n: number) => String(n).padStart(2, '0');
+            const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+            await shareOrDownloadBlob({
+                blob: new Blob([text], { type: 'text/plain' }),
+                fileName: `capture-${site}-${stamp}.txt`,
+                shareTitle: `真实发送记录 ${site}`,
+            });
+        } catch (e: any) {
+            addToast(e?.message || '导出失败', 'error');
+        }
+    };
 
     const refresh = useCallback(async (msg?: string) => {
         try {
@@ -579,10 +736,10 @@ const PresetApp: React.FC = () => {
     }, [addToast]);
 
     useEffect(() => {
-        if (tab === 'preview' && previewCharId && !preview && !previewLoading) {
-            void runPreview(previewCharId);
+        if (previewOpen && selectedCharId && !preview && !previewLoading) {
+            void runPreview(selectedCharId);
         }
-    }, [tab, previewCharId, preview, previewLoading, runPreview]);
+    }, [previewOpen, selectedCharId, preview, previewLoading, runPreview]);
 
     // ── 渲染小件 ──
     const categoryChip = (p: PromptPreset) => {
@@ -661,6 +818,7 @@ const PresetApp: React.FC = () => {
                             <span className="text-sm font-bold text-slate-800 truncate">{p.name}</span>
                             {isMarker && <span className="px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-amber-50 text-amber-500 shrink-0">分界</span>}
                             {p.role && p.role !== 'system' && <span className="px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-sky-50 text-sky-600 shrink-0">{p.role}</span>}
+                            {effBadge(p)}
                         </div>
                     )}
                     {!editing && !isMarker && (
@@ -822,7 +980,141 @@ const PresetApp: React.FC = () => {
         );
     };
 
-    // ── 主渲染 ──
+    /** 内置常驻行卡片：改名/改文/启停 + 目录序上下移（只写回 order）+ 接管落位。 */
+    const renderBuiltinCard = (p: PromptPreset, list: PromptPreset[], i: number) => {
+        const editing = editingId === p.id;
+        const expanded = expandedId === p.id;
+        const builtin = p.sourceKey ? BUILTIN_PROMPT_ENTRIES.find(e => e.sourceKey === p.sourceKey) : undefined;
+        const customized = builtin ? (p.content ?? '') !== builtin.content : false;
+        const where = p.sourceKey ? BUILTIN_INJECTION_WHERE[p.sourceKey] : undefined;
+        const adoptable = !!p.sourceKey && ADOPTABLE_KEYS.has(p.sourceKey);
+        const adoptPos = p.adoptPosition ?? 'native';
+        return (
+            <div key={p.id} className={cardCls(p.enabled)}>
+                <div className="flex items-center gap-1.5 px-3 pt-2.5 pb-1.5">
+                    {editing ? (
+                        <input
+                            value={draftName}
+                            onChange={e => setDraftName(e.target.value)}
+                            className="flex-1 min-w-0 bg-slate-100 rounded-lg px-2 py-1 text-sm font-bold text-slate-800 outline-none focus:ring-2 ring-violet-300"
+                            autoFocus
+                        />
+                    ) : (
+                        <div onClick={() => setExpandedId(expanded ? null : p.id)} className="flex items-center gap-1.5 min-w-0 flex-1 cursor-pointer">
+                            <span className="text-sm font-bold text-slate-800 truncate">{p.name}</span>
+                            {categoryChip(p)}
+                            {customized && <span className="px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-amber-50 text-amber-500 shrink-0">已改</span>}
+                            {effBadge(p)}
+                        </div>
+                    )}
+                    {!editing && (
+                        <button onClick={() => startEdit(p)} className="p-1.5 rounded-full hover:bg-slate-200/70 active:scale-90 transition-transform shrink-0" title="编辑全文">
+                            <PencilSimple size={13} className="text-slate-500" />
+                        </button>
+                    )}
+                    <div className="flex flex-col -space-y-1 shrink-0">
+                        <button onClick={() => i > 0 && swapBuiltinOrder(p, list[i - 1])} disabled={i === 0} className="p-0.5 rounded hover:bg-slate-200/70 disabled:opacity-20 active:scale-90 transition-transform" title="上移（只改目录序）">
+                            <CaretUp size={13} weight="bold" className="text-slate-500" />
+                        </button>
+                        <button onClick={() => i < list.length - 1 && swapBuiltinOrder(p, list[i + 1])} disabled={i === list.length - 1} className="p-0.5 rounded hover:bg-slate-200/70 disabled:opacity-20 active:scale-90 transition-transform" title="下移（只改目录序）">
+                            <CaretDown size={13} weight="bold" className="text-slate-500" />
+                        </button>
+                    </div>
+                    {enableSwitch(p.enabled, () => toggleEnabled(p))}
+                </div>
+                {where && (
+                    <p className="px-3 pb-1 text-[10px] text-slate-400 flex items-start gap-1 leading-tight">
+                        <Info size={11} weight="bold" className="shrink-0 mt-0.5" />{where}
+                        {!adoptable && <span className="px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-slate-100 text-slate-500 shrink-0">原生注入</span>}
+                    </p>
+                )}
+                {adoptable && (
+                    <div className="flex items-center gap-1.5 px-3 pb-1.5 flex-wrap">
+                        <span className="text-[10px] font-bold text-slate-400 shrink-0">落位</span>
+                        <select
+                            value={adoptPos}
+                            onChange={e => {
+                                const v = e.target.value as PromptPreset['adoptPosition'];
+                                void (async () => {
+                                    await patchEntry(p, { adoptPosition: v });
+                                    // 接管行只在套组内走管道：切到接管时自动加入当前套组，避免两边都不注入。
+                                    if (v && v !== 'native' && !(activePack.entryIds || []).includes(p.id)) {
+                                        await savePackOrder([...(activePack.entryIds || []), p.id]);
+                                        addToast('已接管：该行已加入当前套组走管道', 'success');
+                                    }
+                                })();
+                            }}
+                            className="bg-slate-100 rounded-lg px-2 py-1 text-[11px] font-bold text-slate-700 outline-none focus:ring-2 ring-violet-300"
+                        >
+                            {ADOPT_OPTIONS.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
+                        </select>
+                        {adoptPos === 'absolute' && (
+                            <>
+                                <span className="text-[10px] font-bold text-slate-400 shrink-0">深度</span>
+                                <input
+                                    type="number"
+                                    min={0}
+                                    max={50}
+                                    value={p.injectionDepth ?? 0}
+                                    onChange={e => patchEntry(p, { injectionDepth: Math.max(0, Math.min(50, Math.floor(Number(e.target.value) || 0))) })}
+                                    className="w-16 bg-slate-100 rounded-lg px-2 py-1 text-xs text-slate-700 outline-none focus:ring-2 ring-violet-300"
+                                />
+                            </>
+                        )}
+                        {adoptPos !== 'native' && (
+                            <span className="text-[9px] font-bold text-amber-500">原生点跳过，走套组管道</span>
+                        )}
+                    </div>
+                )}
+                {editing ? (
+                    <div className="px-3 pb-3">
+                        <textarea
+                            value={draftContent}
+                            onChange={e => setDraftContent(e.target.value)}
+                            rows={8}
+                            className="w-full bg-slate-100 rounded-xl px-3 py-2 text-[13px] leading-relaxed text-slate-700 outline-none focus:ring-2 ring-violet-300 resize-none no-scrollbar"
+                        />
+                        <div className="flex justify-end gap-2 mt-2">
+                            <button onClick={() => setEditingId(null)} className="px-3 py-1.5 rounded-xl bg-slate-200/80 text-slate-600 text-xs font-bold active:scale-95 transition-transform">
+                                <X size={13} weight="bold" className="inline -mt-0.5 mr-0.5" />取消
+                            </button>
+                            <button onClick={commitEdit} className="px-3 py-1.5 rounded-xl bg-violet-500 text-white text-xs font-bold active:scale-95 transition-transform">
+                                <Check size={13} weight="bold" className="inline -mt-0.5 mr-0.5" />保存
+                            </button>
+                        </div>
+                    </div>
+                ) : (
+                    <div className="px-3 pb-3">
+                        <p
+                            onClick={() => p.content && p.content.length > 120 && setExpandedId(expanded ? null : p.id)}
+                            className={`text-[13px] leading-relaxed whitespace-pre-wrap ${p.content ? 'text-slate-600' : 'text-slate-400 italic'}`}
+                        >
+                            {p.content
+                                ? ((expanded || p.content.length <= 120) ? p.content : p.content.slice(0, 120) + '……')
+                                : '（空段落，点右上角编辑填写）'}
+                        </p>
+                        {builtin && customized && (
+                            <button onClick={async () => {
+                                const next = applyBuiltinDefaultsToPreset(p);
+                                setRows(rows.map(x => x.id === p.id ? next : x));
+                                try {
+                                    await DB.savePromptPreset(next);
+                                    invalidatePromptPresetCache();
+                                    addToast('已恢复内置默认', 'success');
+                                } catch {
+                                    addToast('保存失败', 'error');
+                                }
+                            }} className="mt-1.5 block text-[10px] font-bold text-slate-400 hover:text-slate-600 active:scale-95 transition-transform">
+                                恢复内置默认文案
+                            </button>
+                        )}
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+    // ── 主渲染：三页（提示词 / 世界书 / 调用地图入口）──
     return (
         <div className="h-full w-full bg-slate-100 flex flex-col">
             <div className="px-4 pt-3 pb-2 bg-white/60 backdrop-blur-xl border-b border-white/40 shrink-0">
@@ -830,25 +1122,29 @@ const PresetApp: React.FC = () => {
                     <button onClick={closeApp} className="p-2 rounded-full hover:bg-slate-200/70 active:scale-90 transition-transform">
                         <ArrowLeft size={22} weight="bold" className="text-slate-700" />
                     </button>
-                    <h1 className="text-lg font-bold text-slate-800">提示词</h1>
-                    <span className="ml-1 px-2 py-0.5 rounded-full bg-violet-100 text-violet-600 text-[10px] font-bold max-w-[140px] truncate">{activePack.name}</span>
-                    {tab === 'entries' && (
-                        <button onClick={handleAddEntry} className="ml-auto p-2 rounded-full bg-violet-500 text-white shadow-sm hover:bg-violet-600 active:scale-90 transition-transform" title="新增段落">
-                            <Plus size={18} weight="bold" />
-                        </button>
+                    <h1 className="text-lg font-bold text-slate-800">
+                        {page === 'prompt' ? '提示词' : page === 'worldbook' ? '世界书' : '调用地图'}
+                    </h1>
+                    {page === 'prompt' && (
+                        <span className="ml-1 px-2 py-0.5 rounded-full bg-violet-100 text-violet-600 text-[10px] font-bold max-w-[140px] truncate">{activePack.name}</span>
                     )}
-                    {tab === 'packs' && (
-                        <button onClick={handleNewPack} className="ml-auto p-2 rounded-full bg-violet-500 text-white shadow-sm hover:bg-violet-600 active:scale-90 transition-transform" title="新建套组">
-                            <Plus size={18} weight="bold" />
-                        </button>
+                    {page === 'prompt' && (
+                        <>
+                            <button onClick={() => setPackSheet(true)} className="ml-auto p-2 rounded-full hover:bg-slate-200/70 text-slate-600 active:scale-90 transition-transform" title="套组管理">
+                                <SquaresFour size={19} weight="bold" />
+                            </button>
+                            <button onClick={() => { setOverlaySite(null); setOverlayOpen(true); }} className="p-2 rounded-full hover:bg-slate-200/70 text-slate-600 active:scale-90 transition-transform" title="真实发送记录">
+                                <PaperPlaneTilt size={19} weight="bold" />
+                            </button>
+                        </>
                     )}
                 </div>
                 <div className="mt-2 flex gap-1 bg-slate-200/60 rounded-xl p-1">
-                    {TABS.map(t => (
+                    {PAGES.map(t => (
                         <button
                             key={t.id}
-                            onClick={() => setTab(t.id)}
-                            className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded-lg text-[11px] font-bold transition-all active:scale-95 ${tab === t.id ? 'bg-white text-violet-600 shadow-sm' : 'text-slate-400'}`}
+                            onClick={() => setPage(t.id)}
+                            className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded-lg text-[11px] font-bold transition-all active:scale-95 ${page === t.id ? 'bg-white text-violet-600 shadow-sm' : 'text-slate-400'}`}
                         >
                             {t.icon}{t.label}
                         </button>
@@ -856,10 +1152,123 @@ const PresetApp: React.FC = () => {
                 </div>
             </div>
 
+            {page === 'worldbook' && (
+                <div className="flex-1 min-h-0">
+                    <WorldbookApp embedded />
+                </div>
+            )}
+            {page === 'map' && (
+                <div className="flex-1 overflow-y-auto no-scrollbar px-4 py-3 pb-24 space-y-3">
+                    <div className="rounded-2xl bg-white/70 border border-white/60 px-4 py-5 text-center">
+                        <MapPin size={32} weight="light" className="mx-auto text-slate-300" />
+                        <p className="mt-2 text-sm font-bold text-slate-700">调用地图</p>
+                        <p className="mt-1 text-[11px] text-slate-400 leading-relaxed">
+                            全仓调用点一览在此挂载（Task 9）。<br />
+                            当前登记 {CALL_REGISTRY.length} 个站点 · 本地可抓 {CALL_REGISTRY.filter(s => s.visibility === 'local').length} 个。
+                        </p>
+                    </div>
+                </div>
+            )}
+
+            {page === 'prompt' && (
             <div className="flex-1 overflow-y-auto no-scrollbar px-4 py-3 pb-24 space-y-3">
                 {loading && <p className="text-center text-xs text-slate-400 pt-8">加载中…</p>}
-                {!loading && tab === 'packs' && (
+                {!loading && (
                     <>
+                        {/* 套组条：横滑切换 + 管理入口 */}
+                        <div className="flex gap-1.5 overflow-x-auto no-scrollbar px-0.5 py-0.5">
+                            {packs.map(p => (
+                                <button
+                                    key={p.id}
+                                    onClick={() => handleSwitchPack(p.id)}
+                                    className={`px-3 py-1.5 rounded-xl text-[11px] font-bold whitespace-nowrap active:scale-95 transition-transform ${p.id === activeId ? 'bg-violet-500 text-white shadow-sm' : 'bg-white/70 text-slate-500 border border-white/60'}`}
+                                >
+                                    {p.name}
+                                </button>
+                            ))}
+                            <button onClick={() => setPackSheet(true)} className="px-3 py-1.5 rounded-xl text-[11px] font-bold whitespace-nowrap bg-white/70 text-violet-600 border border-white/60 active:scale-95 transition-transform">
+                                管理
+                            </button>
+                        </div>
+                        {/* 角色 chip：可清空；选中驱动生效徽标/互斥组头/overlay */}
+                        <div className="flex gap-1.5 overflow-x-auto no-scrollbar px-0.5 py-0.5">
+                            <button
+                                onClick={() => selectChar('')}
+                                className={`px-3 py-1.5 rounded-xl text-[11px] font-bold whitespace-nowrap active:scale-95 transition-transform ${!selectedCharId ? 'bg-slate-700 text-white shadow-sm' : 'bg-white/70 text-slate-500 border border-white/60'}`}
+                            >
+                                全部
+                            </button>
+                            {chars.map(c => (
+                                <button
+                                    key={c.id}
+                                    onClick={() => selectChar(c.id)}
+                                    className={`px-3 py-1.5 rounded-xl text-[11px] font-bold whitespace-nowrap active:scale-95 transition-transform ${c.id === selectedCharId ? 'bg-violet-500 text-white shadow-sm' : 'bg-white/70 text-slate-500 border border-white/60'}`}
+                                >
+                                    {c.name}
+                                </button>
+                            ))}
+                        </div>
+                        {/* 内置常驻段：按目录序分组（可折叠；聊天组默认展开） */}
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest pl-1">内置常驻（{builtinRows.length}）</p>
+                        {PROMPT_CATEGORY_META.slice().sort((a, b) => a.order - b.order).map(meta => {
+                            const list = builtinRows.filter(r => (r.category || 'chat') === meta.id);
+                            if (list.length === 0) return null;
+                            const open = isCatOpen(meta.id);
+                            return (
+                                <div key={meta.id}>
+                                    <button
+                                        onClick={() => setCollapsedCats({ ...collapsedCats, [meta.id]: open })}
+                                        className="w-full flex items-center gap-1.5 pl-1 mb-1.5 active:opacity-70"
+                                    >
+                                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{meta.label}（{list.length}）</span>
+                                        {(meta.id === 'voice' || meta.id === 'amsg') && (
+                                            <span className="text-[9px] font-bold text-violet-500 normal-case tracking-normal">
+                                                当前：{meta.id === 'voice' ? voiceNow : emoNow}
+                                            </span>
+                                        )}
+                                        <span className="ml-auto text-slate-300">
+                                            {open ? <CaretUp size={13} weight="bold" /> : <CaretDown size={13} weight="bold" />}
+                                        </span>
+                                    </button>
+                                    {open && (
+                                        <div className="space-y-3">
+                                            {list.map((p, i) => renderBuiltinCard(p, list, i))}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                        {/* 自定义段：当前套组条目 */}
+                        <div className="flex items-center gap-2 pl-1 pt-1">
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">自定义段（{packEntries.length}）</p>
+                            <button onClick={handleAddEntry} className="ml-auto p-1.5 rounded-full bg-violet-500 text-white shadow-sm hover:bg-violet-600 active:scale-90 transition-transform" title="新增段落">
+                                <Plus size={14} weight="bold" />
+                            </button>
+                        </div>
+                    </>
+                )}
+                {!loading && (
+                    <>
+                        {packEntries.length === 0 && unmanaged.length === 0 && builtinRows.length === 0 && (
+                            <div className="flex flex-col items-center pt-14 text-slate-400">
+                                <NoteBlank size={44} weight="light" />
+                                <p className="text-sm mt-3">这个套组还没有段落</p>
+                                <p className="text-xs mt-1 text-slate-400/80">点自定义段旁 + 建第一条</p>
+                            </div>
+                        )}
+                        {packEntries.map((p, i) => renderEntryCard(p, i, packEntries.length, true))}
+                {packSheet && (
+                    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/40" onClick={() => setPackSheet(false)}>
+                        <div onClick={e => e.stopPropagation()} className="w-full max-w-lg max-h-[82%] overflow-y-auto no-scrollbar bg-slate-100 rounded-t-3xl px-4 py-3 pb-8 space-y-3">
+                            <div className="flex items-center gap-2 py-1">
+                                <p className="text-sm font-bold text-slate-800 flex-1">套组管理</p>
+                                <button onClick={handleNewPack} className="p-2 rounded-full bg-violet-500 text-white shadow-sm hover:bg-violet-600 active:scale-90 transition-transform" title="新建套组">
+                                    <Plus size={16} weight="bold" />
+                                </button>
+                                <button onClick={() => setPackSheet(false)} className="p-2 rounded-full hover:bg-slate-200/70 active:scale-90 transition-transform" title="关闭">
+                                    <X size={16} weight="bold" className="text-slate-500" />
+                                </button>
+                            </div>
                         {packs.map(pack => {
                             const active = pack.id === activeId;
                             const isDefault = pack.id === DEFAULT_PACK_ID;
@@ -884,7 +1293,7 @@ const PresetApp: React.FC = () => {
                                                 autoFocus
                                             />
                                         ) : (
-                                            <div className="flex-1 min-w-0 cursor-pointer" onClick={() => { setTab('entries'); if (pack.id !== activeId) void handleSwitchPack(pack.id); }}>
+                                            <div className="flex-1 min-w-0 cursor-pointer" onClick={() => { setPackSheet(false); if (pack.id !== activeId) void handleSwitchPack(pack.id); }}>
                                                 <p className="text-sm font-bold text-slate-800 truncate">
                                                     {pack.name}
                                                     {isDefault && <span className="ml-1.5 px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-violet-50 text-violet-600">默认</span>}
@@ -961,18 +1370,11 @@ const PresetApp: React.FC = () => {
                             <UploadSimple size={14} weight="bold" /> 从文件导入套组
                         </button>
                         <p className="text-[10px] text-slate-400 text-center leading-relaxed">点套组名进入条目编辑；圆点切换当前生效套组。<br />默认预设不可删除；删套组不删条目（条目回到未入套组）。</p>
-                    </>
+                        </div>
+                    </div>
                 )}
-                {!loading && tab === 'entries' && (
+                {!loading && (
                     <>
-                        {packEntries.length === 0 && unmanaged.length === 0 && (
-                            <div className="flex flex-col items-center pt-14 text-slate-400">
-                                <NoteBlank size={44} weight="light" />
-                                <p className="text-sm mt-3">这个套组还没有段落</p>
-                                <p className="text-xs mt-1 text-slate-400/80">点右上角 + 建第一条</p>
-                            </div>
-                        )}
-                        {packEntries.map((p, i) => renderEntryCard(p, i, packEntries.length, true))}
                         {unmanaged.length > 0 && (
                             <div className="pt-2">
                                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 pl-1">未入套组（{unmanaged.length}）</p>
@@ -991,83 +1393,15 @@ const PresetApp: React.FC = () => {
                         )}
                     </>
                 )}
-                {!loading && tab === 'builtin' && (
-                    <>
-                        <p className="text-[10px] text-slate-400 leading-relaxed px-1">技术模板行：各自功能在原生注入点渲染，不进套组顺序。停用=按下述规则回退（钢印/语音不注入，记忆类回默认）。</p>
-                        {rows.filter(r => r.sourceKey).map(p => {
-                            const editing = editingId === p.id;
-                            const expanded = expandedId === p.id;
-                            const builtin = p.sourceKey ? BUILTIN_PROMPT_ENTRIES.find(e => e.sourceKey === p.sourceKey) : undefined;
-                            const customized = builtin ? (p.content ?? '') !== builtin.content : false;
-                            const where = p.sourceKey ? BUILTIN_INJECTION_WHERE[p.sourceKey] : undefined;
-                            return (
-                                <div key={p.id} className={cardCls(p.enabled)}>
-                                    <div className="flex items-center gap-1.5 px-3 pt-2.5 pb-1.5">
-                                        {editing ? (
-                                            <input value={draftName} onChange={e => setDraftName(e.target.value)}
-                                                className="flex-1 min-w-0 bg-slate-100 rounded-lg px-2 py-1 text-sm font-bold text-slate-800 outline-none focus:ring-2 ring-violet-300" autoFocus />
-                                        ) : (
-                                            <div onClick={() => setExpandedId(expanded ? null : p.id)} className="flex items-center gap-1.5 min-w-0 flex-1 cursor-pointer">
-                                                <span className="text-sm font-bold text-slate-800 truncate">{p.name}</span>
-                                                {categoryChip(p)}
-                                                {customized && <span className="px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-amber-50 text-amber-500 shrink-0">已改</span>}
-                                            </div>
-                                        )}
-                                        {!editing && (
-                                            <button onClick={() => startEdit(p)} className="p-1.5 rounded-full hover:bg-slate-200/70 active:scale-90 transition-transform shrink-0" title="编辑全文">
-                                                <PencilSimple size={13} className="text-slate-500" />
-                                            </button>
-                                        )}
-                                        {enableSwitch(p.enabled, () => toggleEnabled(p))}
-                                    </div>
-                                    {editing ? (
-                                        <div className="px-3 pb-3">
-                                            <textarea value={draftContent} onChange={e => setDraftContent(e.target.value)} rows={8}
-                                                className="w-full bg-slate-100 rounded-xl px-3 py-2 text-[13px] leading-relaxed text-slate-700 outline-none focus:ring-2 ring-violet-300 resize-none no-scrollbar" />
-                                            <div className="flex justify-end gap-2 mt-2">
-                                                <button onClick={() => setEditingId(null)} className="px-3 py-1.5 rounded-xl bg-slate-200/80 text-slate-600 text-xs font-bold active:scale-95 transition-transform">
-                                                    <X size={13} weight="bold" className="inline -mt-0.5 mr-0.5" />取消
-                                                </button>
-                                                <button onClick={commitEdit} className="px-3 py-1.5 rounded-xl bg-violet-500 text-white text-xs font-bold active:scale-95 transition-transform">
-                                                    <Check size={13} weight="bold" className="inline -mt-0.5 mr-0.5" />保存
-                                                </button>
-                                            </div>
-                                        </div>
-                                    ) : (
-                                        <div className="px-3 pb-3">
-                                            {where && (
-                                                <p className="text-[10px] text-slate-400 mb-1 flex items-start gap-1 leading-tight">
-                                                    <Info size={11} weight="bold" className="shrink-0 mt-0.5" />{where}
-                                                </p>
-                                            )}
-                                            <p onClick={() => p.content && p.content.length > 120 && setExpandedId(expanded ? null : p.id)}
-                                                className={`text-[13px] leading-relaxed whitespace-pre-wrap ${p.content ? 'text-slate-600' : 'text-slate-400 italic'}`}>
-                                                {p.content ? ((expanded || p.content.length <= 120) ? p.content : p.content.slice(0, 120) + '……') : '（空段落，点右上角编辑填写）'}
-                                            </p>
-                                            {builtin && customized && (
-                                                <button onClick={async () => {
-                                                    const next = applyBuiltinDefaultsToPreset(p);
-                                                    setRows(rows.map(x => x.id === p.id ? next : x));
-                                                    try {
-                                                        await DB.savePromptPreset(next);
-                                                        invalidatePromptPresetCache();
-                                                        addToast('已恢复内置默认', 'success');
-                                                    } catch {
-                                                        addToast('保存失败', 'error');
-                                                    }
-                                                }} className="mt-1.5 block text-[10px] font-bold text-slate-400 hover:text-slate-600 active:scale-95 transition-transform">
-                                                    恢复内置默认文案
-                                                </button>
-                                            )}
-                                        </div>
-                                    )}
-                                </div>
-                            );
-                        })}
-                    </>
-                )}
-                {!loading && tab === 'regex' && (
-                    <>
+                {!loading && (
+                    <div className="pt-1">
+                        <button onClick={() => setRegexOpen(!regexOpen)} className="w-full flex items-center gap-1.5 pl-1 mb-1.5 active:opacity-70">
+                            <BracketsCurly size={13} weight="bold" className="text-slate-400" />
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">正则{activeKit ? `（${activeKit.rules.length}）` : ''}</span>
+                            <span className="ml-auto text-slate-300">{regexOpen ? <CaretUp size={13} weight="bold" /> : <CaretDown size={13} weight="bold" />}</span>
+                        </button>
+                        {regexOpen && (
+                            <div className="space-y-3">
                         <p className="text-[10px] text-slate-400 leading-relaxed px-1">查找替换脚本：按顺序串行执行。替换支持 $1 分组与 {'{{char}}'} 宏；非法正则整条跳过。仅显示作用域 v1 未接，不提供。</p>
                         {/* 套件选择 */}
                         <div className="flex gap-1.5 flex-wrap">
@@ -1215,24 +1549,29 @@ const PresetApp: React.FC = () => {
                                 <p className="text-xs mt-1 text-slate-400/80">点「套件」创建一个</p>
                             </div>
                         )}
-                    </>
+                            </div>
+                        )}
+                    </div>
                 )}
-                {!loading && tab === 'preview' && (
-                    <>
+                {!loading && (
+                    <div className="pt-1">
+                        <button onClick={() => setPreviewOpen(!previewOpen)} className="w-full flex items-center gap-1.5 pl-1 mb-1.5 active:opacity-70">
+                            <Eye size={13} weight="bold" className="text-slate-400" />
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">注入预览{selectedChar ? ` · ${selectedChar.name}` : ''}</span>
+                            <span className="ml-auto text-slate-300">{previewOpen ? <CaretUp size={13} weight="bold" /> : <CaretDown size={13} weight="bold" />}</span>
+                        </button>
+                        {previewOpen && (
+                            <div className="space-y-3">
                         <div className="flex items-center gap-2 px-1">
                             <Flask size={14} weight="bold" className="text-violet-500 shrink-0" />
                             <select
-                                value={previewCharId}
-                                onChange={e => {
-                                    setPreviewCharId(e.target.value);
-                                    localStorage.setItem('preset_preview_char', e.target.value);
-                                    setPreview(null);
-                                }}
+                                value={selectedCharId}
+                                onChange={e => selectChar(e.target.value)}
                                 className="flex-1 min-w-0 bg-white/70 border border-white/60 rounded-xl px-2 py-2 text-xs font-bold text-slate-700 outline-none focus:ring-2 ring-violet-300"
                             >
                                 {chars.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                             </select>
-                            <button onClick={() => { setPreview(null); void runPreview(previewCharId); }} className="px-3 py-2 rounded-xl bg-violet-500 text-white text-xs font-bold active:scale-95 transition-transform shrink-0">
+                            <button onClick={() => { setPreview(null); void runPreview(selectedCharId); }} className="px-3 py-2 rounded-xl bg-violet-500 text-white text-xs font-bold active:scale-95 transition-transform shrink-0">
                                 {previewLoading ? '生成中…' : '刷新'}
                             </button>
                         </div>
@@ -1273,9 +1612,62 @@ const PresetApp: React.FC = () => {
                                 })}
                             </>
                         )}
+                            </div>
+                        )}
+                    </div>
+                )}
                     </>
                 )}
             </div>
+            )}
+            {overlayOpen && (
+                <div className="fixed inset-0 z-50 flex flex-col bg-slate-900/40" onClick={() => { setOverlayOpen(false); setOverlaySite(null); }}>
+                    <div onClick={e => e.stopPropagation()} className="mt-16 flex-1 min-h-0 bg-slate-100 rounded-t-3xl flex flex-col overflow-hidden">
+                        <div className="flex items-center gap-2 px-4 py-3 bg-white/60 border-b border-white/40 shrink-0">
+                            <p className="text-sm font-bold text-slate-800 flex-1">真实发送记录{selectedChar ? ` · ${selectedChar.name}` : ''}</p>
+                            <button onClick={() => { setOverlayOpen(false); setOverlaySite(null); }} className="p-2 rounded-full hover:bg-slate-200/70 active:scale-90 transition-transform" title="关闭">
+                                <X size={16} weight="bold" className="text-slate-500" />
+                            </button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto no-scrollbar px-4 py-3 pb-8 space-y-3">
+                            {!selectedCharId && (
+                                <p className="text-center text-xs text-slate-400 pt-10">先在提示词页选一个角色，再看它的真实发送记录。</p>
+                            )}
+                            {selectedCharId && !overlaySite && overlayRecords.map(s => (
+                                <button
+                                    key={s.site}
+                                    disabled={!s.latest}
+                                    onClick={() => s.latest && setOverlaySite(s.site)}
+                                    className={`w-full text-left rounded-2xl border backdrop-blur-md px-3 py-2.5 transition-transform ${s.latest ? 'bg-white/70 border-white/60 active:scale-[0.99]' : 'bg-white/40 border-white/40 opacity-60'}`}
+                                >
+                                    <p className="text-sm font-bold text-slate-800">{s.name}<span className="ml-2 text-[10px] font-bold text-slate-400">{s.count} 条</span></p>
+                                    <p className="text-[10px] text-slate-400 mt-0.5">{s.latest ? new Date(s.latest.meta.at).toLocaleString() : '暂无记录'}</p>
+                                </button>
+                            ))}
+                            {selectedCharId && !overlaySite && overlayRecords.every(s => !s.latest) && (
+                                <p className="text-center text-[11px] text-slate-400">该角色暂无抓取记录：去聊一条消息再回来。</p>
+                            )}
+                            {selectedCharId && overlaySite && (() => {
+                                const rec = overlayRecords.find(s => s.site === overlaySite)?.latest ?? null;
+                                if (!rec) return <p className="text-center text-xs text-slate-400 pt-10">该站点暂无记录。</p>;
+                                const hit = overlayRecords.find(s => s.site === overlaySite)!;
+                                const text = renderCapturedText(rec);
+                                return (
+                                    <div className="space-y-2">
+                                        <button onClick={() => setOverlaySite(null)} className="text-[11px] font-bold text-violet-500 active:scale-95 transition-transform">← 全部站点</button>
+                                        <p className="text-[10px] text-slate-400">{hit.name} · {new Date(rec.meta.at).toLocaleString()} · {rec.charCount} 字</p>
+                                        <pre className="rounded-2xl bg-white/70 border border-white/60 px-3 py-2.5 text-[11px] leading-relaxed text-slate-600 whitespace-pre-wrap max-h-[50vh] overflow-y-auto no-scrollbar">{text}</pre>
+                                        <div className="flex gap-2">
+                                            <button onClick={() => copyCaptureText(text)} className="flex-1 py-2 rounded-xl bg-violet-500 text-white text-xs font-bold active:scale-[0.99] transition-transform">复制全文</button>
+                                            <button onClick={() => exportCaptureText(hit.site, text, rec.meta.at)} className="flex-1 py-2 rounded-xl bg-white/70 border border-white/60 text-violet-600 text-xs font-bold active:scale-[0.99] transition-transform">导出 txt</button>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
+                        </div>
+                    </div>
+                </div>
+            )}
             <input ref={fileRef} type="file" accept=".json,application/json" className="hidden"
                 onChange={e => {
                     const f = e.target.files?.[0];

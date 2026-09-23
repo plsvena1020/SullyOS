@@ -49,4 +49,22 @@ describe('effectiveStatus', () => {
             { char: { chatVoiceEnabled: true } as any, provider: 'elevenlabs', isElevenLabsV3: true, activeTags: ['chat'] },
         )).toMatchObject({ state: 'on' });
     });
+    it('appRules native row -> on', () => {
+        expect(effectiveStatus(
+            { id: 'a', name: 'A', content: 'a', enabled: true, sourceKey: 'chat.appRules', tags: [] } as any,
+            { char: {} as any, provider: 'minimax', activeTags: ['chat'] },
+        )).toMatchObject({ state: 'on', adopted: false });
+    });
+    it('appRules adopted row -> on + adopted', () => {
+        expect(effectiveStatus(
+            { id: 'a', name: 'A', content: 'a', enabled: true, sourceKey: 'chat.appRules', adoptPosition: 'stable', tags: [] } as any,
+            { char: {} as any, provider: 'minimax', activeTags: ['chat'] },
+        )).toMatchObject({ state: 'on', adopted: true });
+    });
+    it('appRules disabled row -> off-disabled', () => {
+        expect(effectiveStatus(
+            { id: 'a', name: 'A', content: 'a', enabled: false, sourceKey: 'chat.appRules', tags: [] } as any,
+            { char: {} as any, provider: 'minimax', activeTags: ['chat'] },
+        )).toMatchObject({ state: 'off-disabled' });
+    });
 });
