@@ -43,3 +43,60 @@ export async function bindAccount(mcpBase: string, mcpToken: string, p: { ownerI
   if (!r.ok) throw new Error(`绑定失败 HTTP ${r.status}`);
   return r.json();
 }
+
+export interface BindPending {
+  instance: string; ownerId: string; mcpBase: string; mcpToken: string;
+  redirectUri: string; client_id: string; client_secret: string; state: string;
+}
+
+// 一键绑定发起：注册应用 → 组授权地址 + 待存 pending（含随机 state 防 CSRF）。
+// 调用方把 pending 存 sessionStorage，浏览器跳 authorizeUrl；回调带回 code+state。
+export async function createBindSession(p: { instance: string; ownerId: string; mcpBase: string; mcpToken: string; redirectUri: string }): Promise<{ authorizeUrl: string; pending: BindPending }> {
+  const instance = normInstance(p.instance);
+  const app = await registerApp(instance, p.redirectUri);
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  const state = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  const pending: BindPending = { ...p, instance, client_id: app.client_id, client_secret: app.client_secret, state };
+  return {
+    authorizeUrl: buildAuthorizeUrl({ instance, clientId: app.client_id, redirectUri: p.redirectUri }) + `&state=${state}`,
+    pending,
+  };
+}
+
+export function verifyBindState(pending: BindPending, returnedState: string | null): boolean {
+  return !!returnedState && returnedState === pending.state;
+}
+
+// 从 MCP server 条目推导 bind 基址：?target= 代理取解码目标；直连去掉尾部 /mcp 端点段（Caddy 子路径保留，bind 与 MCP 同前缀）。
+// bind 走 HTTP 直调（非 MCP 协议），与 callMcpTool 路径无关。
+export function mcpBaseUrl(server: { url: string }): string {
+  const raw = (server.url || '').trim();
+  try {
+    const u = new URL(raw);
+    const target = u.searchParams.get('target');
+    const base = target ? decodeURIComponent(target) : raw.split('?')[0];
+    return base.replace(/\/+$/, '').replace(/\/mcp$/i, '');
+  } catch { return raw; }
+}
+
+export interface BoundIdentity { ownerId: string; acct: string; instance: string }
+
+const IDENTITIES_KEY = 'mastodon-identities';
+
+// 身份列表只存元数据（ownerId/acct/instance），不存 token。按 ownerId upsert：刷新非追加。
+export async function loadIdentities(storage: Pick<Storage, 'getItem'>): Promise<BoundIdentity[]> {
+  try {
+    const raw = storage.getItem(IDENTITIES_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list.filter((e) => e?.ownerId) : [];
+  } catch { return []; }
+}
+
+export async function saveIdentity(storage: Pick<Storage, 'getItem' | 'setItem'>, entry: BoundIdentity): Promise<BoundIdentity[]> {
+  const list = await loadIdentities(storage);
+  const i = list.findIndex((e) => e.ownerId === entry.ownerId);
+  if (i >= 0) list[i] = entry; else list.push(entry);
+  storage.setItem(IDENTITIES_KEY, JSON.stringify(list));
+  return list;
+}

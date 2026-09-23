@@ -7,7 +7,8 @@ import { ContextBuilder } from '../utils/context';
 import { isBlobRef } from '../utils/blobRef';
 import { safeResponseJson } from '../utils/safeApi';
 import { mergeSocialComments, prependUniqueSocialPosts, updateSocialPost } from '../utils/socialFeedMerge';
-import { normalizeMastodonStatus, dedupeByRemoteId, toMastodonVisibility, isChineseStatus } from '../utils/momentsFeed';
+import { normalizeMastodonStatus, dedupeByRemoteId, toMastodonVisibility, isChineseStatus, visibleInMoments } from '../utils/momentsFeed';
+import { createBindSession, loadIdentities, mcpBaseUrl, type BoundIdentity } from '../utils/mastodonOAuth';
 import { callMcpTool, loadMcpServers } from '../utils/mcpClient';
 import type { McpServerConfig } from '../utils/mcpClient';
 import TokenImg from '../components/os/TokenImg';
@@ -147,6 +148,15 @@ const MomentsApp: React.FC = () => {
     const [newPostEmoji, setNewPostEmoji] = useState('2728');
     // 发帖身份：'user'（我）或 charId（某角色）；可见性默认私密
     const [selectedIdentity, setSelectedIdentity] = useState<string>('user');
+    const [identities, setIdentities] = useState<BoundIdentity[]>([]);
+
+    // 已绑身份：挂载读一次 + 绑定成功事件刷新（PhoneShell 回调里 saveIdentity 后派发）
+    useEffect(() => {
+        loadIdentities(localStorage).then(setIdentities).catch(() => {});
+        const onChange = () => { loadIdentities(localStorage).then(setIdentities).catch(() => {}); };
+        window.addEventListener('mastodon-identities-changed', onChange);
+        return () => window.removeEventListener('mastodon-identities-changed', onChange);
+    }, []);
     const [newPostVisibility, setNewPostVisibility] = useState<'public' | 'private' | 'direct'>('private');
 
     // Comment Input State
@@ -192,7 +202,7 @@ const MomentsApp: React.FC = () => {
                 // IndexedDB can be slow on mobile. If the user already created
                 // something while this read was pending, keep that live version.
                 const liveIds = new Set(feedRef.current.map(post => post.id));
-                const next = [...feedRef.current, ...sorted.filter(post => !liveIds.has(post.id))];
+                const next = [...feedRef.current, ...sorted.filter(post => !liveIds.has(post.id) && visibleInMoments(post))];
                 feedRef.current = next;
                 setFeed(next);
             }
@@ -422,6 +432,28 @@ const MomentsApp: React.FC = () => {
         } catch (e: any) {
             if (mountedRef.current) addToast(`同步到 Mastodon 失败：${e?.message || e}`, 'error');
         }
+    };
+
+    // 一键绑定发起：注册应用 → 存 pending → 跳授权页。回调由 PhoneShell effect 接住换 token + 落盘。
+    const handleBind = async () => {
+        try {
+            const raw = window.prompt('输入 Mastodon 实例域名（如 mastodon.social）');
+            if (!raw) return;
+            const server = findMomentsServer();
+            if (!server?.token) {
+                addToast('先在设置 → MCP 添加 Mastodon 服务器（地址见用户文档第八节）', 'info');
+                return;
+            }
+            const { authorizeUrl, pending } = await createBindSession({
+                instance: raw,
+                ownerId: selectedIdentity,
+                mcpBase: mcpBaseUrl(server),
+                mcpToken: server.token,
+                redirectUri: `${window.location.origin}/`,
+            });
+            sessionStorage.setItem('mastodon-oauth-pending', JSON.stringify(pending));
+            window.location.href = authorizeUrl;
+        } catch (e: any) { addToast(String(e?.message ?? e), 'error'); }
     };
 
     const generateComments = async (post: SocialPost) => {
@@ -673,7 +705,7 @@ ${identityMap}
             bgStyle: getRandomStyle(),
             authorType: 'user',
             ...(char ? { authorCharId: char.id } : {}),
-            origin: 'gen',
+            origin: 'moments',
         };
         prependPostsToFeed([post]);
         void publishToMastodon(post, char?.id, newPostVisibility);
@@ -1054,11 +1086,11 @@ ${identityMap}
                             ‹ 返回
                         </button>
                         <button
-                            onClick={() => addToast('Mastodon 绑定稍后开放', 'info')}
+                            onClick={handleBind}
                             className="absolute px-3 py-1.5 rounded-full bg-black/30 text-white text-[11px] font-bold backdrop-blur-md active:scale-95 transition"
                             style={{ top: 'calc(var(--safe-top) + 8px)', right: '12px' }}
                         >
-                            绑定 Mastodon
+                            {identities.length > 0 ? `已绑 ${identities.length} 个号` : '绑定 Mastodon'}
                         </button>
                     </div>
                     <div className="absolute bottom-0 right-0 left-0 flex items-end justify-end gap-3 px-4 translate-y-1/3">
@@ -1069,6 +1101,11 @@ ${identityMap}
 
                 {/* 昵称行占位（头像下半截 Terrier 悬空的补偿） */}
                 <div className="h-8 shrink-0 bg-white" />
+                {identities.length > 0 && (
+                    <div className="px-4 py-1.5 bg-white text-[11px] text-slate-500 shrink-0">
+                        已绑：{identities.map(i => `@${i.acct}`).join(' · ')}
+                    </div>
+                )}
 
                 {/* 双 tab：熟人 / 发现 */}
                 <div className="sticky top-0 z-30 bg-white border-b border-slate-100">

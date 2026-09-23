@@ -20,8 +20,8 @@ export function normalizeMastodonStatus(s: { id: string; url?: string | null; co
 }
 
 export function dedupeByRemoteId(local: SocialPost[], fresh: SocialPost[]): SocialPost[] {
-  const known = new Set(local.map((p) => p.mastodonStatusId).filter(Boolean));
-  return fresh.filter((p) => p.mastodonStatusId && !known.has(p.mastodonStatusId));
+  const known = new Set(local.map((p) => `${p.mastodonInstance ?? ''}\n${p.mastodonStatusId ?? ''}`));
+  return fresh.filter((p) => p.mastodonStatusId && !known.has(`${p.mastodonInstance ?? ''}\n${p.mastodonStatusId ?? ''}`));
 }
 
 export function toMastodonVisibility(local: string | undefined): 'public' | 'unlisted' | 'private' | 'direct' {
@@ -30,6 +30,13 @@ export function toMastodonVisibility(local: string | undefined): 'public' | 'unl
   return 'private';
 }
 
+// 朋友圈/Spark 互不影响：熟人线只看 mastodon 同步帖 + 朋友圈手发帖；广场看不到这两类。
+export function visibleInMoments(p: SocialPost): boolean {
+  return p.origin === 'mastodon' || p.origin === 'moments';
+}
+export function visibleInSpark(p: SocialPost): boolean {
+  return p.origin !== 'mastodon' && p.origin !== 'moments';
+}
 // 发现页中文过滤：Mastodon language 字段为准（zh 开头全收：简/繁/粤）；缺失时看正文含 CJK 即收。
 export function isChineseStatus(s: { language?: string | null; text: string }): boolean {
   if (s.language) return s.language.toLowerCase().startsWith('zh');

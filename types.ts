@@ -4135,8 +4135,8 @@ export interface SocialPost {
     bgStyle?: string;
     authorType?: 'user' | 'character' | 'stranger';
     authorCharId?: string;
-    /** 帖子来源：'gen'（默认，AI 生成/用户发布）| 'douban'（豆瓣小组真实帖子）| 'mastodon'（读回来的 toot / 同步出去且有远端 id 的帖子） */
-    origin?: 'gen' | 'douban' | 'mastodon';
+    /** 帖子来源：'gen'（默认，AI 生成/用户发布）| 'douban'（豆瓣小组真实帖子）| 'mastodon'（读回来的 toot / 同步出去且有远端 id 的帖子）| 'moments'（朋友圈手发本地帖，不进 Spark 广场） */
+    origin?: 'gen' | 'douban' | 'mastodon' | 'moments';
     /** Mastodon 远端 status id（双向去重键，读回/发出都要写） */
     mastodonStatusId?: string;
     /** 实例域名（如 mastodon.social），多实例防串 */

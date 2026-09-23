@@ -40,4 +40,22 @@ describe('moments feed', () => {
     expect(isChineseStatus({ language: null, text: '今天天气不错' })).toBe(true);
     expect(isChineseStatus({ language: null, text: 'hello world' })).toBe(false);
   });
+  it('去重带实例维度（不同实例同 id 不丢）', async () => {
+    const { dedupeByRemoteId } = await import('./momentsFeed.js');
+    const local = [{ id: 'l1', mastodonStatusId: '7', mastodonInstance: 'a.social' }];
+    const fresh = [
+      { id: 'x', mastodonStatusId: '7', mastodonInstance: 'a.social' },
+      { id: 'y', mastodonStatusId: '7', mastodonInstance: 'b.social' },
+    ];
+    expect(dedupeByRemoteId(local as never, fresh as never).map((p: { id: string }) => p.id)).toEqual(['y']);
+  });
+  it('朋友圈/Spark 可见性划分（互不影响）', async () => {
+    const { visibleInMoments, visibleInSpark } = await import('./momentsFeed.js');
+    expect(visibleInMoments({ origin: 'mastodon' } as never)).toBe(true);
+    expect(visibleInMoments({ origin: 'moments' } as never)).toBe(true);
+    expect(visibleInMoments({ origin: 'douban' } as never)).toBe(false);
+    expect(visibleInSpark({ origin: 'mastodon' } as never)).toBe(false);
+    expect(visibleInSpark({ origin: 'moments' } as never)).toBe(false);
+    expect(visibleInSpark({ origin: 'gen' } as never)).toBe(true);
+  });
 });
