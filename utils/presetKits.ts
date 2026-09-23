@@ -3,7 +3,10 @@
  *
  * resolveActivePackEntries(activeTags)：读 active 指针 → 按 entryIds 取条目 →
  * enabled / 非空 / tags / marker 四道过滤 → 按注入位分成 stable / afterHistory /
- * absolute 三组。调用方（chatPrompts）只管落位，不管排序过滤。
+ * absolute 三组；再按行状态补收 adoptPosition 非 native 的 sourceKey 接管行
+ * （不依赖 entryIds，切套组不丢），同组内排自定义之后（按行 order）。
+ * 非接管 sourceKey 行在所有路径都不进三组。调用方（chatPrompts）只管落位，
+ * 不管排序过滤。
  */
 import { DB } from './db';
 import { expandPromptMacros, type PromptMacroCtx } from './promptMacros';
@@ -103,9 +106,11 @@ export async function resolveActivePackEntries(activeTags: string[] = ['chat']):
     const adoptedStable: ResolvedPresetEntry[] = [];
     const adoptedAfter: ResolvedPresetEntry[] = [];
     const adoptedAbsolute: ResolvedPresetEntry[] = [];
+    const seen = new Set<string>();
     for (const id of pack.entryIds || []) {
         const r = byId.get(id);
         if (!r) continue; // 失配引用丢弃
+        seen.add(id);
         if (!r.enabled) continue;
         if (!(r.content || '').trim()) continue; // 空段不注入（与旧行为一致）
         if (r.marker === 'chatHistory') continue; // 分界占位本身不注入
@@ -122,6 +127,23 @@ export async function resolveActivePackEntries(activeTags: string[] = ['chat']):
         if (norm.injectionPosition === 'absolute') absolute.push(norm);
         else if (norm.afterChatHistory) afterHistory.push(norm);
         else stable.push(norm);
+    }
+    // 接管行按行状态进管道：adoptPosition 非 native 的 sourceKey 行不依赖
+    // entryIds（切套组不丢、免手动加组）；非接管 sourceKey 行永不进三组。
+    const isAdoptedRow = (r: { adoptPosition?: PromptPreset['adoptPosition'] }) =>
+        r.adoptPosition === 'stable' || r.adoptPosition === 'afterHistory' || r.adoptPosition === 'absolute';
+    for (const r of rows || []) {
+        if (!r.sourceKey || !isAdoptedRow(r)) continue;
+        if (seen.has(r.id)) continue; // 套组内已收，不重复
+        if (!r.enabled) continue;
+        if (!(r.content || '').trim()) continue;
+        if (r.marker === 'chatHistory') continue;
+        if (!tagsMatch(r.tags, activeTags)) continue;
+        const norm = normalizePresetEntry(r);
+        norm.adopted = true;
+        if (r.adoptPosition === 'absolute') adoptedAbsolute.push(norm);
+        else if (r.adoptPosition === 'afterHistory') adoptedAfter.push(norm);
+        else adoptedStable.push(norm);
     }
     // 同组自定义按 entryIds 序在前（上游已保序），接管按目录序（行 order）在后。
     const byOrder = (a: ResolvedPresetEntry, b: ResolvedPresetEntry) => a.order - b.order;

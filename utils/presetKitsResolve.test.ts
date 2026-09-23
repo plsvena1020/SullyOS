@@ -113,4 +113,53 @@ describe('resolveActivePackEntries', () => {
         await DB.setActivePackId('default');
         invalidatePromptPresetCache();
     });
+
+    it('adopted rows resolve from row state: no pack membership, survives pack switch, un-adopt removes with zero pack mutation', async () => {
+        await DB.savePromptPreset(row({
+            id: 'ad-steel', content: 'ADOPTED_ROWSTATE_Z1', order: 5,
+            sourceKey: 'chat.steelExpression', adoptPosition: 'stable',
+        }));
+        await DB.savePromptPreset(row({ id: 'ad-c1', content: 'C1' }));
+        // 非接管 sourceKey 行不在套组里：行状态扫描也不得收
+        await DB.savePromptPreset(row({ id: 'ad-native', content: 'N', sourceKey: 'chat.steelYourself' }));
+        const now = Date.now();
+        await DB.savePresetPack({
+            id: 'ad-pack', name: 'A', createdAt: now, updatedAt: now,
+            entryIds: ['ad-c1'],
+        });
+        await DB.setActivePackId('ad-pack');
+
+        // 未入套组也注入，且排在同组自定义之后
+        const got = await resolveActivePackEntries(['chat']);
+        expect(got.stable.map((e) => e.id)).toEqual(['ad-c1', 'ad-steel']);
+        expect(got.stable[1].adopted).toBe(true);
+        expect([...got.stable, ...got.afterHistory, ...got.absolute].map((e) => e.id))
+            .not.toContain('ad-native');
+
+        // 切套组不丢：新套组完全不含它，照样注入
+        await DB.savePresetPack({
+            id: 'ad-pack2', name: 'B', createdAt: now, updatedAt: now, entryIds: [],
+        });
+        await DB.setActivePackId('ad-pack2');
+        expect((await resolveActivePackEntries(['chat'])).stable.map((e) => e.id))
+            .toEqual(['ad-steel']);
+
+        // 取消接管（落位回 native）：管道移除，且套组 entryIds 零变更
+        const packBefore = (await DB.getPresetPacks()).find((p) => p.id === 'ad-pack2');
+        await DB.savePromptPreset(row({
+            id: 'ad-steel', content: 'ADOPTED_ROWSTATE_Z1', order: 5,
+            sourceKey: 'chat.steelExpression',
+        }));
+        const got3 = await resolveActivePackEntries(['chat']);
+        expect([...got3.stable, ...got3.afterHistory, ...got3.absolute].map((e) => e.id))
+            .not.toContain('ad-steel');
+        expect((await DB.getPresetPacks()).find((p) => p.id === 'ad-pack2')).toEqual(packBefore);
+
+        await DB.deletePresetPack('ad-pack').catch(() => undefined);
+        await DB.deletePresetPack('ad-pack2').catch(() => undefined);
+        await DB.deletePromptPreset('ad-steel').catch(() => undefined);
+        await DB.deletePromptPreset('ad-c1').catch(() => undefined);
+        await DB.deletePromptPreset('ad-native').catch(() => undefined);
+        await DB.setActivePackId('default');
+    });
 });

@@ -7,7 +7,7 @@
  *   落位（角色卡后 / 历史后 / 历史内深度 / 分界），上下移只改套组 entryIds。
  * - 内置模板：不进套组的技术模板行（记忆/主动消息/语音/钢印），沿用旧卡片
  *   编辑 + 恢复默认；钢印仍在 recency 原生位注入。
- * - 预览：当前套组在某角色身上的逐块注入预览（含 token 估算）。
+ * - 预览：当前套组在某角色身上的逐块注入预览（含字数统计）。
  *
  * 数据存 IndexedDB `prompt_presets`（条目）+ `preset_packs`（套组顺序）+
  * `preset_pack_active`（当前指针），随备份动态枚举自动带走。
@@ -198,9 +198,11 @@ const PresetApp: React.FC = () => {
     const activePack = packs.find(p => p.id === activeId)
         ?? packs.find(p => p.id === DEFAULT_PACK_ID)
         ?? { id: DEFAULT_PACK_ID, name: DEFAULT_PACK_NAME, entryIds: [], createdAt: 0, updatedAt: 0 };
+    // 套组条目只取无 sourceKey 的自定义行：内置行永不进 entryIds，
+    // 即使某套组被污染也只在内置常驻段渲染，不双重显示。
     const packEntries = (activePack.entryIds || [])
         .map(id => byId.get(id))
-        .filter((r): r is PromptPreset => !!r);
+        .filter((r): r is PromptPreset => !!r && !r.sourceKey);
     const referencedIds = new Set(packs.flatMap(p => p.entryIds || []));
     const unmanaged = rows.filter(r => !r.sourceKey && !referencedIds.has(r.id));
 
@@ -663,13 +665,18 @@ const PresetApp: React.FC = () => {
         }
     };
 
+    // 下标按 packEntries（已滤内置）的可见序换算回 entryIds，保证污染套组也不错位。
     const moveEntry = (index: number, dir: -1 | 1) => {
-        const ids = [...(activePack.entryIds || [])];
+        const visible = packEntries.map(p => p.id);
         const target = index + dir;
-        if (target < 0 || target >= ids.length) return;
-        const tmp = ids[index];
-        ids[index] = ids[target];
-        ids[target] = tmp;
+        if (target < 0 || target >= visible.length) return;
+        const ids = [...(activePack.entryIds || [])];
+        const ai = ids.indexOf(visible[index]);
+        const bi = ids.indexOf(visible[target]);
+        if (ai < 0 || bi < 0) return;
+        const tmp = ids[ai];
+        ids[ai] = ids[bi];
+        ids[bi] = tmp;
         void savePackOrder(ids);
     };
 
@@ -1033,17 +1040,7 @@ const PresetApp: React.FC = () => {
                         <span className="text-[10px] font-bold text-slate-400 shrink-0">落位</span>
                         <select
                             value={adoptPos}
-                            onChange={e => {
-                                const v = e.target.value as PromptPreset['adoptPosition'];
-                                void (async () => {
-                                    await patchEntry(p, { adoptPosition: v });
-                                    // 接管行只在套组内走管道：切到接管时自动加入当前套组，避免两边都不注入。
-                                    if (v && v !== 'native' && !(activePack.entryIds || []).includes(p.id)) {
-                                        await savePackOrder([...(activePack.entryIds || []), p.id]);
-                                        addToast('已接管：该行已加入当前套组走管道', 'success');
-                                    }
-                                })();
-                            }}
+                            onChange={e => patchEntry(p, { adoptPosition: e.target.value as PromptPreset['adoptPosition'] })}
                             className="bg-slate-100 rounded-lg px-2 py-1 text-[11px] font-bold text-slate-700 outline-none focus:ring-2 ring-violet-300"
                         >
                             {ADOPT_OPTIONS.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
@@ -1579,10 +1576,7 @@ const PresetApp: React.FC = () => {
                         {preview && (
                             <>
                                 <div className="rounded-2xl bg-white/70 border border-white/60 px-3 py-2.5">
-                                    <p className="text-[11px] font-bold text-slate-700">共 {preview.blocks.length} 块 · 约 {preview.totals.all.toLocaleString()} tokens</p>
-                                    <p className="text-[10px] text-slate-400 mt-0.5">
-                                        stable {preview.totals.stable.toLocaleString()} · 历史内 {preview.totals.history.toLocaleString()} · 易变 {preview.totals.volatileState.toLocaleString()} · 钢印 {preview.totals.recencyTail.toLocaleString()}（约 2.2 字符/token，仅供相对参考）
-                                    </p>
+                                    <p className="text-[11px] font-bold text-slate-700">共 {preview.blocks.length} 块 · 约 {preview.blocks.reduce((a, b) => a + (b.charEstimate || 0), 0).toLocaleString()} 字</p>
                                 </div>
                                 {(['stable', 'history', 'volatileState', 'recencyTail'] as const).map(seg => {
                                     const list = preview.blocks.filter(b => b.segment === seg);
@@ -1598,7 +1592,7 @@ const PresetApp: React.FC = () => {
                                                         <div key={b.id} className={cardCls(b.enabled)}>
                                                             <div onClick={() => setExpandedId(open ? null : b.id)} className="px-3 py-2 cursor-pointer">
                                                                 <p className="text-xs font-bold text-slate-700 truncate">{b.title}</p>
-                                                                <p className="text-[10px] text-slate-400 truncate">{b.sourceLabel}{b.insertionPoint ? ` · ${b.insertionPoint}` : ''} · ~{b.tokenEstimate}tk</p>
+                                                                <p className="text-[10px] text-slate-400 truncate">{b.sourceLabel}{b.insertionPoint ? ` · ${b.insertionPoint}` : ''} · {(b.charEstimate || 0).toLocaleString()} 字</p>
                                                             </div>
                                                             {open && (
                                                                 <p className="px-3 pb-2.5 text-[11px] leading-relaxed text-slate-600 whitespace-pre-wrap max-h-64 overflow-y-auto">{b.content}</p>
