@@ -16,4 +16,13 @@ describe('call registry anchors exist', () => {
         expect(cp).toContain('const resolveSteel');
         expect(cp).toContain('resolveVoiceActingGuide');
     });
+    it('every anchor line contains its pinned symbol', () => {
+        for (const s of CALL_REGISTRY) {
+            expect(s.pin, `site ${s.site} missing pin`).toBeTruthy();
+            const [file, lineNo] = s.anchor.split(':');
+            const src = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
+            const line = src.split('\n')[Number(lineNo) - 1] ?? '';
+            expect(line, `site ${s.site} anchor ${s.anchor}`).toContain(s.pin);
+        }
+    });
 });

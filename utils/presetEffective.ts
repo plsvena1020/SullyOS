@@ -9,7 +9,9 @@
 // resolveVoiceActingGuide / datePrompts voice.date 行）；resolveTechnicalPrompt(Sync)
 // 停用→回退内置（= on-fallback）；resolveManagedPrompt(Sync)/resolveSteel 停用→null
 // 不注入（= off-disabled）。零平行逻辑：门控字段与注入点读的是同一批字段。
-import { getTtsProvider } from './ttsProvider';
+import { getTtsProvider, getElevenLabsModel } from './ttsProvider';
+import { isElevenLabsV3Model } from './elevenLabsTts';
+import { tagsMatch } from './presetKits';
 import type { PromptPreset, TtsProvider } from '../types';
 
 export type EffectiveState =
@@ -40,6 +42,12 @@ export interface EffectiveCtx {
     char: EffectiveChar;
     provider?: TtsProvider;
     activeTags?: string[];
+    /**
+     * ElevenLabs 是否 v3 模型（只在 provider 为 elevenlabs 时参与判定）。
+     * 缺省读真实单例（isElevenLabsV3Model(getElevenLabsModel())，与
+     * resolveVoiceActingGuide 的四选一同源，见 utils/elevenLabsTts.ts:30）。
+     */
+    isElevenLabsV3?: boolean;
 }
 
 /** Task 2 的接管行也可能是裸 PromptPreset（只有 adoptPosition）——两种形态都认。 */
@@ -63,15 +71,19 @@ const isTechnicalFallbackRow = (sourceKey: string): boolean =>
     || sourceKey === 'rel.genGuide'
     || sourceKey.startsWith('memory.');
 
-// tags ⊆ activeTags（与 presetKits.tagsMatch 同口径）；空=全场景。
-const tagsMatch = (entryTags: string[] | undefined, activeTags: string[]): boolean => {
-    if (!entryTags || entryTags.length === 0) return true;
-    return entryTags.every((t) => activeTags.includes(t));
-};
+// tags 判定直接用解析层同源 presetKits.tagsMatch（tags ⊆ activeTags，空=全场景）。
 
 // v1 未接线的场景 tags：phone/story/memory（接线另立项，接上即自动生效）。
 const UNWIRED_SCENE_TAGS = ['phone', 'story', 'memory'];
 
+/**
+ * 消费者契约（Task 9/12）：读 {state, reason, adopted} 三元组，不要只读 state。
+ * - 'off' 与 'off-disabled' 等价对待（都是"不注入·已停用"，拼写差异是历史原因，
+ *   executable contract 以 presetEffective.test.ts 的断言为准，不得改值）。
+ * - "已接管"徽标只看 `adopted` 标志，不看 state：钢印接管行 state 仍是 'on'
+ *   （同测试 `state:'on' + adopted:true`），只有 perspectiveTool 接管行用 'on-adopted'。
+ * - 'on-fallback' = 面板停用但调用方回退内置仍注入；'dead' = 暂无消费点。
+ */
 export function effectiveStatus(entry: EffectiveEntry, ctx: EffectiveCtx): EffectiveStatus {
     const key = entry.sourceKey;
     const char = ctx?.char ?? ({} as EffectiveChar);
@@ -105,6 +117,15 @@ export function effectiveStatus(entry: EffectiveEntry, ctx: EffectiveCtx): Effec
         }
         if (char.chatVoiceEnabled !== true) {
             return { state: 'off-char', reason: '该角色未开语音', adopted: false };
+        }
+        // ElevenLabs 双行：真实注入按模型二选一（同 resolveVoiceActingGuide +
+        // isElevenLabsV3Model），没选中的那行如实 off-char。minimax/fish 不受影响。
+        if (provider === 'elevenlabs') {
+            const isV3 = ctx?.isElevenLabsV3 ?? isElevenLabsV3Model(getElevenLabsModel());
+            const expected = isV3 ? 'voice.elevenlabsV3' : 'voice.elevenlabsStd';
+            if (key !== expected) {
+                return { state: 'off-char', reason: `模型不匹配（当前 ${isV3 ? 'ElevenLabs v3' : 'ElevenLabs 标准模型'}）`, adopted: false };
+            }
         }
         return { state: 'on', reason: '生效', adopted: false };
     }

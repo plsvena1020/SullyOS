@@ -27,4 +27,26 @@ describe('effectiveStatus', () => {
             { char: {} as any, provider: 'minimax', activeTags: ['chat'] },
         )).toMatchObject({ state: 'on', adopted: true });
     });
+    it('elevenlabs v3 user: std row off with model reason', () => {
+        const r = effectiveStatus(
+            { id: 'v', name: 'V', content: 'v', enabled: true, sourceKey: 'voice.elevenlabsStd', tags: [] } as any,
+            { char: { chatVoiceEnabled: true } as any, provider: 'elevenlabs', isElevenLabsV3: true, activeTags: ['chat'] },
+        );
+        expect(r.state).toBe('off-char');
+        expect(r.reason).toContain('v3');
+    });
+    it('elevenlabs std user: v3 row off with model reason', () => {
+        const r = effectiveStatus(
+            { id: 'v', name: 'V', content: 'v', enabled: true, sourceKey: 'voice.elevenlabsV3', tags: [] } as any,
+            { char: { chatVoiceEnabled: true } as any, provider: 'elevenlabs', isElevenLabsV3: false, activeTags: ['chat'] },
+        );
+        expect(r.state).toBe('off-char');
+        expect(r.reason).toContain('标准');
+    });
+    it('elevenlabs v3 user: v3 row on', () => {
+        expect(effectiveStatus(
+            { id: 'v', name: 'V', content: 'v', enabled: true, sourceKey: 'voice.elevenlabsV3', tags: [] } as any,
+            { char: { chatVoiceEnabled: true } as any, provider: 'elevenlabs', isElevenLabsV3: true, activeTags: ['chat'] },
+        )).toMatchObject({ state: 'on' });
+    });
 });
