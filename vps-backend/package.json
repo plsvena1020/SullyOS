@@ -17,7 +17,9 @@
     "secret-scan": "bash deploy/scripts/secret-scan.sh"
   },
   "dependencies": {
-    "node-cron": "^3.0.3"
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "node-cron": "^3.0.3",
+    "zod": "^3.23.0"
   },
   "optionalDependencies": {
     "better-sqlite3": "^11.3.0"
