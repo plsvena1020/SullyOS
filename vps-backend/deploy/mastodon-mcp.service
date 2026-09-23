@@ -1,0 +1,12 @@
+[Unit]
+Description=SullyOS Mastodon MCP (streamable HTTP on 127.0.0.1:8838)
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/sullyos/sullyos-repo/vps-backend/src/mastodon-mcp
+ExecStart=/usr/bin/node run.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
