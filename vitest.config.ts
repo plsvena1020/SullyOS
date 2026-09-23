@@ -18,8 +18,10 @@ export default defineConfig({
       'api/**/*.test.ts',
       // xhs session bridge(vps-backend 纯 JS 服务):任务 6/7 单测位
       'vps-backend/**/*.test.ts',
+      'apps/**/*.test.{ts,tsx}',
+      'components/**/*.test.{ts,tsx}',
     ],
-    // 排除 React 组件 / 浏览器集成测 (没装 jsdom)
+    // apps、components 内的 React 单测各自按文件头 @vitest-environment 按需切 jsdom，node 环境文件不受影响
     exclude: ['node_modules', '**/node_modules/**', '.worktrees', 'dist'],
   },
 });

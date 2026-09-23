@@ -323,3 +323,5 @@ export const probePerspective = async (realtimeConfig: RealtimeConfig): Promise<
         return { ...entry, status: 'err', detail: '探测失败' };
     }
 };
+
+export { probeHome } from '../components/home/HomeBadgeBridge';

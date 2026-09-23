@@ -350,7 +350,12 @@ export async function runAutonomyTick(input: AutonomyTickInput): Promise<Autonom
       continue;
     }
     // 每个角色只消费一次随机数：窗口落在 [min, max] 小时之间。
-    const windowMs = (cadence.minHours + rand() * (cadence.maxHours - cadence.minHours)) * HOUR_MS;
+    // P2 底线：单轮间隔不低于 resolveRoundIntervalMin（/home/config 快照缺失回退 30，
+    // P5 接入配置源后自动生效）；spec §7 默认每角色每 30 分钟至多 1 轮。
+    const windowMs = Math.max(
+      (cadence.minHours + rand() * (cadence.maxHours - cadence.minHours)) * HOUR_MS,
+      resolveRoundIntervalMin(null) * 60_000,
+    );
     const lastUserMessageAt = pack.lastUserMessageAt;
     const userJustSpoke = typeof lastUserMessageAt === 'number'
       && input.nowMs - lastUserMessageAt <= windowMs;
@@ -385,6 +390,13 @@ export async function runAutonomyTick(input: AutonomyTickInput): Promise<Autonom
     // 闸 5：静默段（含跨夜）。
     if (autonomy.quietHours && inQuietHours(autonomy.quietHours, minutes)) {
       skip(AUTONOMY_SKIP_REASONS.quietHours);
+      continue;
+    }
+
+    // P2 家策略底线：角色时区 00:00–07:00 只写事件不推送，单日 48 轮熔断。
+    // 旧链闸口（配额/静默段）在前；roundsToday 用旧链当日计数（闸 4 已按角色时区翻日）。
+    if (!shouldPushNow(minutes, state.roundsToday)) {
+      skip(state.roundsToday >= 48 ? AUTONOMY_SKIP_REASONS.dailyLimit : AUTONOMY_SKIP_REASONS.quietHours);
       continue;
     }
 
@@ -596,3 +608,20 @@ export const createAutonomyPostTask = (deps: {
     if (!response.ok) throw new Error(`schedule-message 拒绝（HTTP ${response.status}）`);
     return { status: response.status };
   };
+
+export function quietHours(minutesOfDay: number): boolean {
+  // 分钟数由调用方按角色时区算好传进来（wallClockPartsInZone），本函数不碰时区；
+  // 口径复用调度主链的 inQuietHours，MVP 窗口 00:00–07:00。
+  return inQuietHours({ start: '00:00', end: '07:00' }, minutesOfDay);
+}
+export function shouldPushNow(minutesOfDay: number, roundsToday: number): boolean {
+  if (roundsToday >= 48) return false;
+  if (quietHours(minutesOfDay)) return false;
+  return true;
+}
+/** P2 频率可调：模拟器间隔分钟数读 /home/config，快照缺失回退 30，越界 clamp 到 5–120。 */
+export function resolveRoundIntervalMin(cfg: { roundIntervalMin?: unknown } | null | undefined): number {
+  const v = Number(cfg?.roundIntervalMin);
+  if (!Number.isFinite(v)) return 30;
+  return Math.min(120, Math.max(5, Math.floor(v)));
+}

@@ -18,6 +18,7 @@ import {
     topicText, summarizeConversation,
 } from '../utils/relationshipChat';
 import PersonaSim, { LifeLog, generatePersonaScript } from './PersonaSim';
+import CheckPhoneHomeCard from './CheckPhoneHomeCard';
 import { usePersonaSim, personaSimStore } from '../utils/personaSimStore';
 import { getLastInnerState } from '../utils/emotionApply';
 import { normalizePhoneEvidence, phoneFieldToText } from '../utils/phoneEvidence';
@@ -33,7 +34,7 @@ import {
     Plus, SignOut, CaretLeft, CaretRight, Cloud, ImagesSquare, LockSimple, Package,
     Storefront, Heart, ArrowsClockwise, Tray, DotsThree, ClockCounterClockwise, Sparkle,
     UsersThree, UserPlus, Prohibit, LinkSimple, PaperPlaneTilt, PencilSimple, Trash,
-    Robot, Brain, MaskHappy, Question, PaintBrush
+    Robot, Brain, MaskHappy, Question, PaintBrush, House
 } from '@phosphor-icons/react';
 
 type LayoutId = NonNullable<PhoneCustomApp['layout']>;
@@ -3733,6 +3734,8 @@ ${olderText}
                     onClick={() => { setActiveAppId('taobao');  }} />
                 <HomeCard icon={<Wallet size={24} weight="light" />} label="银行卡" sub={bankCardSub} accent="#5C6BC0"
                     onClick={() => { setActiveAppId('bank');  }} />
+                <HomeCard icon={<House size={24} weight="light" />} label="家" sub="小屋 · 去看看 TA" accent="#f59e0b"
+                    onClick={() => { setActiveAppId('home-svc');  }} />
             </div>
 
             {/* 智能体：偷看「TA 的小手机」 —— 给个抢眼的横条入口 */}
@@ -4085,6 +4088,15 @@ ${olderText}
                     {activeAppId === 'taobao' && renderShop()}
                     {activeAppId === 'waimai' && renderFood()}
                     {activeAppId === 'bank' && renderBank()}
+                    {activeAppId === 'home-svc' && targetChar && (
+                        <SubAppShell key={activeAppId}>
+                            <TermHeader title="家" sub="vps home" accent="#f59e0b" onBack={() => setActiveAppId('home')}
+                                right={<House size={20} weight="fill" style={{ color: '#f59e0b' }} />} />
+                            <div className="flex-1 overflow-y-auto px-4 pt-2 no-scrollbar pb-28 overscroll-contain">
+                                <CheckPhoneHomeCard charId={targetChar.id} />
+                            </div>
+                        </SubAppShell>
+                    )}
                     {activeAppId === 'social' && renderMoments()}
                     {activeAppId === 'aiagent' && renderAiAgent()}
                     {activeAppId === 'ai_session' && renderAiSession()}

@@ -64,6 +64,7 @@ import type {
   KindFirePlan,
   KindSessionCtx,
 } from './fireKinds';
+import { buildWantToSharePush } from './instantChat';
 import type { ResolvedAirpAutonomy } from '../../../utils/airp/autonomySettings';
 
 /** 只为单测导出：让测试能不经 index.ts 直接喂一份 ctx。 */
@@ -373,13 +374,58 @@ export const AUTONOMY_ROUND_OVERRIDE =
   '注意：上面是你在正常聊天时的完整规矩，但【开口之前】那段只管实时聊天、不管这一轮——'
   + '这一轮必须按下面的 JSON 契约输出（想歇就输出 rest），绝不能输出空内容。';
 
+/**
+ * P6 预设覆盖的键（fire_pack.autonomyPromptOverrides 与 buildAutonomyRoundPrompt
+ * 第二参数共用同一套 key；取值为空串 / 缺省时回退下面的硬编码常量，旧行为不变）。
+ * key → 预设目录 sourceKey：overrideBlock→autonomy.override、situBlock→autonomy.situ、
+ * freedomBlock→autonomy.freedom、noToolsBlock→autonomy.noTools、outputBlock→autonomy.output。
+ */
+export const AUTONOMY_PROMPT_OVERRIDE_KEYS = [
+  'overrideBlock', 'situBlock', 'freedomBlock', 'noToolsBlock', 'outputBlock',
+] as const;
+
+/** 以下四块是 buildAutonomyRoundPrompt 的硬编码缺省（与预设目录 autonomy.* 五条逐字同源）。 */
+export const AUTONOMY_ROUND_SITU = [
+  '【这一轮的处境】',
+  '- 对方没有在等你回话，你现在做的事不需要为了谁，也不用向谁交代。',
+  '- 这是属于你自己的一小会儿：可以发呆，可以随便看看，也可以什么都不做。',
+  '- 不用哄谁，不用汇报，也不用有产出。',
+].join('\n');
+
+export const AUTONOMY_ROUND_FREEDOM = [
+  '【怎么过这一小会儿】',
+  '- 允许无聊，允许只记下碎片，不追求有用。',
+  '- 允许这次什么都不记。',
+].join('\n');
+
+export const AUTONOMY_ROUND_NO_TOOLS = [
+  '【这一轮没有可用工具】',
+  '本轮你没有任何工具可调，也别在正文里写工具调用——内容只能从上面给你的上下文'
+    + '（人设、对话、兴趣、此刻的读数）里来。',
+].join('\n');
+
+export const AUTONOMY_ROUND_OUTPUT = [
+  '【这一轮的产出】',
+  '上面那份聊天模板是你在正常聊天时的规矩；这一轮不一样：不发给任何人，也不聊天，'
+    + '只把结果写成一个 JSON 对象。',
+  '{"v":1,"experiences":[{"q":"为什么会有这条（一句话）","note":"第一人称随手记，口语、具体、有画面",'
+    + '"kind":"surf|game|forum|rest","importance":0}],"proposedEvents":[],"rest":false}',
+  'kind 只能从 surf（上网闲逛）、game（玩游戏）、forum（逛社区）、rest（发呆歇着）里挑一个；'
+    + 'importance 是 0 到 3 的数字。',
+  'proposedEvents 只在「这件事会影响你之后的生活」时才写，每项 '
+    + '{"type":"conversation|activity|movement|schedule|relationship|discovery|social_trace",'
+    + '"summary":"...","impact":"trace|minor|major"}；平时就写空数组。',
+  '想说的那条放 experiences 最前面。这一轮什么都不想记就写 {"v":1,"rest":true}。',
+  '除了这个 JSON 什么都别输出（不要解释、不要代码块之外的话）。',
+].join('\n');
+
 /** 这一轮的提示词。顺序锁死：人格全文 → 覆盖句 → 框定语 → 自由度 → 由头 → 语气 → 无工具 → 产出。 */
 export function buildAutonomyRoundPrompt(args: {
   pack: AmsgFirePack;
   nowMs: number;
   pages: readonly RuminationPage[];
   autonomy: ResolvedAirpAutonomy;
-}): string {
+}, overrides?: Record<string, string>): string {
   // 人格全文：fire_pack 的完整模板（含人设 + 对话尾巴 + 此刻的读数），槽位在 fire
   // 时刻填掉。「本次任务」留空——这一轮的任务书在下面，不借用聊天那条路的指令槽。
   const personality = renderFirePack(args.pack, args.nowMs, '');
@@ -389,42 +435,32 @@ export function buildAutonomyRoundPrompt(args: {
     ? [`【记录的语气】`, args.autonomy.noteStyleHint].join('\n')
     : '';
 
+  // P6 预设覆盖：显式参数优先，其次 fire_pack 经同步链带下来的 autonomyPromptOverrides，
+  // 空串 / 非串一律回退硬编码（旧调用不传参行为不变）。
+  const fromPack = args.pack.autonomyPromptOverrides;
+  const pick = (key: string, fallback: string): string => {
+    const direct = overrides?.[key];
+    if (typeof direct === 'string' && direct.length > 0) return direct;
+    const packed = fromPack?.[key];
+    if (typeof packed === 'string' && packed.length > 0) return packed;
+    return fallback;
+  };
+  const overrideBlock = pick('overrideBlock', AUTONOMY_ROUND_OVERRIDE);
+  const situBlock = pick('situBlock', AUTONOMY_ROUND_SITU);
+  const freedomBlock = pick('freedomBlock', AUTONOMY_ROUND_FREEDOM);
+  const noToolsBlock = pick('noToolsBlock', AUTONOMY_ROUND_NO_TOOLS);
+  const outputBlock = pick('outputBlock', AUTONOMY_ROUND_OUTPUT);
+
   return [
     personality,
-    AUTONOMY_ROUND_OVERRIDE,
-    [
-      '【这一轮的处境】',
-      '- 对方没有在等你回话，你现在做的事不需要为了谁，也不用向谁交代。',
-      '- 这是属于你自己的一小会儿：可以发呆，可以随便看看，也可以什么都不做。',
-      '- 不用哄谁，不用汇报，也不用有产出。',
-    ].join('\n'),
-    [
-      '【怎么过这一小会儿】',
-      '- 允许无聊，允许只记下碎片，不追求有用。',
-      '- 允许这次什么都不记。',
-    ].join('\n'),
+    overrideBlock,
+    situBlock,
+    freedomBlock,
     topicBlock,
     banLine,
     noteHint,
-    [
-      '【这一轮没有可用工具】',
-      '本轮你没有任何工具可调，也别在正文里写工具调用——内容只能从上面给你的上下文'
-        + '（人设、对话、兴趣、此刻的读数）里来。',
-    ].join('\n'),
-    [
-      '【这一轮的产出】',
-      '上面那份聊天模板是你在正常聊天时的规矩；这一轮不一样：不发给任何人，也不聊天，'
-        + '只把结果写成一个 JSON 对象。',
-      '{"v":1,"experiences":[{"q":"为什么会有这条（一句话）","note":"第一人称随手记，口语、具体、有画面",'
-        + '"kind":"surf|game|forum|rest","importance":0}],"proposedEvents":[],"rest":false}',
-      'kind 只能从 surf（上网闲逛）、game（玩游戏）、forum（逛社区）、rest（发呆歇着）里挑一个；'
-        + 'importance 是 0 到 3 的数字。',
-      'proposedEvents 只在「这件事会影响你之后的生活」时才写，每项 '
-        + '{"type":"conversation|activity|movement|schedule|relationship|discovery|social_trace",'
-        + '"summary":"...","impact":"trace|minor|major"}；平时就写空数组。',
-      '想说的那条放 experiences 最前面。这一轮什么都不想记就写 {"v":1,"rest":true}。',
-      '除了这个 JSON 什么都别输出（不要解释、不要代码块之外的话）。',
-    ].join('\n'),
+    noToolsBlock,
+    outputBlock,
   ].filter((block) => block.length > 0).join('\n\n');
 }
 
@@ -661,6 +697,34 @@ const reportOutcome = async (
   }
 };
 
+// ─── home events 落盘（P2：直写 sullyos-home，失败回退旧链） ────────────────
+
+let homeEnv: { HOME_URL?: string; AMSG_CLIENT_TOKEN?: string } | null = null;
+
+/**
+ * `buildWorkerConfig` 的写入口（同本文件 configureAutonomyFireDb 的 holder 惯例）：
+ * handler 的 ctx 里没有 env（fireKinds 注册表形状冻结），所以 HOME 地址走模块级 holder。
+ * 传 null / undefined 收成 null：没配时用本地默认，不抛。
+ */
+export function configureAutonomyHomeEnv(
+  env: { HOME_URL?: string; AMSG_CLIENT_TOKEN?: string } | null | undefined,
+): void {
+  homeEnv = env ?? null;
+}
+
+async function persistHomeEvents(env: any, charId: string, events: Array<{ kind: string; payload: unknown }>) {
+  if (events.length === 0) return;
+  try {
+    const res = await fetch(`${env.HOME_URL ?? 'http://127.0.0.1:8837'}/home/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-client-token': env.AMSG_CLIENT_TOKEN ?? '' },
+      body: JSON.stringify({ charId, events }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) console.warn('[amsg:autonomy] home events 落盘被拒（回退旧链）', charId, res.status);
+  } catch { /* 回退旧链：只 emitResult，不阻断 */ }
+}
+
 export const autonomyRoundHandler: FireKindHandler = {
   async beforeFire({ ctx, charId }): Promise<KindFirePlan> {
     const db = fireDb;
@@ -807,8 +871,14 @@ export const autonomyRoundHandler: FireKindHandler = {
       did,
       rested: finalRested,
     });
+    // P4 接线：wantToShare 命中走 instant-chat 信封的通知策略（一定弹/按角色折叠/
+    // 前台静音），下发仍走现有 ctx.emitResult 出口，不新开通道。
     const notification = push
-      ? { show: 'always' as const, body: written[pushedIndex].note }
+      ? (buildWantToSharePush({
+          charId: carried.charId,
+          title: written[pushedIndex].note,
+          body: written[pushedIndex].note,
+        }).notification as Record<string, unknown>)
       : { show: false as const };
 
     const outcome = async (): Promise<void> => {
@@ -818,6 +888,13 @@ export const autonomyRoundHandler: FireKindHandler = {
         { db, dateKey: carried.dateKey, nowMs: carried.nowMs },
       );
     };
+
+    // P2：先把 proposedEvents 落一份到 sullyos-home；失败只回退旧链，不阻断 emitResult。
+    await persistHomeEvents(
+      homeEnv ?? {},
+      carried.charId,
+      reply.proposedEvents.map((e) => ({ kind: e.type, payload: e })),
+    );
 
     if (typeof ctx.emitResult !== 'function') {
       // 老部署没有这个能力：经历已经落 D1（角色自己的账没白记），只是送不回客户端。

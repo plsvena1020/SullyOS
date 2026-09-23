@@ -67,6 +67,10 @@ ${SULLYOS_DOMAIN}, mcp.${SULLYOS_DOMAIN} {
 	handle_path /xhs-api* {
 		reverse_proxy 127.0.0.1:8836
 	}
+	# 家（sullyos-home 真相源）
+	handle_path /home/* {
+		reverse_proxy 127.0.0.1:8837
+	}
 
 	# 其余路径明确返回 404
 	handle {

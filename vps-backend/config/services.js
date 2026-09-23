@@ -129,6 +129,21 @@ export const services = [
     },
     crons: [{ expr: '*/1 * * * *', name: 'heartbeat-sweep' }],
   },
+  {
+    name: 'sullyos-home',
+    port: 8837,
+    enabled: true,
+    bundle: path.join(repoRoot, 'worker/sullyos-home/worker.bundle.js'),
+    envKeys: ['AMSG_CLIENT_TOKEN', 'HOME_DB_PATH'],
+    db: {
+      bindKey: 'DB',
+      pathEnv: 'HOME_DB_PATH',
+      defaultPath: path.join(dataDir, 'sullyos-home.sqlite'),
+      schemaPath: path.join(repoRoot, 'worker/sullyos-home/schema.sql'),
+      enableIf: () => true,
+    },
+    crons: [],
+  },
 ];
 
 /** @param {string} name */

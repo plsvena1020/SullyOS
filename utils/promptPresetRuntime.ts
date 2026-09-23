@@ -29,6 +29,14 @@ export const invalidatePromptPresetCache = (): void => {
     cache = null;
 };
 
+/**
+ * 只读模块级缓存的同步快照（P6 写链用）：预热前返回 null，调用方按「无改写」处理。
+ * 同步不碰 IDB —— 打包路径不因数据库阻塞，也与假时钟测试兼容；
+ * OSContext 启动播种即预热，正常使用中缓存是热的。
+ */
+export const peekResolvedPromptCache = (): ResolvedPrompt[] | null =>
+    cache ? [...cache] : null;
+
 export const getResolvedPromptPresets = async (): Promise<ResolvedPrompt[]> => {
     if (cache) return cache;
     try {

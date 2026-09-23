@@ -49,6 +49,7 @@ import { flattenContentPartsToText } from './promptMessageCleanup';
 import { resolveBlobRefsDeep } from './blobRef';
 import {
   AMSG_FIRE_PACK_KEY,
+  AUTONOMY_OVERRIDE_SOURCE_KEYS,
   FIRE_PACK_VERSION,
   AMSG_SLOT_AWAY_HINT,
   AMSG_SLOT_CURRENT_TIME,
@@ -95,6 +96,7 @@ import { listRecallableMonths } from './agenticTools';
 import { ChatPrompts } from './chatPrompts';
 import { nowInTimeZone, resolveCharTimeZone, tzAwarenessNote } from './timezone';
 import { DB } from './db';
+import { peekResolvedPromptCache } from './promptPresetRuntime';
 import { copyWorkerBundleToClipboard } from './instantPushClient';
 import { collectMcpFireServers, getMcpUseNativeTools } from './mcpClient';
 import { safeResponseJson } from './safeApi';
@@ -617,6 +619,23 @@ const readEmojiLibrary = async (): Promise<EmojiLibrary> => {
   return { all, categories };
 };
 
+// P6 写链：预设目录 autonomy 分类的用户改写 → fire_pack.autonomyPromptOverrides。
+// 只收「改写过且仍启用」的键：未改写不写字段（旧包行为不变），停用回退硬编码
+// 也不写。只读运行时缓存（同步、不碰 IDB）：缓存未预热按无改写处理，下次同步
+// 预热后自动带上——沿用现有同步链，不新开通道。
+const readAutonomyPromptOverrides = (): Record<string, string> | undefined => {
+  const rows = peekResolvedPromptCache();
+  if (!rows) return undefined;
+  const out: Record<string, string> = {};
+  for (const [overrideKey, sourceKey] of Object.entries(AUTONOMY_OVERRIDE_SOURCE_KEYS)) {
+    const hit = rows.find((r) => r.preset.sourceKey === sourceKey);
+    if (!hit || !hit.preset.enabled || !hit.customized) continue;
+    if (!hit.preset.content || !hit.preset.content.trim()) continue;
+    out[overrideKey] = hit.preset.content;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+};
+
 // export 只为单测（activeMsgClient.test.ts 钉 tzId 取值与模板不烤时间）。
 export const buildFirePack = async (
   char: CharacterProfile,
@@ -798,6 +817,8 @@ export const buildFirePack = async (
     `（开口前回到你自己：这条得是 ${char.name} 会发的那一条——语气、用词、节奏都只属于你。哪怕只是随口一句，也要是你。）`,
   ].join('\n');
 
+  const autonomyPromptOverrides = readAutonomyPromptOverrides();
+
   return {
     // 版本号只有 amsgFirePack 那一份说了算：写死数字的话，升版时 worker 侧的 parseFirePack
     // 已经在按新号校验，而这里还发着旧号，表现是每条任务到点都硬失败。
@@ -832,6 +853,9 @@ export const buildFirePack = async (
     // 「用户关了自主」——省略会让「设置没变过」和「设置被关掉」在云端长得一样。
     // mergeAutonomySettings 本地纯函数、无 IO，打包路径不受影响。
     autonomy: mergeAutonomySettings(char),
+    // P6 写链：用户在预设面板改写过的 autonomy 块随包下发（只写改写过的键，
+    // 未改写不写字段，旧包行为不变；读不到预设表也不写，整包不受影响）。
+    ...(autonomyPromptOverrides ? { autonomyPromptOverrides } : {}),
   };
 };
 

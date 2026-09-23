@@ -62,6 +62,9 @@ const WORKERS = [
   // worker.bundle.js；此前 bundle 是 src 的手工合并版，2026-09-11 起改为
   // esbuild 产物，与其它走构建的 worker 同形态（避免 src 改了 bundle 忘了跟）。
   { name: 'proactive-push', skipPublicOut: true },
+  // sullyos-home = VPS Home 真相源（消息/记忆/事件/世界状态，8837）。纯后端，
+  // 不被前端静态 fetch，只产 worker.bundle.js 供 VPS 宿主加载。
+  { name: 'sullyos-home', skipPublicOut: true },
 ];
 
 // amsg-instant 0.3.0+ uses only Web Crypto (globalThis.crypto.subtle); the
