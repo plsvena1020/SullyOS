@@ -387,9 +387,9 @@ const PresetApp: React.FC = () => {
         );
     };
 
-    /** sourceKey 点跳页1对应卡：切页 + 展开分类 + 展开卡 + 滚到卡位。 */
+    /** sourceKey 点跳页1对应卡：仅内置常驻段可跳；切页 + 展开分类 + 展开卡 + 滚到卡位，锚点缺失则明示 toast（不静默）。 */
     const jumpToSource = (key: string) => {
-        const row = rows.find(r => r.sourceKey === key);
+        const row = builtinRows.find(r => r.sourceKey === key);
         if (!row) {
             addToast('该条目尚未播种', 'error');
             return;
@@ -398,7 +398,9 @@ const PresetApp: React.FC = () => {
         setExpandedId(row.id);
         setPage('prompt');
         setTimeout(() => {
-            document.getElementById(`preset-row-${row.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            const el = document.getElementById(`preset-row-${row.id}`);
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            else addToast('对应卡片不在当前列表，请在提示词页手动查找', 'error');
         }, 80);
     };
 
