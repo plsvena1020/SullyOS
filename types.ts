@@ -1030,6 +1030,11 @@ export interface PromptPreset {
     /** 该行内容对应的内置版本号；目录升级内容时可据此提示用户文案有更新。 */
     builtinVersion?: number;
     /**
+     * 接管落位（仅 sourceKey 内置行有效）：'native' 缺省走原生注入点；
+     * stable/afterHistory/absolute 即被接管进套组管道（原生点自动跳过）。
+     */
+    adoptPosition?: 'native' | 'stable' | 'afterHistory' | 'absolute';
+    /**
      * 预设套组（Preset Kit）条目控制字段 —— 全可选，老行缺省即旧行为。
      * ST 风格标识（套组内唯一）；缺省时解析层按 `custom_<id前8>` 对待。
      */

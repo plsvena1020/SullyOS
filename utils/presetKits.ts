@@ -17,6 +17,7 @@ export type ResolvedPresetEntry = PromptPreset & {
     injectionPosition: PresetInjectionPosition;
     injectionDepth: number;
     afterChatHistory: boolean;
+    adopted: boolean; // sourceKey 行被接管才 true；其余 sourceKey 行不进三组
 };
 
 export interface ResolvedPackEntries {
@@ -51,6 +52,7 @@ export function normalizePresetEntry(r: PromptPreset): ResolvedPresetEntry {
         injectionPosition: r.injectionPosition === 'absolute' ? 'absolute' : 'relative',
         injectionDepth: Math.max(0, Math.floor(r.injectionDepth ?? 0)),
         afterChatHistory: r.afterChatHistory === true,
+        adopted: false,
     };
 }
 
@@ -71,6 +73,10 @@ export async function resolveActivePackEntries(activeTags: string[] = ['chat']):
     const stable: ResolvedPresetEntry[] = [];
     const afterHistory: ResolvedPresetEntry[] = [];
     const absolute: ResolvedPresetEntry[] = [];
+    // 接管行按目录序（行 order）排在同组自定义之后，先收进缓冲，最后拼接。
+    const adoptedStable: ResolvedPresetEntry[] = [];
+    const adoptedAfter: ResolvedPresetEntry[] = [];
+    const adoptedAbsolute: ResolvedPresetEntry[] = [];
     for (const id of pack.entryIds || []) {
         const r = byId.get(id);
         if (!r) continue; // 失配引用丢弃
@@ -78,12 +84,29 @@ export async function resolveActivePackEntries(activeTags: string[] = ['chat']):
         if (!(r.content || '').trim()) continue; // 空段不注入（与旧行为一致）
         if (r.marker === 'chatHistory') continue; // 分界占位本身不注入
         if (!tagsMatch(r.tags, activeTags)) continue;
+        if (r.sourceKey && r.adoptPosition !== 'stable' && r.adoptPosition !== 'afterHistory' && r.adoptPosition !== 'absolute') continue;
         const norm = normalizePresetEntry(r);
+        if (r.sourceKey && (r.adoptPosition === 'stable' || r.adoptPosition === 'afterHistory' || r.adoptPosition === 'absolute')) {
+            norm.adopted = true;
+            if (r.adoptPosition === 'absolute') adoptedAbsolute.push(norm);
+            else if (r.adoptPosition === 'afterHistory') adoptedAfter.push(norm);
+            else adoptedStable.push(norm);
+            continue;
+        }
         if (norm.injectionPosition === 'absolute') absolute.push(norm);
         else if (norm.afterChatHistory) afterHistory.push(norm);
         else stable.push(norm);
     }
+    // 同组自定义按 entryIds 序在前（上游已保序），接管按目录序（行 order）在后。
+    const byOrder = (a: ResolvedPresetEntry, b: ResolvedPresetEntry) => a.order - b.order;
     // 同 depth 内保持套组顺序（稳定排序）；depth 小的离底越近先排。
     absolute.sort((a, b) => a.injectionDepth - b.injectionDepth);
-    return { stable, afterHistory, absolute };
+    adoptedStable.sort(byOrder);
+    adoptedAfter.sort(byOrder);
+    adoptedAbsolute.sort(byOrder);
+    return {
+        stable: [...stable, ...adoptedStable],
+        afterHistory: [...afterHistory, ...adoptedAfter],
+        absolute: [...absolute, ...adoptedAbsolute],
+    };
 }

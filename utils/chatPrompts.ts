@@ -1,4 +1,5 @@
 import { CharacterProfile, UserProfile, Message, Emoji, EmojiCategory, GroupProfile, RealtimeConfig, DailySchedule } from '../types';
+import type { PromptPreset } from '../types';
 import { ContextBuilder } from './context';
 import { DB } from './db';
 import { formatLifeSimResetCardForContext } from './lifeSimChatCard';
@@ -204,6 +205,13 @@ export const STEEL_EXPRESSION_GUIDE = getBuiltinContent('chat.steelExpression');
 export const STEEL_BE_YOURSELF = getBuiltinContent('chat.steelYourself');
 
 /**
+ * 该 sourceKey 行是否已被套组管道接管（adoptPosition 进 stable/afterHistory/
+ * absolute）。接管后原生注入点必须跳过，避免双重注入。
+ */
+const isAdoptedPosition = (p: PromptPreset['adoptPosition']): boolean =>
+    p === 'stable' || p === 'afterHistory' || p === 'absolute';
+
+/**
  * 取钢印注入文本：DB 行（用户编辑/启停）优先，行缺失或停用时回退内置默认。
  * 返回 null 表示用户显式停用（不注入）。
  */
@@ -213,6 +221,7 @@ const resolveSteel = async (sourceKey: string, fallback: string): Promise<string
         const hit = rows.find((r: ResolvedPrompt) => r.preset.sourceKey === sourceKey);
         if (!hit) return fillIdentity(fallback, '');
         if (!hit.preset.enabled) return null; // 用户停用：不注入
+        if (isAdoptedPosition(hit.preset.adoptPosition)) return null; // 已接管走管道
         return fillIdentity(hit.preset.content || fallback, '');
     } catch {
         return fillIdentity(fallback, '');
@@ -854,7 +863,17 @@ ${uname} 的化身正挂在《彼方》的【${roomName}】${act ? `，状态写
         const perspectiveBlockRaw = perspectiveEnabled
             ? await resolveManagedPrompt('chat.perspectiveTool', getBuiltinContent('chat.perspectiveTool'))
             : null;
-        const perspectiveBlock = perspectiveBlockRaw === null
+        // 已接管走管道：原生点跳过，避免双重注入。
+        let perspectiveAdopted = false;
+        if (perspectiveBlockRaw !== null) {
+            try {
+                const rows = await getResolvedPromptPresets();
+                perspectiveAdopted = isAdoptedPosition(
+                    rows.find((r) => r.preset.sourceKey === 'chat.perspectiveTool')?.preset.adoptPosition,
+                );
+            } catch { /* 读不到行按未接管处理 */ }
+        }
+        const perspectiveBlock = (perspectiveBlockRaw === null || perspectiveAdopted)
             ? null
             : fillIdentity(perspectiveBlockRaw, char.name, userProfile.name);
         // `[schedule_message]` 排的是本地定时消息：存在浏览器里，靠 OSContext 那个 5 秒
