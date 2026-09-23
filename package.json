@@ -38,6 +38,7 @@
     "web-push": "^3.6.7"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.0",
     "@rei-standard/amsg-server": "2.6.0-next.23",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^18.2.43",
@@ -49,7 +50,8 @@
     "jsdom": "^30.0.1",
     "typescript": "^5.3.3",
     "vite": "^5.0.10",
-    "vitest": "^2.1.9"
+    "vitest": "^2.1.9",
+    "zod": "^3.23.0"
   },
   "packageManager": "pnpm@9.15.9+sha512.68046141893c66fad01c079231128e9afb89ef87e2691d69e4d40eee228988295fd4682181bae55b58418c3a253bde65a505ec7c5f9403ece5cc3cd37dcf2531"
 }
