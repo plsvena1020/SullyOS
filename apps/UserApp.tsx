@@ -3,6 +3,7 @@ import React, { useRef, useState } from 'react';
 import { useOS } from '../context/OSContext';
 import { processImage } from '../utils/file';
 import { migrateDataUrlToRef } from '../utils/blobRef';
+import { coverSizeOk } from '../utils/momentsFeed';
 import LifeRecordPanel from '../components/lifeRecord/LifeRecordPanel';
 import PerCharAvatarPicker from '../components/user/PerCharAvatarPicker';
 import UserCityCard from '../components/user/UserCityCard';
@@ -11,6 +12,7 @@ import TokenImg from '../components/os/TokenImg';
 const UserApp: React.FC = () => {
     const { closeApp, userProfile, updateUserProfile, addToast } = useOS();
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const coverInputRef = useRef<HTMLInputElement>(null);
     const [tab, setTab] = useState<'profile' | 'life'>('profile');
 
     const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -22,6 +24,23 @@ const UserApp: React.FC = () => {
                 // 同一张图之前存过就复用它的令牌；转不动时原样还回这条 data URL，图不会丢。
                 updateUserProfile({ avatar: await migrateDataUrlToRef(base64) });
                 addToast('头像已更新', 'success');
+            } catch (err: any) {
+                addToast(err.message, 'error');
+            }
+        }
+    };
+
+    const handleCoverChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (file) {
+            try {
+                const base64 = await processImage(file);
+                if (!coverSizeOk(new Blob([base64]).size)) {
+                    addToast('封面太大，请换张小一点的图', 'error');
+                    return;
+                }
+                updateUserProfile({ momentsCover: await migrateDataUrlToRef(base64) });
+                addToast('朋友圈封面已更新', 'success');
             } catch (err: any) {
                 addToast(err.message, 'error');
             }
@@ -62,12 +81,17 @@ const UserApp: React.FC = () => {
 
                 {/* Profile name card */}
                 <div className="bg-white rounded-[1.75rem] shadow-[0_10px_30px_-12px_rgba(80,70,120,0.25)] border border-slate-100 overflow-hidden">
-                    {/* Cover banner */}
-                    <div className="relative h-24" style={{ background: 'linear-gradient(135deg, hsl(var(--primary-hue),var(--primary-sat),72%) 0%, hsl(var(--primary-hue),var(--primary-sat),60%) 100%)' }}>
-                        {/* soft decorative blobs */}
-                        <div className="absolute -top-6 -right-4 w-28 h-28 rounded-full" style={{ background: 'rgba(255,255,255,0.18)' }} />
-                        <div className="absolute top-6 left-6 w-16 h-16 rounded-full" style={{ background: 'rgba(255,255,255,0.12)' }} />
+                    {/* Cover banner（点换朋友圈封面） */}
+                    <div className="relative h-24 cursor-pointer group" onClick={() => coverInputRef.current?.click()} style={{ background: 'linear-gradient(135deg, hsl(var(--primary-hue),var(--primary-sat),72%) 0%, hsl(var(--primary-hue),var(--primary-sat),60%) 100%)' }}>
+                        {userProfile.momentsCover
+                            ? <TokenImg value={userProfile.momentsCover} className="absolute inset-0 w-full h-full object-cover" />
+                            : <>
+                                <div className="absolute -top-6 -right-4 w-28 h-28 rounded-full" style={{ background: 'rgba(255,255,255,0.18)' }} />
+                                <div className="absolute top-6 left-6 w-16 h-16 rounded-full" style={{ background: 'rgba(255,255,255,0.12)' }} />
+                            </>}
+                        <span className="absolute bottom-1 right-2 text-[10px] text-white/80 bg-black/30 rounded-full px-2 py-0.5 opacity-0 group-hover:opacity-100 transition-opacity">换封面</span>
                     </div>
+                    <input type="file" ref={coverInputRef} className="hidden" accept="image/*" onChange={handleCoverChange} />
 
                     {/* Avatar overlapping the banner */}
                     <div className="px-6 pb-6 -mt-12">
