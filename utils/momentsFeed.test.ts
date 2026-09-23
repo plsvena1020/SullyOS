@@ -11,3 +11,33 @@ describe('moments cover', () => {
     expect(coverSizeOk(1024 * 1024)).toBe(true);
   });
 });
+describe('moments feed', () => {
+  it('mastodon status 归一化（visibility/图/远端 id）', async () => {
+    const { normalizeMastodonStatus } = await import('./momentsFeed.js');
+    const p = normalizeMastodonStatus({ id: 's1', url: 'https://mstdn.social/@me/1', content: '<p>hi</p>', visibility: 'private', created_at: '2026-09-23T00:00:00Z', in_reply_to_id: null, media_attachments: [{ id: 'm1', url: 'https://mstdn.social/m1.png' }] }, 'mstdn.social', 'user');
+    expect(p.origin).toBe('mastodon');
+    expect(p.mastodonStatusId).toBe('s1');
+    expect(p.images).toEqual(['https://mstdn.social/m1.png']);
+    expect(p.content).toBe('hi');
+  });
+  it('远端 id 去重（本地已有的不插）', async () => {
+    const { dedupeByRemoteId } = await import('./momentsFeed.js');
+    const local = [{ id: 'l1', mastodonStatusId: 's1' }];
+    const fresh = [{ id: 'x', mastodonStatusId: 's1' }, { id: 'y', mastodonStatusId: 's2' }];
+    expect(dedupeByRemoteId(local as never, fresh as never).map((p: { id: string }) => p.id)).toEqual(['y']);
+  });
+  it('小手机可见性映射（默认 private）', async () => {
+    const { toMastodonVisibility } = await import('./momentsFeed.js');
+    expect(toMastodonVisibility('public')).toBe('unlisted');
+    expect(toMastodonVisibility('private')).toBe('private');
+    expect(toMastodonVisibility(undefined)).toBe('private');
+  });
+  it('只留简繁中文（language 为准，缺失看正文）', async () => {
+    const { isChineseStatus } = await import('./momentsFeed.js');
+    expect(isChineseStatus({ language: 'zh-CN', text: '' })).toBe(true);
+    expect(isChineseStatus({ language: 'zh-TW', text: '' })).toBe(true);
+    expect(isChineseStatus({ language: 'en', text: '' })).toBe(false);
+    expect(isChineseStatus({ language: null, text: '今天天气不错' })).toBe(true);
+    expect(isChineseStatus({ language: null, text: 'hello world' })).toBe(false);
+  });
+});
