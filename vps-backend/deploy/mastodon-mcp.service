@@ -1,5 +1,5 @@
 [Unit]
-Description=SullyOS Mastodon MCP (streamable HTTP on 127.0.0.1:8837)
+Description=SullyOS Mastodon MCP (streamable HTTP on 127.0.0.1:8838)
 After=network.target
 
 [Service]

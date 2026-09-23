@@ -22,7 +22,7 @@ const guard = createGuard({
   auditLogPath: process.env.MASTODON_AUDIT_LOG || '/var/lib/sullyos-mastodon/audit.jsonl',
 });
 const { ready } = startMastodonMcpServer({
-  port: Number(process.env.MASTODON_MCP_PORT || 8837),
+  port: Number(process.env.MASTODON_MCP_PORT || 8838),
   host: '127.0.0.1',
   mcpToken: process.env.MASTODON_MCP_TOKEN,
   accounts,
@@ -31,7 +31,7 @@ const { ready } = startMastodonMcpServer({
   accountStore: { filePath: accountsFile },
 });
 const { close } = await ready;
-console.log('[mastodon-mcp] listening on 127.0.0.1:8837');
+console.log('[mastodon-mcp] listening on 127.0.0.1:8838');
 const shutdown = () => close().then(() => process.exit(0));
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);

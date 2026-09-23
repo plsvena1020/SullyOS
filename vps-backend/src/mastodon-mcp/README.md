@@ -1,4 +1,4 @@
-# sullyos-mastodon MCP（VPS，127.0.0.1:8837）
+# sullyos-mastodon MCP（VPS，127.0.0.1:8838）
 
 给小手机朋友圈用的薄 MCP：8 个工具（发帖/传图/删帖/点赞/取消赞/home 流/公开流/某人帖子），默认发帖 `private`。
 
@@ -19,6 +19,6 @@
 1. `/opt/sullyos/.env` 配键（`MASTODON_MCP_TOKEN` 必填；`MASTODON_ACCOUNTS` 可空，绑过就有文件）。
 2. `systemctl enable --now mastodon-mcp`（单元文件 `deploy/mastodon-mcp.service`）。
 3. Caddy 同步本仓 `deploy/caddy/SullyOS.Caddyfile`（`/mastodon-mcp*` → 8837）。
-4. `curl http://127.0.0.1:8837/api/health` 应回 `{"status":"ok","backend":"mastodon-mcp","tools":8}`。
+4. `curl http://127.0.0.1:8838/api/health` 应回 `{"status":"ok","backend":"mastodon-mcp","tools":8}`。
 
 先只读试运行：`MASTODON_READ_ONLY=1`，调 `timeline_public`，写工具全拒且审计落盘。
