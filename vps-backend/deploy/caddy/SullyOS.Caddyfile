@@ -4,7 +4,7 @@
 # 所有后端仅监听 127.0.0.1；这里只暴露 80/443（自动 HTTPS）。
 #
 # 端口矩阵：main-agent 8830 · instant-push 8831 · amsg 8832 · proactive-push 8833
-#           wake-bridge 8834 · heartbeat 8835
+#           wake-bridge 8834 · heartbeat 8835 · xhs-api 8836 · mastodon-mcp 8837
 # 既有 MCP 服务：xhs-mcp-http 8810 · xhs-mcp 8809 · ruota 8790 · kaleidoscope 8788
 #                theseus-brain 8787 · phone-gateway 8795
 # ═══════════════════════════════════════════════════════════════
@@ -66,6 +66,10 @@ ${SULLYOS_DOMAIN}, mcp.${SULLYOS_DOMAIN} {
 	# xhs session bridge (token-gated, cookie stays on VPS)
 	handle_path /xhs-api* {
 		reverse_proxy 127.0.0.1:8836
+	}
+	# mastodon MCP (sullyos-mastodon, streamable HTTP)
+	handle_path /mastodon-mcp* {
+		reverse_proxy 127.0.0.1:8837
 	}
 
 	# 其余路径明确返回 404
