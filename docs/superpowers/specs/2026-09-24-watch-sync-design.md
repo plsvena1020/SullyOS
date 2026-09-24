@@ -24,7 +24,8 @@
 
 - 常驻形态：前台进程 `pnpm dev:sync`，Ctrl+C 停；单实例锁（锁文件，未释放则拒绝二开）。
   每轮产物暂存本地 `dist/`（覆盖即暂存），通过后打印“可部署，回车 `pnpm deploy:vps`”；
-  热更新检查在 `pnpm dev` 里手动看（HMR eyeball 不进管线，管线只认机器判据：构建+单测+本地 console）。
+  热更新检查以你本机跑的 Vite dev 为准手动看；管线不再另起 preview 服务器，
+  机器判据为构建+单测（dev 与生产包分包不同，生产问题仍以构建产物抽查为准）。
 - 推送形态：`pnpm deploy:vps` 一次性推暂存产物（打包→scp→落盘备份→校验→资产断言），即 Task 3 已验证流程。
 - 监听范围：仓库全量，排除 `dist/`、`node_modules/`、`.git/`、`.superpowers/`、`*.log`；
   监听命中自身日志/临时包不触发（防自激）。
