@@ -13,7 +13,7 @@
 // 令牌藏在嵌套 JSON 字符串里（如 assets 表里的 appearance_preset_* JSON）也逐字可见。
 // 这样导出端没有「哪些 store 要处理」的名单可漏：任何字段里的令牌都会被收进来。
 
-import { extractRefs, DEFAULT_PREFIX } from '@rei-standard/blob-store';
+import { extractRefs } from '@rei-standard/blob-store';
 import type { ZipFileWriter, ZipFileReader } from './backupFormat';
 
 /** blob 旁路索引在 zip 里的固定文件名。v2 老包没有这个文件（读端以此区分，无需看版本号）。 */
@@ -66,7 +66,7 @@ export async function writeBlobsToZip(
 
     for (const token of list) {
         done++;
-        const id = token.startsWith(DEFAULT_PREFIX) ? token.slice(DEFAULT_PREFIX.length) : '';
+        const id = token.startsWith('blobref:') ? token.slice('blobref:'.length) : '';
         if (!ID_CHARSET.test(id)) {
             missing.push(token);
             continue;
@@ -154,7 +154,7 @@ export async function restoreBlobsFromZip(
         // slice() 拷出等长独立 ArrayBuffer 再喂 Blob，与 avatarModelBackup 同款处理。
         const buf = bytes.slice().buffer;
         const blob = entry.type ? new Blob([buf], { type: entry.type }) : new Blob([buf]);
-        await restore(DEFAULT_PREFIX + entry.id, blob);
+        await restore('blobref:' + entry.id, blob);
         done++;
         opts.onProgress?.(done, entries.length, entry.id);
         if (opts.onYield) await opts.onYield();

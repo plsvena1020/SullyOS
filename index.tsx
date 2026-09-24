@@ -8,6 +8,7 @@ import { ProactiveChat } from './utils/proactiveChat';
 import { VRScheduler } from './utils/vrWorld/scheduler';
 import { installIOSStandaloneWorkaround } from './utils/iosStandalone';
 import { installWakeListener } from './utils/proactivePushConfig';
+import { LazyMotion, MotionConfig, motionFeatures } from './utils/motion';
 
 // Register the keep-alive Service Worker early so it's ready before any AI calls.
 KeepAlive.init().then(() => {
@@ -36,6 +37,10 @@ if (!rootElement) {
 const root = ReactDOM.createRoot(rootElement);
 root.render(
   <React.StrictMode>
-    <App />
+    <LazyMotion features={motionFeatures}>
+      <MotionConfig reducedMotion="user">
+        <App />
+      </MotionConfig>
+    </LazyMotion>
   </React.StrictMode>
 );

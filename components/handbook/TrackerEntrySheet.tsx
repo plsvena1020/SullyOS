@@ -14,6 +14,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Tracker, TrackerEntry, TrackerField } from '../../types';
+import BottomSheet from '../os/BottomSheet';
 import { PAPER_TONES, SERIF_STACK, CUTE_STACK, WashiTape } from './paper';
 import { HeartSticker, StarSticker } from './stickers';
 import { Trash, X, FloppyDisk } from '@phosphor-icons/react';
@@ -36,8 +37,6 @@ const TrackerEntrySheet: React.FC<Props> = ({
     useEffect(() => {
         setValues(existingEntry?.values || {});
     }, [existingEntry, visible]);
-
-    if (!visible) return null;
 
     const setField = (key: string, v: any) => setValues(prev => ({ ...prev, [key]: v }));
 
@@ -215,24 +214,13 @@ const TrackerEntrySheet: React.FC<Props> = ({
     };
 
     return (
-        <div
-            className="absolute inset-0 z-50 flex items-end justify-center animate-fade-in"
-            style={{ background: 'rgba(122,90,114,0.4)', backdropFilter: 'blur(6px)' }}
-            onClick={onCancel}
+        <BottomSheet
+            open={visible}
+            onClose={onCancel}
+            maxHeight="88%"
+            overlayClassName="z-50 bg-[#7a5a72]/40 backdrop-blur-[6px]"
+            panelClassName="relative rounded-t-3xl bg-[#fff8fb] shadow-[0_-8px_28px_rgba(122,90,114,0.25)]"
         >
-            <div
-                className="w-full max-h-[88%] overflow-y-auto rounded-t-3xl relative animate-slide-up"
-                style={{
-                    background: PAPER_TONES.paper,
-                    boxShadow: '0 -8px 28px rgba(122,90,114,0.25)',
-                }}
-                onClick={e => e.stopPropagation()}
-            >
-                {/* 顶部把手 */}
-                <div className="flex justify-center pt-3 pb-1">
-                    <div style={{ width: 40, height: 4, borderRadius: 2, background: tracker.color, opacity: 0.6 }} />
-                </div>
-
                 {/* 装饰贴纸 */}
                 <div className="absolute top-4 left-5 pointer-events-none" style={{ transform: 'rotate(-15deg)' }}>
                     <HeartSticker size={18} color={tracker.color} />
@@ -319,8 +307,7 @@ const TrackerEntrySheet: React.FC<Props> = ({
                         {existingEntry ? '更新 ♡' : '收下 ♡'}
                     </button>
                 </div>
-            </div>
-        </div>
+        </BottomSheet>
     );
 };
 

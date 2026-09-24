@@ -49,6 +49,7 @@ import ImageLightbox from '../components/os/ImageLightbox';
 import McpMemoryModal from '../components/chat/McpMemoryModal';
 import ChatModals from '../components/chat/ChatModals';
 import Modal from '../components/os/Modal';
+import BottomSheet from '../components/os/BottomSheet';
 import ActiveMsg2SettingsModal from '../components/chat/ActiveMsg2SettingsModal';
 import ThinkingChainSettingsModal from '../components/chat/ThinkingChainSettingsModal';
 import ScheduleChangeNotice from '../components/chat/ScheduleChangeNotice';
@@ -4635,13 +4636,14 @@ const Chat: React.FC = () => {
             })()}
 
             {/* 角色专属「白框自定义」Modal —— 从加号面板「白框」进入；写到 char.chromeCustomCss，叠加在全局之上 */}
-            {char && modalType === 'chrome-css' && (
-                <div className="fixed inset-0 z-[110] flex items-end justify-center bg-black/5 animate-fade-in" onClick={() => setModalType('none')}>
-                    <div
-                        className="w-full max-h-[68vh] overflow-y-auto rounded-t-3xl border-t border-white/60 bg-white/95 p-5 shadow-[0_-12px_40px_rgba(15,23,42,0.18)] backdrop-blur-xl [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden animate-slide-up"
-                        style={{ paddingBottom: 'calc(1.25rem + var(--safe-bottom))' }}
-                        onClick={(e) => e.stopPropagation()}
-                    >
+            {char && (
+                <BottomSheet
+                    open={modalType === 'chrome-css'}
+                    onClose={() => setModalType('none')}
+                    maxHeight="68vh"
+                    overlayClassName="z-[110] bg-black/5"
+                    panelClassName="rounded-t-3xl border-t border-white/60 bg-white/95 px-5 pt-5 shadow-[0_-12px_40px_rgba(15,23,42,0.18)] backdrop-blur-xl [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden pb-[calc(1.25rem+var(--safe-bottom))]"
+                >
                         <div className="mb-2 flex items-start justify-between">
                             <div>
                                 <div className="text-sm font-bold text-slate-800">白框自定义 · {char.name}</div>
@@ -4650,7 +4652,6 @@ const Chat: React.FC = () => {
                             <button onClick={() => setModalType('none')} className="px-2 text-xl leading-none text-slate-400 hover:text-slate-600">{'×'}</button>
                         </div>
                         <ChromeCssEditor value={char.chromeCustomCss || ''} onChange={(css) => updateCharacter(char.id, { chromeCustomCss: css } as any)} />
-                    </div>
                     {/* 脱离 CSS 控制的救援键：只在「白框」自定义弹窗开着时出现（平时不显示，不丑）。portal 到 body
                         在聊天 DOM 之外 + id 守护(#sully-safe-reset 特异性高于 *)，连 *{display:none!important} 也盖不掉，
                         保证你刚粘进坏 CSS 当场崩掉时，这个还原键一定点得到。 */}
@@ -4671,12 +4672,12 @@ const Chat: React.FC = () => {
                         </>,
                 getPortalHost(),
                     )}
-                </div>
+                </BottomSheet>
             )}
 
             {/* 白框「提示音」Modal —— 从加号面板「提示音」进入。默认独立存于 char.chatSound；
                 打开「绑定到白框」则改存进 char.chromeCustomCss 的 @sully-sound 指令、随白框分享一起走。 */}
-            {char && modalType === 'chrome-sound' && (() => {
+            {char && (() => {
                 const boundSound = parseWhiteboxSound(char.chromeCustomCss);
                 const isBound = !!char.chatSoundBound || !!boundSound;
                 const curSound: WhiteboxSound | null = isBound ? boundSound : (char.chatSound || null);
@@ -4697,12 +4698,13 @@ const Chat: React.FC = () => {
                     }
                 };
                 return (
-                    <div className="fixed inset-0 z-[110] flex items-end justify-center bg-black/5 animate-fade-in" onClick={() => setModalType('none')}>
-                        <div
-                            className="w-full max-h-[68vh] overflow-y-auto rounded-t-3xl border-t border-white/60 bg-white/95 p-5 shadow-[0_-12px_40px_rgba(15,23,42,0.18)] backdrop-blur-xl [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden animate-slide-up"
-                            style={{ paddingBottom: 'calc(1.25rem + var(--safe-bottom))' }}
-                            onClick={(e) => e.stopPropagation()}
-                        >
+                    <BottomSheet
+                        open={modalType === 'chrome-sound'}
+                        onClose={() => setModalType('none')}
+                        maxHeight="68vh"
+                        overlayClassName="z-[110] bg-black/5"
+                        panelClassName="rounded-t-3xl border-t border-white/60 bg-white/95 px-5 pt-5 shadow-[0_-12px_40px_rgba(15,23,42,0.18)] backdrop-blur-xl [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden pb-[calc(1.25rem+var(--safe-bottom))]"
+                    >
                             <div className="mb-3 flex items-start justify-between">
                                 <div>
                                     <div className="text-sm font-bold text-slate-800">提示音 · {char.name}</div>
@@ -4717,8 +4719,7 @@ const Chat: React.FC = () => {
                                 onChangeBound={changeBound}
                                 hint={<>🔔 只在 <b>ta 新发的消息成为最新一条</b> 时响一次。这里是<b>该角色专属</b>；不设则用「外观 → 聊天界面」里的全局默认提示音。</>}
                             />
-                        </div>
-                    </div>
+                    </BottomSheet>
                 );
             })()}
 

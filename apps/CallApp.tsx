@@ -34,6 +34,7 @@ import VRoidBetaWarning from '../components/call/VRoidBetaWarning';
 import UserCameraModePicker, { type UserCameraMode } from '../components/call/UserCameraModePicker';
 import CallSetupGuide, { type CallSetupGuideStep } from '../components/call/CallSetupGuide';
 import CallPreferencesSheet from '../components/call/CallPreferencesSheet';
+import BottomSheet from '../components/os/BottomSheet';
 import CallUpdateAnnouncement from '../components/call/CallUpdateAnnouncement';
 import { deleteAvatarModel, inspectAvatarFile, saveAvatarModel } from '../utils/avatarModelStore';
 import { getLive2DAIActions, prewarmLive2DModelSource, saveLive2DModelFromFiles, saveLive2DModelFromZip, upgradeLive2DAutoPermissions, type Live2DAvatarConfig } from '../utils/live2dModelStore';
@@ -2995,8 +2996,8 @@ ${sentencePlan}`;
             onClose={closeCallSetupGuide}
           />
         )}
-        {showCallPreferences && (
-          <CallPreferencesSheet
+        <CallPreferencesSheet
+            open={showCallPreferences}
             preferences={callPreferences}
             accentColor={accentColor}
             lightTheme={lightTheme}
@@ -3009,7 +3010,6 @@ ${sentencePlan}`;
             }}
             onClose={() => setShowCallPreferences(false)}
           />
-        )}
         {/* floating sparkles */}
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
           {CALL_SPARKLES.map((p, i) => (
@@ -3911,9 +3911,12 @@ ${sentencePlan}`;
           onClose={() => { if (!userCameraLoading) setShowUserCameraModePicker(false); }}
         />
       )}
-      {showBgPicker && (
-        <div className="absolute inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-end animate-fade-in" onClick={() => setShowBgPicker(false)}>
-          <div className={`w-full border-t border-white/10 rounded-t-3xl p-5 space-y-3 animate-slide-up ${lightTheme ? 'bg-[#f6f4fc]' : 'bg-[#120c22]'}`} onClick={e => e.stopPropagation()}>
+      <BottomSheet
+        open={showBgPicker}
+        onClose={() => setShowBgPicker(false)}
+        overlayClassName="z-[60] bg-black/60 backdrop-blur-sm"
+        panelClassName={`border-t border-white/10 rounded-t-3xl p-5 space-y-3 ${lightTheme ? 'bg-[#f6f4fc]' : 'bg-[#120c22]'}`}
+      >
             <div className="text-sm text-white/80 font-medium">视频背景</div>
             <p className="text-xs text-white/40">本地图片保存在你自己的设备里（IndexedDB，随备份导出）；图床直链则每次在线加载。</p>
             <button onClick={chooseStageBackgroundFile} className="w-full py-2.5 rounded-2xl border border-white/15 bg-white/[0.06] text-sm text-white/85 transition active:scale-[0.98]">
@@ -3933,12 +3936,13 @@ ${sentencePlan}`;
                 恢复默认背景
               </button>
             )}
-          </div>
-        </div>
-      )}
-      {showLangPicker && (
-        <div className="absolute inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-end animate-fade-in" onClick={() => setShowLangPicker(false)}>
-          <div className={`w-full border-t border-white/10 rounded-t-3xl p-5 space-y-3 animate-slide-up ${lightTheme ? 'bg-[#f6f4fc]' : 'bg-[#120c22]'}`} onClick={e => e.stopPropagation()}>
+        </BottomSheet>
+      <BottomSheet
+        open={showLangPicker}
+        onClose={() => setShowLangPicker(false)}
+        overlayClassName="z-[60] bg-black/60 backdrop-blur-sm"
+        panelClassName={`border-t border-white/10 rounded-t-3xl p-5 space-y-3 ${lightTheme ? 'bg-[#f6f4fc]' : 'bg-[#120c22]'}`}
+      >
             <div className="text-sm text-white/80 font-medium">语音语种</div>
             <p className="text-xs text-white/40">选择后，角色会用中文回复，语音则用对应语种朗读</p>
             <div className="flex flex-wrap gap-2 pt-1">
@@ -3951,9 +3955,7 @@ ${sentencePlan}`;
               ))}
             </div>
             {voiceLang === 'yue' && <p className="text-[10px] text-amber-300/70">{CANTONESE_VOICE_SUPPORT_NOTE}</p>}
-          </div>
-        </div>
-      )}
+        </BottomSheet>
       {showHangupConfirm && (
         <div className="absolute inset-0 z-[70] bg-black/70 backdrop-blur-sm flex items-center justify-center px-6 animate-fade-in">
           <div className={`w-full max-w-sm rounded-3xl border border-white/15 bg-gradient-to-b p-5 shadow-2xl ${lightTheme ? 'from-white to-[#f0edf9]' : 'from-[#1a1130] to-[#0a0613]'}`}>
@@ -3987,18 +3989,19 @@ ${sentencePlan}`;
           </div>
         </div>
       )}
-      {editingBubble && (
-        <div className="absolute inset-0 bg-black/60 flex items-end z-50 animate-fade-in">
-          <div className={`w-full border-t border-white/10 p-5 space-y-3 animate-slide-up ${lightTheme ? 'bg-[#f6f4fc]' : 'bg-[#120c22]'}`}>
+      <BottomSheet
+        open={!!editingBubble}
+        onClose={() => setEditingBubble(null)}
+        overlayClassName="z-50 bg-black/60"
+        panelClassName={`border-t border-white/10 p-5 space-y-3 ${lightTheme ? 'bg-[#f6f4fc]' : 'bg-[#120c22]'}`}
+      >
             <div className="text-sm text-white/70">改一下刚才说的话</div>
             <textarea value={editingText} onChange={(e) => setEditingText(e.target.value)} className="w-full h-24 bg-black/30 rounded-xl p-3 text-sm outline-none resize-none placeholder:text-white/30" placeholder="重新措辞……" autoFocus />
             <div className="flex gap-2">
               <button onClick={() => setEditingBubble(null)} className="flex-1 py-2.5 rounded-xl border border-white/15 text-white/70 transition active:scale-[0.97]">算了</button>
               <button onClick={saveEditedBubble} className="keep-white flex-1 py-2.5 rounded-xl font-medium text-white transition active:scale-[0.97]" style={{ backgroundColor: accentColor }}>就这样</button>
             </div>
-          </div>
-        </div>
-      )}
+        </BottomSheet>
       <VoiceFavoriteActionSheet
         open={!!voiceFavoriteTarget}
         favorited={voiceFavoriteSaved}

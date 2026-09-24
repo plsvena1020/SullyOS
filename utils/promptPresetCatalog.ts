@@ -17,7 +17,7 @@
  * 「运行时注入的默认值 = 目录登记的默认值」同源原则（测试对拍 BUILTIN_PROMPT_SNAPSHOT）。
  */
 
-export type PromptCategory = 'chat' | 'date' | 'song' | 'voice' | 'memory' | 'amsg';
+export type PromptCategory = 'chat' | 'date' | 'song' | 'voice' | 'memory' | 'amsg' | 'autonomy';
 
 /** 分类元数据（Preset App 的分组导航顺序与展示名）。 */
 export const PROMPT_CATEGORY_META: { id: PromptCategory; label: string; order: number }[] = [
@@ -27,6 +27,7 @@ export const PROMPT_CATEGORY_META: { id: PromptCategory; label: string; order: n
     { id: 'voice', label: '语音', order: 4 },
     { id: 'memory', label: '记忆', order: 5 },
     { id: 'amsg', label: '主动消息', order: 6 },
+    { id: 'autonomy', label: '自主生活', order: 7 },
 ];
 
 export interface BuiltinPromptEntry {
@@ -313,6 +314,51 @@ __REL_MODE__
 **严格只输出 JSON 数组**，不要输出任何其他内容（包括解释、markdown 代码块标记）：
 [{ "name": "人物名", "persona": "对方人设词（200字内）", "relation": "与{{char}}的关系一句话" }, ...]`,
         order: 507,
+        mutable: true,
+        builtinVersion: 1,
+    },
+    {
+        sourceKey: "autonomy.override",
+        category: 'autonomy',
+        name: "自主生活 · 覆盖句（JSON 契约优先）",
+        content: "注意：上面是你在正常聊天时的完整规矩，但【开口之前】那段只管实时聊天、不管这一轮——这一轮必须按下面的 JSON 契约输出（想歇就输出 rest），绝不能输出空内容。",
+        order: 701,
+        mutable: true,
+        builtinVersion: 1,
+    },
+    {
+        sourceKey: "autonomy.situ",
+        category: 'autonomy',
+        name: "自主生活 · 这一轮的处境",
+        content: "【这一轮的处境】\n- 对方没有在等你回话，你现在做的事不需要为了谁，也不用向谁交代。\n- 这是属于你自己的一小会儿：可以发呆，可以随便看看，也可以什么都不做。\n- 不用哄谁，不用汇报，也不用有产出。",
+        order: 702,
+        mutable: true,
+        builtinVersion: 1,
+    },
+    {
+        sourceKey: "autonomy.freedom",
+        category: 'autonomy',
+        name: "自主生活 · 怎么过这一小会儿",
+        content: "【怎么过这一小会儿】\n- 允许无聊，允许只记下碎片，不追求有用。\n- 允许这次什么都不记。",
+        order: 703,
+        mutable: true,
+        builtinVersion: 1,
+    },
+    {
+        sourceKey: "autonomy.noTools",
+        category: 'autonomy',
+        name: "自主生活 · 这一轮没有可用工具",
+        content: "【这一轮没有可用工具】\n本轮你没有任何工具可调，也别在正文里写工具调用——内容只能从上面给你的上下文（人设、对话、兴趣、此刻的读数）里来。",
+        order: 704,
+        mutable: true,
+        builtinVersion: 1,
+    },
+    {
+        sourceKey: "autonomy.output",
+        category: 'autonomy',
+        name: "自主生活 · 这一轮的产出",
+        content: "【这一轮的产出】\n上面那份聊天模板是你在正常聊天时的规矩；这一轮不一样：不发给任何人，也不聊天，只把结果写成一个 JSON 对象。\n{\"v\":1,\"experiences\":[{\"q\":\"为什么会有这条（一句话）\",\"note\":\"第一人称随手记，口语、具体、有画面\",\"kind\":\"surf|game|forum|rest\",\"importance\":0}],\"proposedEvents\":[],\"rest\":false}\nkind 只能从 surf（上网闲逛）、game（玩游戏）、forum（逛社区）、rest（发呆歇着）里挑一个；importance 是 0 到 3 的数字。\nproposedEvents 只在「这件事会影响你之后的生活」时才写，每项 {\"type\":\"conversation|activity|movement|schedule|relationship|discovery|social_trace\",\"summary\":\"...\",\"impact\":\"trace|minor|major\"}；平时就写空数组。\n想说的那条放 experiences 最前面。这一轮什么都不想记就写 {\"v\":1,\"rest\":true}。\n除了这个 JSON 什么都别输出（不要解释、不要代码块之外的话）。",
+        order: 705,
         mutable: true,
         builtinVersion: 1,
     },

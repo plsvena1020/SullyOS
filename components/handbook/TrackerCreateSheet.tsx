@@ -11,6 +11,7 @@ import React, { useState } from 'react';
 import { Tracker, TrackerField, TrackerFieldKind } from '../../types';
 import { TRACKER_TEMPLATES, instantiateTemplate, TrackerTemplate } from '../../utils/trackerSeeds';
 import { DB } from '../../utils/db';
+import BottomSheet from '../os/BottomSheet';
 import { PAPER_TONES, SERIF_STACK, CUTE_STACK, WashiTape } from './paper';
 import { HeartSticker, StarSticker, SparkleDot } from './stickers';
 import { X, Sparkle, Plus, Check } from '@phosphor-icons/react';
@@ -51,8 +52,6 @@ const TrackerCreateSheet: React.FC<Props> = ({ visible, existingTrackers, onCanc
     const [customColor, setCustomColor] = useState(PAPER_TONES.accentLavender);
     const [customFieldKind, setCustomFieldKind] = useState<TrackerFieldKind>('rating');
     const [customFieldLabel, setCustomFieldLabel] = useState('');
-
-    if (!visible) return null;
 
     // 已启用的模板按 templateId 标记(用 name+icon 双匹配,因为系统模板首次创建后名称不会变)
     const isTemplateAdded = (tpl: TrackerTemplate) => {
@@ -113,24 +112,13 @@ const TrackerCreateSheet: React.FC<Props> = ({ visible, existingTrackers, onCanc
     };
 
     return (
-        <div
-            className="absolute inset-0 z-[60] flex items-end justify-center animate-fade-in"
-            style={{ background: 'rgba(122,90,114,0.45)', backdropFilter: 'blur(6px)' }}
-            onClick={onCancel}
+        <BottomSheet
+            open={visible}
+            onClose={onCancel}
+            maxHeight="88%"
+            overlayClassName="z-[60] bg-[#7a5a72]/45 backdrop-blur-[6px]"
+            panelClassName="relative rounded-t-3xl bg-[#fff8fb] shadow-[0_-8px_28px_rgba(122,90,114,0.25)]"
         >
-            <div
-                className="w-full max-h-[88%] overflow-y-auto rounded-t-3xl relative animate-slide-up"
-                style={{
-                    background: PAPER_TONES.paper,
-                    boxShadow: '0 -8px 28px rgba(122,90,114,0.25)',
-                }}
-                onClick={e => e.stopPropagation()}
-            >
-                {/* 顶部把手 */}
-                <div className="flex justify-center pt-3 pb-1">
-                    <div style={{ width: 40, height: 4, borderRadius: 2, background: PAPER_TONES.accentLavender, opacity: 0.5 }} />
-                </div>
-
                 {/* 装饰 */}
                 <div className="absolute top-4 left-5 pointer-events-none" style={{ transform: 'rotate(-15deg)' }}>
                     <HeartSticker size={18} color={PAPER_TONES.accentLavender} />
@@ -216,8 +204,7 @@ const TrackerCreateSheet: React.FC<Props> = ({ visible, existingTrackers, onCanc
                         <X className="w-3.5 h-3.5" /> 关上
                     </button>
                 </div>
-            </div>
-        </div>
+        </BottomSheet>
     );
 };
 

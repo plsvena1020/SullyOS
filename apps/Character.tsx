@@ -42,6 +42,7 @@ import {
     getExternalMemoryLengthInfo,
     getExternalMemoryOverLimitMessage,
 } from '../utils/memoryPalace/externalMemory';
+import { AnimatePresence, m, pageVariants } from '../utils/motion';
 
 // ── 神经链接 · 列表页视觉件（淡紫留白风）────────────────────
 // 之前的「星点 + 玻璃饰带 + 华丽头像框」看久了眼花、低端机也重绘卡。
@@ -1451,7 +1452,7 @@ ${isInitialGeneration ? `
   return (
     <div className="h-full w-full bg-slate-50/30 font-light relative">
        {view === 'list' ? (
-           <div className="flex flex-col h-full animate-fade-in relative"
+           <div className="flex flex-col h-full relative"
                 style={{ background: 'linear-gradient(180deg, #f5f2fb 0%, #ece6f6 100%)' }}>
                {/* safe-area: pt 用 max(3.5rem, 刘海高度)，保呼吸感同时更高刘海设备不被挡 */}
                <div className="px-6 pb-4 shrink-0 flex items-start justify-between" style={{ paddingTop: 'max(3.5rem, var(--safe-top))' }}>
@@ -1546,7 +1547,9 @@ ${isInitialGeneration ? `
                        const page = Math.min(charPage, totalPages - 1);
                        const pageChars = characters.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
                         return (
-                            <div key={page} className={`flex flex-col gap-3 ${charSlideDir === 'l' ? 'animate-page-in-l' : 'animate-page-in-r'}`}>
+                            <AnimatePresence mode="wait" initial={false}>
+                            <m.div key={page} className="flex flex-col gap-3"
+                                variants={pageVariants(charSlideDir)} initial="initial" animate="animate" exit="exit">
                                 {pageChars.map((char, index) => (
                                     <div key={char.id} className="animate-fade-soft" style={{ animationDelay: `${Math.min(index, 9) * 20}ms`, animationFillMode: 'backwards' }}>
                                     <CharacterCard
@@ -1576,13 +1579,14 @@ ${isInitialGeneration ? `
                                        </button>
                                    </div>
                                 )}
-                            </div>
+                            </m.div>
+                            </AnimatePresence>
                         );
                     })()}
                </div>
            </div>
        ) : formData && (
-           <div className="flex flex-col h-full animate-fade-in bg-slate-50/50 relative">
+           <div className="flex flex-col h-full bg-slate-50/50 relative">
                {/* safe-area: OUTER 保留渐变背景 + 模糊 + sticky，刘海高度由 paddingTop 让位；
                    INNER 不再用 h-32 沉底——那是老的「做高栏 + 内容沉底」状态栏预留写法，会和 safe-top 叠加出一大块空白。
                    改为内容自然高度、直接贴在 safe-top 下方。 */}

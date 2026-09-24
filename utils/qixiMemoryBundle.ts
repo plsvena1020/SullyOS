@@ -1,7 +1,6 @@
 import { APIConfig, CharacterProfile, Message, UserProfile } from '../types';
 import { ContextBuilder } from './context';
 import { DB } from './db';
-import { injectMemoryPalace } from './memoryPalace/pipeline';
 import { safeFetchJson } from './safeApi';
 import { parseQixiJsonObject } from './qixiJson';
 import { parseQixiBridge, type QixiBridgeBundle } from './qixiBridge';
@@ -692,6 +691,7 @@ export async function prepareQixiMemoryBundle(
         const recallChar = { ...char, memoryPalaceInjection: '', roomPlatesInjection: '' };
         // 七夕召回只用活动 query 扩散；聊天上下文留给后面的生成器作事实来源，
         // 不参与检索打分，避免最近话题把 20 条记忆挤成同一类。
+        const { injectMemoryPalace } = await import('./memoryPalace/pipeline');
         await injectMemoryPalace(recallChar, [], recallQuery, user.name, {
             entryPoint: 'direct',
             formatterMaxOutputItems: QIXI_RECALL_MAX_OUTPUT_ITEMS,

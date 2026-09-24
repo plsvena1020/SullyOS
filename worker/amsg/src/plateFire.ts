@@ -23,6 +23,8 @@ import {
 } from '../../../utils/amsgPlateJob';
 import { unpackStateValue } from '../../../utils/amsgFirePack';
 import { PLATE_LLM_TIMEOUT_MS, parsePlateLlmReply } from '../../../utils/memoryPalace/roomPlateCore';
+import type { PlateMaterial } from '../../../utils/memoryPalace/roomPlateCore';
+import { PLATE_ROOMS } from '../../../utils/memoryPalace/types';
 import type { FireKindHandler, KindFireCtx, KindSessionCtx, KindWriteState } from './fireKinds';
 
 /** 跨到 onLLMOutput 的上下文。 */
@@ -56,6 +58,71 @@ const discardJob = async (writeState: KindWriteState | undefined, jobId: string)
     console.warn('[amsg:plate] job 行没删掉（等 TTL 兜底）', jobId, error);
   }
 };
+
+/**
+ * P3 home 快照读路径（叶子先行：只加读路径，输出契约不变）。
+ *
+ * 回滚开关：false = 走旧链（job 自带的本地快照输入，输出与旧链一字不差）；
+ * true = beforeFire 在拼提示词前 best-effort 从 `/home/memories` 拉一份云端快照，
+ * 拉到就把快照 summary 按房间补进 materials，拉不到（网络/鉴权/404/超时）静默回退旧链。
+ * 回滚：一行改回 false 即可。
+ */
+export const USE_HOME = false;
+
+let plateHomeEnv: { HOME_URL?: string; AMSG_CLIENT_TOKEN?: string } | null = null;
+
+/**
+ * `buildWorkerConfig` 的写入口（同 autonomyFire.configureAutonomyHomeEnv 的 holder 惯例）：
+ * handler 的 ctx 里没有 env（fireKinds 注册表形状冻结），所以 HOME 地址走模块级 holder。
+ * 传 null / undefined 收成 null：没配时用本地默认，不抛。
+ */
+export function configurePlateHomeEnv(
+  env: { HOME_URL?: string; AMSG_CLIENT_TOKEN?: string } | null | undefined,
+): void {
+  plateHomeEnv = env ?? null;
+}
+
+export interface HomeMemorySnapshotItem { summary: string; room: string; importance?: number }
+
+/** 读云端记忆快照：任何失败都返回 null（回退旧链），永不抛。 */
+export async function fetchHomeMemoriesSnapshot(charId: string): Promise<HomeMemorySnapshotItem[] | null> {
+  if (!USE_HOME) return null;
+  try {
+    const base = plateHomeEnv?.HOME_URL ?? 'http://127.0.0.1:8837';
+    const res = await fetch(`${base}/home/memories?charId=${encodeURIComponent(charId)}`, {
+      headers: { 'x-client-token': plateHomeEnv?.AMSG_CLIENT_TOKEN ?? '' },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as unknown;
+    const rows = Array.isArray(data) ? data : (data as { memories?: unknown }).memories;
+    if (!Array.isArray(rows)) return null;
+    return (rows as unknown[]).filter(
+      (r): r is HomeMemorySnapshotItem =>
+        !!r && typeof r === 'object' &&
+        typeof (r as HomeMemorySnapshotItem).summary === 'string' &&
+        typeof (r as HomeMemorySnapshotItem).room === 'string',
+    );
+  } catch {
+    return null; // 失败回退旧链，不抛
+  }
+}
+
+/** 快照 summary 按房间折成 materials（未知房间丢弃；rooms/entries 一律不动）。 */
+function snapshotToMaterials(snapshot: HomeMemorySnapshotItem[]): PlateMaterial[] {
+  const byRoom = new Map<string, string[]>();
+  for (const item of snapshot) {
+    if (!(PLATE_ROOMS as readonly string[]).includes(item.room)) continue;
+    if (!item.summary) continue;
+    const lines = byRoom.get(item.room) ?? [];
+    lines.push(item.summary);
+    byRoom.set(item.room, lines);
+  }
+  return [...byRoom.entries()].map(([room, lines]) => ({
+    room: room as PlateMaterial['room'],
+    lines,
+  }));
+}
 
 export const plateConsolidateHandler: FireKindHandler = {
   async beforeFire({ ctx, charId, taskMeta }) {
@@ -101,13 +168,22 @@ export const plateConsolidateHandler: FireKindHandler = {
       return { skip: true, reason: `门牌整理 job ${jobId} 没有要整理的房间` };
     }
 
+    // P3 读路径：USE_HOME 开启且云端快照拉到时，把快照 summary 按房间补进 materials；
+    // 开关关闭或拉取失败时 job 原样走旧链（rooms/entries 不动，输出契约不变）。
+    let jobForPrompt = job;
+    const snapshot = await fetchHomeMemoriesSnapshot(charId);
+    if (snapshot && snapshot.length > 0) {
+      const extra = snapshotToMaterials(snapshot);
+      if (extra.length > 0) jobForPrompt = { ...job, materials: [...job.materials, ...extra] };
+    }
+
     return {
-      messages: buildPlateJobMessages(job),
+      messages: buildPlateJobMessages(jobForPrompt),
       // 跟浏览器那条路同一个超时（叶子里那个常量）。不显式交上去的话这一次 fire 会落到
       // 库自己的默认值（四分钟），同一件活儿两条路的耐心不一样，而且改那个常量对云端
       // 毫无影响——「本地什么样云端就什么样」这条线得自己拉齐。
       totalTimeoutMs: PLATE_LLM_TIMEOUT_MS,
-      state: { jobId, job } satisfies PlateFireState,
+      state: { jobId, job: jobForPrompt } satisfies PlateFireState,
     };
   },
 

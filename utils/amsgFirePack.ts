@@ -429,7 +429,28 @@ export interface AmsgFirePack {
    * 运行时面（autonomyLevel / mcpAllow / writable）都在这里。
    */
   autonomy?: ResolvedAirpAutonomy;
+  /**
+   * 自主提示词覆盖（P6）：Preset App 把用户改写的自主生活 5 块正文写进 fire_pack，
+   * 随现有 client_state/fire_pack 同步链下发，不新开通道。key 见 worker 侧
+   * autonomyFire.AUTONOMY_PROMPT_OVERRIDE_KEYS；缺省 / 空串回退硬编码，
+   * 旧包无此字段行为不变。
+   */
+  autonomyPromptOverrides?: Record<string, string>;
 }
+
+/**
+ * fire_pack 自主提示词覆盖的键 → 预设目录 sourceKey（与 worker 侧
+ * autonomyFire.AUTONOMY_PROMPT_OVERRIDE_KEYS 同一套 key；取值见预设目录 autonomy.*）。
+ * 打包侧（activeMsgClient.buildFirePack）只收用户改写过且仍启用的键，
+ * 未改写不写字段，旧包行为不变。
+ */
+export const AUTONOMY_OVERRIDE_SOURCE_KEYS = {
+  overrideBlock: 'autonomy.override',
+  situBlock: 'autonomy.situ',
+  freedomBlock: 'autonomy.freedom',
+  noToolsBlock: 'autonomy.noTools',
+  outputBlock: 'autonomy.output',
+} as const;
 
 // ─── 按角色参照系渲染时间（②：worker 给角色看的一切时间只此一份） ───
 
@@ -898,6 +919,13 @@ const chatFieldOk = (chat: unknown): boolean => {
       && chatContentOk((m as { content?: unknown }).content));
 };
 
+/** autonomyPromptOverrides：不带合法；带了就必须是 string 值表（坏形状由 parse 侧丢弃该字段）。 */
+const overridesFieldOk = (value: unknown): boolean => {
+  if (value === undefined) return true;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  return Object.values(value as Record<string, unknown>).every((v) => typeof v === 'string');
+};
+
 /** worker 侧从 client_state 读回的 value 解析成 fire_pack；形状不对返回 null（调用方抛错）。 */
 export const parseFirePack = (value: string): AmsgFirePack | null => {
   try {
@@ -920,7 +948,13 @@ export const parseFirePack = (value: string): AmsgFirePack | null => {
           && parsed.maxUnansweredSends >= 0)) &&
       typeof parsed.selfScheduleEnabled === 'boolean'
     ) {
-      return parsed as AmsgFirePack;
+      const pack = parsed as AmsgFirePack;
+      // 脏键忽略：覆盖表坏了只丢该字段（warn 一行），包其余部分保留可用。
+      if (pack.autonomyPromptOverrides !== undefined && !overridesFieldOk(pack.autonomyPromptOverrides)) {
+        console.warn('[amsg:fire-pack] autonomyPromptOverrides 形状不对，已丢弃该字段（包其余部分保留）');
+        delete pack.autonomyPromptOverrides;
+      }
+      return pack;
     }
   } catch { /* 非 JSON → null */ }
   return null;

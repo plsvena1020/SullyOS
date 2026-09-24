@@ -178,7 +178,8 @@ import {
   scanAutonomyPacks,
 } from './autonomyScheduler';
 import { claimAutonomyTick, ensureAutonomySchema, type AutonomyDb } from './autonomyStore';
-import { configureAutonomyFireDb } from './autonomyFire';
+import { configureAutonomyFireDb, configureAutonomyHomeEnv } from './autonomyFire';
+import { configurePlateHomeEnv } from './plateFire';
 
 // opencode.ai 上游自标识：凭据表里存的是原始供应商地址，worker 直连时必须带
 // User-Agent + x-opencode-session（Go 防滥用要求），否则所有 LLM 调用到点必被拒。
@@ -2555,6 +2556,17 @@ export const buildWorkerConfig = (env: Env) => {
     : null);
   // 自主回合 handler 的 D1：kind 分派点够不到 env，同 configureInstantErrorPush 走模块级注入。
   configureAutonomyFireDb(env.DB as AutonomyDb | null);
+  // P2 自主回合的 home 事件落盘地址：同 sullyos-home（8837），没配就用本地默认。
+  const homeEndpoint = env as Env & { HOME_URL?: string; AMSG_CLIENT_TOKEN?: string };
+  configureAutonomyHomeEnv({
+    HOME_URL: homeEndpoint.HOME_URL ?? 'http://127.0.0.1:8837',
+    AMSG_CLIENT_TOKEN: homeEndpoint.AMSG_CLIENT_TOKEN ?? '',
+  });
+  // P3 门牌整理的 home 快照读地址：与上面自主回合同一份 env（handler 的 ctx 够不到 env，走模块级注入）。
+  configurePlateHomeEnv({
+    HOME_URL: homeEndpoint.HOME_URL ?? 'http://127.0.0.1:8837',
+    AMSG_CLIENT_TOKEN: homeEndpoint.AMSG_CLIENT_TOKEN ?? '',
+  });
   return {
     // db 缺省时 factory 自动用 createD1Adapter(env.DB)
     masterKey: env.AMSG_MASTER_KEY,

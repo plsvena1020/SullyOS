@@ -19,7 +19,6 @@
  * 先后落地就是拿两份旧快照互相盖。
  */
 
-import { ActiveMsgClient, mayHaveCreatedBackgroundJob } from '../activeMsgClient';
 import type { AmsgResultContext } from '../amsgResults';
 import { cloudApiCallLogId, recordCloudApiCall, settleCloudApiCall } from '../apiCallLog';
 import { buildCharMemoryCredRow } from '../amsgLlmCredentials';
@@ -223,6 +222,7 @@ export const plateCloudGate = async (args: {
   charId: string;
   lightLLM: PlateLightLLM | null | undefined;
 }): Promise<PlateCloudGate> => {
+  const { ActiveMsgClient } = await import('../activeMsgClient');
   // 上一份躺太久的先收掉，再往下判——收尾要有个明确的时机，别搭在下面那句「还在飞吗」
   // 的便车上（见 readPlateJobInFlight / sweepExpiredPlateJob）。
   sweepExpiredPlateJob(args.charId);
@@ -274,6 +274,7 @@ export const submitPlateConsolidation = async (args: {
    */
   snapshotAt: number;
 }): Promise<{ jobId: string; uuid: string }> => {
+  const { ActiveMsgClient, mayHaveCreatedBackgroundJob } = await import('../activeMsgClient');
   const credRow = buildPlateCredRow(args.charId, args.lightLLM);
   if (!credRow) throw new Error('记忆宫殿副 API 没配齐，门牌整理交不了云端');
 

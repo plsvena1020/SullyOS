@@ -18,6 +18,7 @@ import {
     topicText, summarizeConversation,
 } from '../utils/relationshipChat';
 import PersonaSim, { LifeLog, generatePersonaScript } from './PersonaSim';
+import CheckPhoneHomeCard from './CheckPhoneHomeCard';
 import { usePersonaSim, personaSimStore } from '../utils/personaSimStore';
 import { getLastInnerState } from '../utils/emotionApply';
 import { normalizePhoneEvidence, phoneFieldToText } from '../utils/phoneEvidence';
@@ -33,7 +34,7 @@ import {
     Plus, SignOut, CaretLeft, CaretRight, Cloud, ImagesSquare, LockSimple, Package,
     Storefront, Heart, ArrowsClockwise, Tray, DotsThree, ClockCounterClockwise, Sparkle,
     UsersThree, UserPlus, Prohibit, LinkSimple, PaperPlaneTilt, PencilSimple, Trash,
-    Robot, Brain, MaskHappy, Question, PaintBrush
+    Robot, Brain, MaskHappy, Question, PaintBrush, House
 } from '@phosphor-icons/react';
 
 type LayoutId = NonNullable<PhoneCustomApp['layout']>;
@@ -474,6 +475,53 @@ const CheckPhone: React.FC = () => {
     useEffect(() => {
         window.scrollTo(0, 0);
     }, [activeAppId, view]);
+
+    // 重 App 空闲预取：切进来后在空闲时预热列表前 N 张头像的解码（只预热，不改渲染结构）。
+    // blobref 令牌仍走 useBlobRefUrl 异步解析（语义不变），这里只预热 data:/http(s) 直链；
+    // 首帧不同步解码大图，分页数量与截断规则不动。
+    useEffect(() => {
+        if (!targetChar) return;
+        const schedule = (fn: () => void) => {
+            const w = window as unknown as { requestIdleCallback?: (cb: () => void) => number };
+            if (typeof w.requestIdleCallback === 'function') w.requestIdleCallback(fn);
+            else setTimeout(fn, 0);
+        };
+        schedule(() => {
+            try {
+                const seen = new Set<string>();
+                const recs = targetChar.phoneState?.records || [];
+                const cs = targetChar.phoneState?.contacts || [];
+                const avatarOf = (c: PhoneContact): string | undefined => {
+                    const linked = c.linkedCharId ? characters.find(ch => ch.id === c.linkedCharId) : undefined;
+                    return linked?.avatar || c.avatar;
+                };
+                const candidates: string[] = [];
+                for (const c of cs) {
+                    const av = avatarOf(c);
+                    if (av && !seen.has(av)) { seen.add(av); candidates.push(av); }
+                    if (candidates.length >= 12) break;
+                }
+                if (candidates.length < 12) {
+                    for (const r of recs) {
+                        if (r.type !== 'chat') continue;
+                        const c = cs.find(x => (r.contactId && x.id === r.contactId) || x.name === r.title);
+                        const av = c ? avatarOf(c) : undefined;
+                        if (av && !seen.has(av)) { seen.add(av); candidates.push(av); }
+                        if (candidates.length >= 12) break;
+                    }
+                }
+                for (const url of candidates) {
+                    if (url.startsWith('data:') || url.startsWith('http')) {
+                        const img = new Image();
+                        img.decoding = 'async';
+                        img.src = url;
+                    }
+                }
+            } catch { /* 预热失败静默，不影响渲染 */ }
+        });
+        // 刻意只依赖角色 id：切角色时预热一次，不跟随渲染深对象反复触发。
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [targetChar?.id]);
 
     // Auto scroll to bottom of chat detail
     useEffect(() => {
@@ -3733,6 +3781,8 @@ ${olderText}
                     onClick={() => { setActiveAppId('taobao');  }} />
                 <HomeCard icon={<Wallet size={24} weight="light" />} label="银行卡" sub={bankCardSub} accent="#5C6BC0"
                     onClick={() => { setActiveAppId('bank');  }} />
+                <HomeCard icon={<House size={24} weight="light" />} label="家" sub="小屋 · 去看看 TA" accent="#f59e0b"
+                    onClick={() => { setActiveAppId('home-svc');  }} />
             </div>
 
             {/* 智能体：偷看「TA 的小手机」 —— 给个抢眼的横条入口 */}
@@ -3946,7 +3996,7 @@ ${olderText}
     // ============================================================
     if (view === 'select') {
         return (
-            <div className="absolute inset-0 flex flex-col overflow-hidden text-white animate-fade-soft"
+            <div className="absolute inset-0 flex flex-col overflow-hidden text-white"
                 style={{ background: 'radial-gradient(120% 80% at 50% 0%, #161826 0%, #0a0b10 60%)' }}>
                 <StatusStrip />
                 <div className="h-14 flex items-center justify-between px-4 shrink-0">
@@ -4085,6 +4135,15 @@ ${olderText}
                     {activeAppId === 'taobao' && renderShop()}
                     {activeAppId === 'waimai' && renderFood()}
                     {activeAppId === 'bank' && renderBank()}
+                    {activeAppId === 'home-svc' && targetChar && (
+                        <SubAppShell key={activeAppId}>
+                            <TermHeader title="家" sub="vps home" accent="#f59e0b" onBack={() => setActiveAppId('home')}
+                                right={<House size={20} weight="fill" style={{ color: '#f59e0b' }} />} />
+                            <div className="flex-1 overflow-y-auto px-4 pt-2 no-scrollbar pb-28 overscroll-contain">
+                                <CheckPhoneHomeCard charId={targetChar.id} />
+                            </div>
+                        </SubAppShell>
+                    )}
                     {activeAppId === 'social' && renderMoments()}
                     {activeAppId === 'aiagent' && renderAiAgent()}
                     {activeAppId === 'ai_session' && renderAiSession()}

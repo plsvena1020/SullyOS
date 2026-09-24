@@ -54,6 +54,8 @@ import * as dailySchedule from './dailySchedule';
 import { ChatPrompts } from './chatPrompts';
 import { DB } from './db';
 import { KeepAlive } from './keepAlive';
+import { getBuiltinContent } from './promptPresetCatalog';
+import { getResolvedPromptPresets, invalidatePromptPresetCache } from './promptPresetRuntime';
 
 const TEST_USER_ID = '3f2b1c8a-9d4e-4a1b-8c2d-000000000001';
 
@@ -991,8 +993,10 @@ describe('buildFirePack 的时区参照系与模板（①）', () => {
     systemPromptSpy = vi.spyOn(ChatPrompts, 'buildSystemPrompt').mockResolvedValue('SYS_PROMPT_MARKER');
     vi.spyOn(ChatPrompts, 'buildMessageHistory').mockReturnValue({ apiMessages: [] } as any);
     vi.spyOn(ChatPrompts, 'filterVisibleEmojis').mockReturnValue({ emojis: [], categories: [] } as any);
+    // P6 写链只读预设运行时缓存（同步）：每轮清缓存，旧用例按「无改写」走旧形状。
+    invalidatePromptPresetCache();
   });
-  afterEach(() => { vi.restoreAllMocks(); });
+  afterEach(() => { vi.restoreAllMocks(); invalidatePromptPresetCache(); });
 
   const pack = (char: any) => buildFirePack(char, user, [], undefined, { all: [], categories: [] });
 
@@ -1219,6 +1223,45 @@ describe('buildFirePack 的时区参照系与模板（①）', () => {
 
     const out = await pack(baseChar());
     expect(out.template).toContain('早上好呀');
+  });
+
+  // P6 写链：预设目录 autonomy 分类的用户改写 → pack.autonomyPromptOverrides，
+  // 随现有 fire_pack 同步链下发（worker 侧读链见 autonomyFire.test.ts）。
+  describe('自主提示词写链（P6）：只收改写过且启用的键', () => {
+    const row = (over: Record<string, unknown>) => ({
+      id: `p_${over.sourceKey}`, order: 701, enabled: true,
+      builtinVersion: 1, updatedAt: 1, ...over,
+    }) as any;
+    /** 预热运行时缓存（DB 桩掉，不碰真 IDB，假时钟下也成立）。 */
+    const warmCache = async (rows: any[]) => {
+      vi.spyOn(DB, 'getPromptPresets').mockResolvedValue(rows);
+      await getResolvedPromptPresets();
+    };
+
+    it('改写过的 situ 进包，未改写的 output / 缺行的 noTools 不写字段', async () => {
+      await warmCache([
+        row({ sourceKey: 'autonomy.situ', content: '【这一轮的处境】自定义处境行' }),
+        row({ sourceKey: 'autonomy.output', content: getBuiltinContent('autonomy.output') }),
+      ]);
+      const out = await pack(baseChar());
+      expect(out.autonomyPromptOverrides).toEqual({ situBlock: '【这一轮的处境】自定义处境行' });
+    });
+
+    it('停用的改写不写；缓存没预热整包不受影响（字段缺省）', async () => {
+      await warmCache([
+        row({ sourceKey: 'autonomy.freedom', content: '自定义但停用', enabled: false }),
+      ]);
+      expect((await pack(baseChar())).autonomyPromptOverrides).toBeUndefined();
+      invalidatePromptPresetCache();
+      const out = await pack(baseChar());
+      expect(out.autonomyPromptOverrides).toBeUndefined();
+      expect(out.template).toContain('SYS_PROMPT_MARKER');
+    });
+
+    it('一行没改写 → 字段整个缺省（旧包形状不变）', async () => {
+      await warmCache([]);
+      expect((await pack(baseChar())).autonomyPromptOverrides).toBeUndefined();
+    });
   });
 });
 

@@ -20,6 +20,7 @@ import {
   reportAutonomyOutcome,
   runAutonomyTick,
   scanAutonomyPacks,
+  shouldPushNow,
   type AutonomyTickPack,
 } from './autonomyScheduler';
 import {
@@ -683,5 +684,37 @@ describe('每分钟认领闸（双 cron 防护）', () => {
     expect(result.skipped).toEqual([{ charId: CHAR_ID, reason: AUTONOMY_SKIP_REASONS.postFailed }]);
     // 下一分钟照常认领：gate 只看 minute，与 post 成败无关。
     expect(await claimAutonomyTick(db, key + 1)).toBe(true);
+  });
+});
+
+describe('home round policy', () => {
+  it('凌晨 3 点不推送', () => {
+    // 180 = 北京时间 03:00 的当日分钟数（调用方按角色时区算好传进来，与机器时区无关）
+    expect(shouldPushNow(3 * 60, 47)).toBe(false);
+  });
+  it('日 48 轮熔断', () => {
+    expect(shouldPushNow(15 * 60, 48)).toBe(false);
+  });
+  it('生产链：旧链日计数到 48 熔断', async () => {
+    const today = await autonomyDateKey(NOW, 'Asia/Shanghai');
+    const { db } = createStateDb([
+      { ...emptyAutonomyState(CHAR_ID), roundsDate: today, roundsToday: 48 },
+    ]);
+    const result = await tick(db, tickPack(baseAutonomy({ maxRoundsPerDay: 100 })));
+    expect(result.built).toEqual([]);
+    expect(result.skipped).toEqual([{ charId: CHAR_ID, reason: AUTONOMY_SKIP_REASONS.dailyLimit }]);
+  });
+  it('生产链：角色时区 03:00 只写不推（旧链静默段未配也拦得住）', async () => {
+    const { db } = createStateDb();
+    const result = await tick(db, tickPack(baseAutonomy()), {
+      nowMs: Date.parse('2026-07-25T19:00:00.000Z'), // 上海 2026-07-26 03:00
+    });
+    expect(result.built).toEqual([]);
+    expect(result.skipped).toEqual([{ charId: CHAR_ID, reason: AUTONOMY_SKIP_REASONS.quietHours }]);
+  });
+  it('生产链：单轮间隔不低于 P2 默认 30 分钟', async () => {
+    const { db } = createStateDb([{ ...emptyAutonomyState(CHAR_ID), lastRoundAt: NOW - 10 * 60_000 }]);
+    const result = await tick(db, tickPack(baseAutonomy({ cadence: { minHours: 0.1, maxHours: 0.1 } })));
+    expect(result.skipped).toEqual([{ charId: CHAR_ID, reason: AUTONOMY_SKIP_REASONS.spacingWindow }]);
   });
 });

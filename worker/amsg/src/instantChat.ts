@@ -179,6 +179,32 @@ export const applyInstantNotificationPolicy = (
   };
 };
 
+// ─── P4 动机推送复用 ───
+
+/**
+ * P4 wantToShare 命中的推送载荷构造：复用 instant-chat 信封的通知策略。
+ *
+ * 只加这一个分支，不改上面任何契约：一定弹（show: always）、按角色折叠
+ * （tag `amsg-instant-${charId}`）、前台安静后台叫人（silent: when-visible）、
+ * 一轮只响第一声（renotify 仅 isFirstSegment）。实际下发仍走现有
+ * instant-push/proactive-push 出口，这里的返回体直接可喂推送载荷。
+ */
+export const buildWantToSharePush = (args: {
+  charId: string;
+  title: string;
+  body: string;
+  isFirstSegment?: boolean;
+}): Record<string, unknown> =>
+  applyInstantNotificationPolicy(
+    {
+      message: args.body,
+      metadata: { charId: args.charId },
+      notification: { title: args.title, body: args.body },
+    },
+    args.charId,
+    args.isFirstSegment ?? true,
+  );
+
 // ─── POST /instant-chat ───
 
 /**

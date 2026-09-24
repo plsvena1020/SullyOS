@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { amsgHooks } from './index';
 import { AUTONOMOUS_ROUND_KIND } from '../../../utils/airp/autonomySettings';
 import type { ResolvedAirpAutonomy } from '../../../utils/airp/autonomySettings';
-import { AMSG_FIRE_PACK_KEY, amsgStateNamespace, type AmsgFirePack } from '../../../utils/amsgFirePack';
+import { AMSG_FIRE_PACK_KEY, FIRE_PACK_VERSION, amsgStateNamespace, parseFirePack, type AmsgFirePack } from '../../../utils/amsgFirePack';
 import { AMSG_TASK_KIND_KEY } from '../../../utils/amsgTaskKinds';
 import {
   AUTONOMY_BAD_OUTPUT_REASON,
@@ -32,6 +32,7 @@ import {
   stripThroatClearing,
   washMarkdownLinks,
 } from './autonomyFire';
+import { buildWantToSharePush } from './instantChat';
 import type { AutonomyDb, AutonomyStatement } from './autonomyStore';
 import type { RuminationPage } from './autonomyRumination';
 
@@ -426,6 +427,86 @@ describe('autonomyFire 提示词', () => {
   });
 });
 
+// ─── 提示词覆盖（P6：预设目录改写 → 下一轮自主 fire 生效） ────────────────
+
+describe('autonomyFire 提示词覆盖', () => {
+  const roundArgs = (pack: AmsgFirePack) => ({ pack, nowMs: NOW, pages: [], autonomy: pack.autonomy! });
+
+  it('无覆盖回退硬编码：不传参 / 空对象 / 空串都与旧输出逐字一致', () => {
+    const pack = buildPack();
+    const baseline = buildAutonomyRoundPrompt(roundArgs(pack));
+    expect(buildAutonomyRoundPrompt(roundArgs(pack), {})).toBe(baseline);
+    expect(buildAutonomyRoundPrompt(roundArgs(pack), { situBlock: '' })).toBe(baseline);
+  });
+
+  it('有覆盖用覆盖：显式 overrides 替换对应块，其余块不变', () => {
+    const pack = buildPack();
+    const baseline = buildAutonomyRoundPrompt(roundArgs(pack));
+    const prompt = buildAutonomyRoundPrompt(roundArgs(pack), { situBlock: '【这一轮的处境】自定义处境行' });
+    expect(prompt).toContain('【这一轮的处境】自定义处境行');
+    expect(prompt).not.toContain('对方没有在等你回话');
+    // 其余四块保持硬编码原文。
+    expect(prompt).toContain('【怎么过这一小会儿】');
+    expect(prompt).toContain('本轮你没有任何工具可调');
+    expect(prompt).toContain('【这一轮的产出】');
+    expect(prompt).toContain(AUTONOMY_ROUND_OVERRIDE);
+    expect(prompt.length).not.toBe(baseline.length);
+  });
+
+  it('pack.autonomyPromptOverrides 经 fire_pack 同步链生效（不传参也覆盖）', () => {
+    const pack = buildPack({ autonomyPromptOverrides: { outputBlock: 'CUSTOM-OUTPUT-CONTRACT' } });
+    const prompt = buildAutonomyRoundPrompt(roundArgs(pack));
+    expect(prompt).toContain('CUSTOM-OUTPUT-CONTRACT');
+    expect(prompt).not.toContain('【这一轮的产出】');
+  });
+
+  it('显式 param 优先于 pack 字段', () => {
+    const pack = buildPack({ autonomyPromptOverrides: { situBlock: '来自包里的处境' } });
+    const prompt = buildAutonomyRoundPrompt(roundArgs(pack), { situBlock: '显式参数的处境' });
+    expect(prompt).toContain('显式参数的处境');
+    expect(prompt).not.toContain('来自包里的处境');
+  });
+});
+
+// ─── 覆盖表经 fire_pack 同步链的容错 ───────────────────────────────────────
+
+describe('autonomyPromptOverrides 同步容错', () => {
+  const syncableBase = () => ({
+    v: FIRE_PACK_VERSION,
+    template: '【角色系统设定】只有人设。',
+    lastUserMessageAt: null as number | null,
+    tzId: 'Asia/Shanghai',
+    userTzId: 'Asia/Shanghai',
+    targetName: '小明',
+    builtAt: NOW,
+    pendingTasks: [],
+    scene: null,
+    selfScheduleEnabled: true,
+  });
+
+  it('坏覆盖只丢该字段、包其余可用（warn 一行）', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const pack = parseFirePack(JSON.stringify({
+        ...syncableBase(), autonomyPromptOverrides: { situBlock: 42 },
+      }));
+      expect(pack).not.toBeNull();
+      expect(pack!.autonomyPromptOverrides).toBeUndefined();
+      expect(pack!.tzId).toBe('Asia/Shanghai');
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('好覆盖原样保留', () => {
+    const pack = parseFirePack(JSON.stringify({
+      ...syncableBase(), autonomyPromptOverrides: { situBlock: '自定义处境行' },
+    }));
+    expect(pack?.autonomyPromptOverrides).toEqual({ situBlock: '自定义处境行' });
+  });
+});
+
 // ─── 推送判定 ────────────────────────────────────────────────────────────
 
 describe('autonomyFire 推送判定', () => {
@@ -584,13 +665,36 @@ describe('autonomyFire 整轮（经 amsgHooks 的 kind 分派）', () => {
     expect(typeof rows[0].id).toBe('string');
     expect(rows[0].note).toBe('深海那边有条沉船'); // 清嗓子削掉了开头的「翻到了：」
     expect(rows[0].pushed).toBe(true);
-    expect(payload.notification).toEqual({ show: 'always', body: '深海那边有条沉船' });
+    expect(payload.notification).toEqual({
+      title: '深海那边有条沉船', body: '深海那边有条沉船', show: 'always',
+      silent: 'when-visible', tag: 'amsg-instant-preset-nyah', renotify: true,
+    });
 
     // D1：经历行的 id 就是信封里那个；推送时间与 token 都回账了。
     expect(experiences).toHaveLength(1);
     expect(experiences[0].id).toBe(rows[0].id);
     expect(experiences[0].pushed).toBe(1);
     expect(stateRows.get(CHAR_ID)).toMatchObject({ last_push_at: NOW, tokens_today: 150, fail_streak: 0 });
+  });
+
+  it('P4 接线：wantToShare 命中→instant-chat 信封字段齐→走既有 emitResult 下发', async () => {
+    const { emitResult } = await runRound({
+      reply: REPLY,
+      usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
+    });
+    // 下发函数被调且仅一次（mock 下发桩）。
+    expect(emitResult).toHaveBeenCalledTimes(1);
+    const payload = emitResult.mock.calls[0]![0] as Record<string, unknown>;
+    // payload 字段齐：与 buildWantToSharePush 同参数产出逐字一致。
+    const expected = buildWantToSharePush({
+      charId: CHAR_ID, title: '深海那边有条沉船', body: '深海那边有条沉船',
+    }) as Record<string, unknown>;
+    expect(payload.notification).toEqual(expected.notification);
+    const n = payload.notification as Record<string, unknown>;
+    expect(n.show).toBe('always');
+    expect(n.silent).toBe('when-visible');
+    expect(n.tag).toBe(`amsg-instant-${CHAR_ID}`);
+    expect(n.renotify).toBe(true);
   });
 
   it('整轮全是 small：一条都不推、不响铃，但经历照落 D1', async () => {
@@ -633,7 +737,10 @@ describe('autonomyFire 整轮（经 amsgHooks 的 kind 分派）', () => {
     // 信封 importance 收成字符串两档。
     expect(rows.map((row) => row.importance)).toEqual(['small', 'big']);
     expect(rows.map((row) => row.pushed)).toEqual([false, true]);
-    expect(payload.notification).toEqual({ show: 'always', body: '深海那条沉船' });
+    expect(payload.notification).toEqual({
+      title: '深海那条沉船', body: '深海那条沉船', show: 'always',
+      silent: 'when-visible', tag: 'amsg-instant-preset-nyah', renotify: true,
+    });
     // D1：只有那条 big（第二条）标 pushed=1。
     expect(experiences.map((row) => row.pushed)).toEqual([0, 1]);
   });

@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { X } from '@phosphor-icons/react';
-import { useExitPresence } from '../../hooks/useExitPresence';
+import { AnimatePresence, m, modalPanelVariants, scrimVariants } from '../../utils/motion';
 
 interface ModalProps {
     isOpen: boolean;
@@ -12,13 +12,14 @@ interface ModalProps {
 }
 
 const Modal: React.FC<ModalProps> = ({ isOpen, title, onClose, children, footer }) => {
-    const { mounted, phase } = useExitPresence(isOpen, 180);
-    if (!mounted) return null;
-
     return (
-        <div className={`fixed inset-0 z-[100] flex items-center justify-center p-6 ${phase === 'out' ? 'animate-fade-out-soft' : 'animate-fade-in'}`}>
-            <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-            <div className={`relative w-full max-w-sm bg-white rounded-[2.5rem] shadow-2xl border border-white/20 overflow-hidden ${phase === 'out' ? 'animate-fade-out-soft' : 'animate-slide-up'}`}>
+        <AnimatePresence>
+            {isOpen && (
+                <m.div key="modal" className="fixed inset-0 z-[100] flex items-center justify-center p-6"
+                    variants={scrimVariants()} initial="initial" animate="animate" exit="exit">
+                    <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+                    <m.div className="relative w-full max-w-sm bg-white rounded-[2.5rem] shadow-2xl border border-white/20 overflow-hidden"
+                        variants={modalPanelVariants()} initial="initial" animate="animate" exit="exit">
                 {/* 物理关闭按钮：始终存在，任何情况下都可关闭弹窗 */}
                 <button
                     onClick={onClose}
@@ -47,8 +48,10 @@ const Modal: React.FC<ModalProps> = ({ isOpen, title, onClose, children, footer 
                         </button>
                     </div>
                 )}
-            </div>
-        </div>
+                    </m.div>
+                </m.div>
+            )}
+        </AnimatePresence>
     );
 };
 

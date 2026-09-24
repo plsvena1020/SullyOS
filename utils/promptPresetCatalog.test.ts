@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { BUILTIN_PROMPT_ENTRIES, PROMPT_CATEGORY_META, getBuiltinEntry, fillIdentity } from './promptPresetCatalog';
+import { BUILTIN_PROMPT_ENTRIES, PROMPT_CATEGORY_META, getBuiltinEntry, getBuiltinContent, fillIdentity } from './promptPresetCatalog';
 import { BUILTIN_PROMPT_SNAPSHOT } from './snapshotBuiltinPrompts';
+import {
+    AUTONOMY_ROUND_OVERRIDE,
+    AUTONOMY_ROUND_SITU,
+    AUTONOMY_ROUND_FREEDOM,
+    AUTONOMY_ROUND_NO_TOOLS,
+    AUTONOMY_ROUND_OUTPUT,
+} from '../worker/amsg/src/autonomyFire';
 
 describe('builtin prompt catalog', () => {
     it('每条目录条目都有非空正文与合法元数据', () => {
@@ -43,5 +50,26 @@ describe('builtin prompt catalog', () => {
     it('fillIdentity 替换身份占位符，{{user}} 缺省兜底「对方」', () => {
         expect(fillIdentity('你是{{char}}，对面是{{user}}', '小雪', '阿岚')).toBe('你是小雪，对面是阿岚');
         expect(fillIdentity('{{user}}在吗', '小雪')).toBe('对方在吗');
+    });
+});
+
+describe('autonomy presets', () => {
+    it('autonomy 分类与 5 条内置存在', () => {
+        expect(PROMPT_CATEGORY_META.some((c) => c.id === 'autonomy')).toBe(true);
+        expect(BUILTIN_PROMPT_ENTRIES.filter((e) => e.category === 'autonomy').length).toBe(5);
+    });
+
+    it('5 条内置可读（getBuiltinContent 命中）', () => {
+        for (const key of ['autonomy.override', 'autonomy.situ', 'autonomy.freedom', 'autonomy.noTools', 'autonomy.output']) {
+            expect(getBuiltinContent(key).length, key).toBeGreaterThan(0);
+        }
+    });
+
+    it('目录 5 条正文与 worker 运行时常量逐字一致', () => {
+        expect(getBuiltinContent('autonomy.override')).toBe(AUTONOMY_ROUND_OVERRIDE);
+        expect(getBuiltinContent('autonomy.situ')).toBe(AUTONOMY_ROUND_SITU);
+        expect(getBuiltinContent('autonomy.freedom')).toBe(AUTONOMY_ROUND_FREEDOM);
+        expect(getBuiltinContent('autonomy.noTools')).toBe(AUTONOMY_ROUND_NO_TOOLS);
+        expect(getBuiltinContent('autonomy.output')).toBe(AUTONOMY_ROUND_OUTPUT);
     });
 });
