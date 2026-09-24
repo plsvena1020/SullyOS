@@ -45,6 +45,8 @@ import {
     PERSPECTIVE_MAX_DAYS,
 } from './perspective';
 import { getLocalDateKey } from './localDate';
+import { googleBridgeFetch, createGoogleEvent, createGoogleTask } from './googleBridge';
+import { normalizeGoogleEvents, normalizeGoogleTasks, buildEventBody, buildTaskBody } from './googleCalendar';
 
 // ─── 共用类型 ────────────────────────────────────────────────────────────────
 
@@ -158,6 +160,11 @@ export interface AgenticToolCtx {
     lastXhsNotesRef?: { current: XhsNote[] };
     /** 工具内部多步操作 (XHS_DETAIL retry / XHS_MY_PROFILE fallback / DIARY read-loop) 透传状态文案 给调用方 UI. 不传则 noop. */
     onProgress?: (channel: 'xhs' | 'diary', text: string) => void;
+    /**
+     * Google 桥 fetch 替身（Task 9 char 主动查）：(path, init) => Response。
+     * 生产缺省 googleBridgeFetch；单测注入 stub。纯函数层只经它出网，不直调全局 fetch。
+     */
+    googleFetch?: (path: string, init?: RequestInit) => Promise<Response>;
 }
 
 // ─── RECALL ─────────────────────────────────────────────────────────────────
@@ -855,6 +862,11 @@ export async function dispatchAgenticTool(
         case 'xhs_detail': return runXhsDetail(args, ctx);
         case 'perspective_query': return runPerspectiveQuery(args, ctx);
         case 'perspective_summary': return runPerspectiveSummary(args, ctx);
+        // Google 新工具签名是 (ctx, args)，与本文件既有 (args, ctx) 惯例相反，dispatch 已做适配。
+        case 'google_calendar_events': return runGoogleCalendarEvents(ctx, args);
+        case 'google_tasks': return runGoogleTasks(ctx, args);
+        case 'google_create_propose': return proposeGoogleCreate(ctx, args);
+        case 'google_create_execute': return executeGoogleCreate(ctx, args);
         default:
             throw new Error(`Unknown agentic tool: ${toolName}`);
     }
@@ -979,4 +991,247 @@ export async function runPerspectiveSummary(
     } catch (e: any) {
         return { ok: false, reason: 'unreachable', message: e?.message };
     }
+}
+
+// ─── Google 只读工具（Task 9：char 主动查）───────────────────────────────────
+// 只读：网络只经 ctx.googleFetch（缺省 googleBridgeFetch）出网；归一化只用 Task 1
+// 函数；桥 paths/headers 按 Task 3/5 锁定形状；账号与勾选读 localStorage（Task 7/8
+// 同源：aetheros.google.enabled / aetheros.google.selectedCalendars，accountId::calendarId）。
+// 成功返回归一化数组；失败一律结构化抛错、不吞错（上游 401 含 REAUTH_REQUIRED，
+// 供上层转“去设置页重新授权”）。
+
+export interface GoogleCalendarEventHit {
+    dateKey: string;
+    title: string;
+    startText: string;
+}
+
+export interface GoogleTaskHit {
+    title: string;
+    dueKey: string | null;
+}
+
+const GOOGLE_ENABLED_KEY = 'aetheros.google.enabled';
+const GOOGLE_SELECTED_KEY = 'aetheros.google.selectedCalendars';
+
+/** 读勾选：未启用 / 无勾选 / 读不动一律结构化抛错（返回 [] 会让角色以为“查了但没有”）。 */
+function readGoogleSelection(): Array<{ accountId: string; calendarId: string }> {
+    let enabled = false;
+    let raw = '[]';
+    try {
+        enabled = localStorage.getItem(GOOGLE_ENABLED_KEY) === '1';
+        raw = localStorage.getItem(GOOGLE_SELECTED_KEY) || '[]';
+    } catch (e: any) {
+        throw new Error(`GOOGLE_NOT_ENABLED: 读不到 Google 授权状态 (${e?.message || e})`);
+    }
+    if (!enabled) {
+        throw new Error('GOOGLE_NOT_ENABLED: Google 未启用，去设置页开启并授权');
+    }
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(raw);
+    } catch {
+        throw new Error('GOOGLE_NOT_ENABLED: 已选日历数据损坏，去设置页重选');
+    }
+    const out: Array<{ accountId: string; calendarId: string }> = [];
+    if (Array.isArray(parsed)) {
+        for (const key of parsed) {
+            if (typeof key !== 'string') continue;
+            const sep = key.indexOf('::');
+            if (sep < 0) continue;
+            const accountId = key.slice(0, sep);
+            const calendarId = key.slice(sep + 2);
+            if (accountId && calendarId) out.push({ accountId, calendarId });
+        }
+    }
+    if (out.length === 0) {
+        throw new Error('GOOGLE_NOT_ENABLED: 未勾选任何日历，去设置页勾选');
+    }
+    return out;
+}
+
+/**
+ * 经桥取 raw items：path/headers 按 Task 3/5 锁定形状。
+ * 上游 401（含 { error: 'REAUTH_REQUIRED' }）转 REAUTH_REQUIRED 抛错；其余失败
+ * 同样结构化抛错，不吞（fetch 本身抛出的网络错包一层 GOOGLE_UNREACHABLE 带出原文）。
+ */
+async function readGoogleBridgeItems(
+    fetchImpl: (path: string, init?: RequestInit) => Promise<Response>,
+    path: string,
+    accountId: string,
+): Promise<any[]> {
+    let res: Response;
+    try {
+        res = await fetchImpl(path, { method: 'GET', headers: { 'X-Google-Account': accountId } });
+    } catch (e: any) {
+        throw new Error(`GOOGLE_UNREACHABLE: 桥接服务不可达 (${e?.message || e})`);
+    }
+    if (res.status === 401) {
+        throw new Error('GOOGLE_REAUTH_REQUIRED: Google 授权过期，去设置页重新授权');
+    }
+    if (!res.ok) {
+        let text = '';
+        try { text = await res.text(); } catch { /* 取不到正文就只报状态码 */ }
+        if (/REAUTH_REQUIRED/.test(text)) {
+            throw new Error('GOOGLE_REAUTH_REQUIRED: Google 授权过期，去设置页重新授权');
+        }
+        throw new Error(`GOOGLE_BRIDGE_ERROR: 桥请求失败 ${res.status}${text ? ` ${text.slice(0, 200)}` : ''}`);
+    }
+    let body: any = null;
+    try {
+        body = await res.json();
+    } catch {
+        throw new Error('GOOGLE_BRIDGE_ERROR: 桥返回不是 JSON');
+    }
+    if (body?.error === 'REAUTH_REQUIRED') {
+        throw new Error('GOOGLE_REAUTH_REQUIRED: Google 授权过期，去设置页重新授权');
+    }
+    return Array.isArray(body?.items) ? body.items : [];
+}
+
+/**
+ * char 主动查日程：所选日历在 [timeMin, timeMax] 内的事件。
+ * keyword 命中标题/地点子串，大小写不敏感；无 keyword 不过滤。
+ */
+export async function runGoogleCalendarEvents(
+    ctx: AgenticToolCtx,
+    args: { timeMin: string; timeMax: string; keyword?: string },
+): Promise<GoogleCalendarEventHit[]> {
+    const fetchImpl = ctx.googleFetch ?? googleBridgeFetch;
+    const selection = readGoogleSelection();
+    const lists = await Promise.all(selection.map(({ accountId, calendarId }) =>
+        readGoogleBridgeItems(
+            fetchImpl,
+            `/api/events?calendarId=${encodeURIComponent(calendarId)}&timeMin=${encodeURIComponent(args.timeMin)}&timeMax=${encodeURIComponent(args.timeMax)}`,
+            accountId,
+        )
+    ));
+    const kw = args.keyword?.trim().toLowerCase();
+    return normalizeGoogleEvents(lists.flat())
+        .filter(e => !kw || e.title.toLowerCase().includes(kw) || e.location.toLowerCase().includes(kw))
+        .sort((a, b) => a.dateKey < b.dateKey ? -1 : a.dateKey > b.dateKey ? 1 : (a.startText < b.startText ? -1 : 1))
+        .map(e => ({ dateKey: e.dateKey, title: e.title, startText: e.startText }));
+}
+
+/** char 主动查待办：只返回未完成（completed/deleted 丢弃）。账号按勾选去重，一账号拉一次。 */
+export async function runGoogleTasks(
+    ctx: AgenticToolCtx,
+    _args: Record<string, never>,
+): Promise<GoogleTaskHit[]> {
+    const fetchImpl = ctx.googleFetch ?? googleBridgeFetch;
+    const selection = readGoogleSelection();
+    const accountIds = [...new Set(selection.map(s => s.accountId))];
+    const lists = await Promise.all(accountIds.map(accountId =>
+        readGoogleBridgeItems(fetchImpl, `/api/tasks?tasklist=${encodeURIComponent('@default')}`, accountId)
+    ));
+    return normalizeGoogleTasks(lists.flat())
+        .filter(t => t.status !== 'completed' && t.status !== 'deleted')
+        .map(t => ({ title: t.title, dueKey: t.dueKey }));
+}
+
+// ─── Google 写：预览确认环（W4）──────────────────────────────────────────────
+// 硬规则：永远先 propose（纯函数，不联网）给用户看人话预览，用户点头才 execute；
+// 时间模糊（event 缺 dateKey）先问清再 propose，不猜。
+
+export interface ProposeGoogleCreateArgs {
+    kind: 'event' | 'task';
+    title: string;
+    dateKey?: string;
+    timeText?: string;
+    timeZone?: string;
+    location?: string;
+    description?: string;
+    dueKey?: string;
+    notes?: string;
+    calendarId?: string;
+    tasklist?: string;
+}
+
+/**
+ * 预览待创建：纯函数不联网，用 W1 buildEventBody / buildTaskBody 构造 canonical
+ * payload；summary 为人话预览，含三要素（目标日历/清单、标题、时间）。
+ * 缺字段一律结构化抛错、不吞错（event 缺 dateKey、task 缺 title → GOOGLE_MISSING_FIELD）。
+ */
+export async function proposeGoogleCreate(
+    ctx: AgenticToolCtx,
+    args: ProposeGoogleCreateArgs,
+): Promise<{ summary: string; payload: object; kind: string }> {
+    void ctx;
+    const selection = readGoogleSelection();
+    if (args.kind === 'event') {
+        if (!args.dateKey) {
+            throw new Error('GOOGLE_MISSING_FIELD: 创建事件缺 dateKey，先问清日期再 propose');
+        }
+        const calendarId = args.calendarId ?? selection[0].calendarId;
+        const payload = buildEventBody({
+            title: args.title,
+            dateKey: args.dateKey,
+            timeText: args.timeText,
+            timeZone: args.timeZone,
+            location: args.location,
+            description: args.description,
+        });
+        const when = args.timeText ? `${args.dateKey} ${args.timeText}` : `${args.dateKey}（全天）`;
+        return {
+            summary: `将在日历 ${calendarId} 创建事件「${args.title}」，时间 ${when}；用户点头后再 execute`,
+            payload,
+            kind: 'event',
+        };
+    }
+    if (args.kind === 'task') {
+        if (!args.title) {
+            throw new Error('GOOGLE_MISSING_FIELD: 创建待办缺 title，先问清标题再 propose');
+        }
+        const tasklist = args.tasklist ?? '@default';
+        const payload = buildTaskBody({ title: args.title, dueKey: args.dueKey, notes: args.notes });
+        const when = args.dueKey ?? '无截止日期';
+        return {
+            summary: `将在清单 ${tasklist} 创建待办「${args.title}」，截止 ${when}；用户点头后再 execute`,
+            payload,
+            kind: 'task',
+        };
+    }
+    throw new Error(`GOOGLE_MISSING_FIELD: 未知 kind ${(args as { kind: unknown }).kind}，只支持 event/task`);
+}
+
+export interface ExecuteGoogleCreateArgs {
+    kind: 'event' | 'task';
+    payload: object;
+    calendarId?: string;
+    tasklist?: string;
+    accountId?: string;
+    confirmed?: boolean;
+}
+
+/**
+ * 落写：confirmed !== true 直接抛 GOOGLE_NOT_CONFIRMED，且不发起任何 fetch；
+ * 为 true 才调 W3（event → createGoogleEvent，task → createGoogleTask）。
+ * accountId 缺席时取勾选首个账号（Task 9 口径）；上游 401 体（含 REAUTH_REQUIRED）
+ * 转 REAUTH_REQUIRED 结构化错（Task 9 口径；W3 只透传 .json()，状态码看不到，
+ * 这里按响应体 error 字段识别）。
+ */
+export async function executeGoogleCreate(
+    ctx: AgenticToolCtx,
+    args: ExecuteGoogleCreateArgs,
+): Promise<any> {
+    void ctx;
+    if (args.confirmed !== true) {
+        throw new Error('GOOGLE_NOT_CONFIRMED: 须先 propose 并经用户确认后再 execute，本次未写入');
+    }
+    const selection = readGoogleSelection();
+    const accountId = args.accountId ?? selection[0].accountId;
+    let out: any;
+    if (args.kind === 'event') {
+        const calendarId = args.calendarId ?? selection[0].calendarId;
+        out = await createGoogleEvent({ accountId, calendarId, event: args.payload });
+    } else if (args.kind === 'task') {
+        const tasklist = args.tasklist ?? '@default';
+        out = await createGoogleTask({ accountId, tasklist, task: args.payload });
+    } else {
+        throw new Error(`GOOGLE_MISSING_FIELD: 未知 kind ${(args as { kind: unknown }).kind}，只支持 event/task`);
+    }
+    if (out?.error === 'REAUTH_REQUIRED') {
+        throw new Error('GOOGLE_REAUTH_REQUIRED: Google 授权过期，去设置页重新授权');
+    }
+    return out;
 }

@@ -187,4 +187,12 @@ describe('backup secrets redaction', () => {
     expect(data.realtimeConfig.xhsMcpConfig.bridgeToken).toBe('');
     expect(hasBackupSecrets(data)).toBe(false);
   });
+
+  it('redacts the google bridge token in googleLocal but keeps the bridge url', () => {
+    const data: any = { googleLocal: { 'aetheros.google.bridgeToken': 'T', 'aetheros.google.bridgeUrl': 'http://127.0.0.1:8839' } };
+    expect(stripBackupSecrets(data)).toBe(true);
+    expect(data.googleLocal['aetheros.google.bridgeToken']).toBe('');
+    expect(data.googleLocal['aetheros.google.bridgeUrl']).toBe('http://127.0.0.1:8839');
+    expect(hasBackupSecrets(data)).toBe(false);
+  });
 });

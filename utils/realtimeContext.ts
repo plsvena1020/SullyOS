@@ -38,6 +38,8 @@ import {
     type NewsItem,
 } from './realtimeWorldCore';
 import { getLocalDateKey } from './localDate';
+import { googleBridgeFetch } from './googleBridge';
+import { normalizeGoogleEvents, normalizeGoogleTasks } from './googleCalendar';
 
 // 两份环境无关叶子，amsg worker 共用同一份，这里的 Manager 方法委托过去；
 // 类型与常量原样 re-export，既有 import 路径不用改：
@@ -72,6 +74,7 @@ export const defaultRealtimeConfig: RealtimeConfig = {
     feishuAppSecret: '',
     feishuBaseId: '',
     feishuTableId: '',
+    googleEnabled: false,
     xhsEnabled: false,
     xhsMcpConfig: {
         enabled: false,
@@ -539,6 +542,116 @@ export const RealtimeContextManager = {
     performSearch: async (query: string, apiKey: string): Promise<{ success: boolean; results: SearchResult[]; message: string }> => {
         return performSearchCore(query, apiKey);
     }
+};
+
+// ============================================
+// Google 日历只读叠加（经 Task 5 桥接客户端，只读）
+// ============================================
+
+const GOOGLE_ENABLED_KEY = 'aetheros.google.enabled';
+const GOOGLE_SELECTED_KEY = 'aetheros.google.selectedCalendars';
+
+export const GoogleManager = {
+
+    /**
+     * 近期摘要（char 被动注入 volatile 槽位用）：未来 3 天事件（标题加日期/时刻）
+     * 加逾期未完待办（标题加 due），不含正文。开关未开、无勾选、取数失败一律
+     * 回空字符串，不炸整条 prompt（照抄既有各 Promise 的 catch 风格）。
+     */
+    getUpcomingDigest: async (
+        config: RealtimeConfig,
+        charTz: string | undefined,
+        todayKey: string,
+        includeClock: boolean = true,
+    ): Promise<string> => {
+        try {
+            // localStorage 为唯一开关（config.googleEnabled 生产无写入方，仅保留位）。
+            let enabled = false;
+            let selected: string[] = [];
+            try {
+                enabled = localStorage.getItem(GOOGLE_ENABLED_KEY) === '1';
+                const parsed = JSON.parse(localStorage.getItem(GOOGLE_SELECTED_KEY) || '[]');
+                if (Array.isArray(parsed)) selected = parsed.filter((x): x is string => typeof x === 'string');
+            } catch { return ''; }
+            if (!enabled || selected.length === 0) return '';
+            // 勾选形如 `accountId::calendarId`（Task 7 已验证形状），账号 id 取前缀。
+            const byAccount = new Map<string, string[]>();
+            for (const key of selected) {
+                const sep = key.indexOf('::');
+                if (sep < 0) continue;
+                const accountId = key.slice(0, sep);
+                const calendarId = key.slice(sep + 2);
+                if (!accountId || !calendarId) continue;
+                const arr = byAccount.get(accountId) || [];
+                if (!arr.includes(calendarId)) arr.push(calendarId);
+                byAccount.set(accountId, arr);
+            }
+            const accountIds = [...byAccount.keys()];
+            if (accountIds.length === 0) return '';
+            const dayMs = 86400000;
+            const todayMs = Date.parse(todayKey + 'T00:00:00');
+            if (Number.isNaN(todayMs)) return '';
+            const endKey = new Date(todayMs + 3 * dayMs).toISOString().slice(0, 10);
+            const timeMin = new Date(todayMs).toISOString();
+            const timeMax = new Date(todayMs + 3 * dayMs).toISOString();
+            const fetchEvents = async (accountId: string, calendarId: string): Promise<any[]> => {
+                try {
+                    const res = await googleBridgeFetch(`/api/events?calendarId=${encodeURIComponent(calendarId)}&timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}`, { method: 'GET', headers: { 'X-Google-Account': accountId } });
+                    if (!res.ok) return [];
+                    const body = await res.json();
+                    return Array.isArray(body?.items) ? body.items : [];
+                } catch { return []; }
+            };
+            const fetchTasks = async (accountId: string): Promise<any[]> => {
+                try {
+                    const res = await googleBridgeFetch(`/api/tasks?tasklist=${encodeURIComponent('@default')}`, { method: 'GET', headers: { 'X-Google-Account': accountId } });
+                    if (!res.ok) return [];
+                    const body = await res.json();
+                    return Array.isArray(body?.items) ? body.items : [];
+                } catch { return []; }
+            };
+            const [eventLists, taskLists] = await Promise.all([
+                Promise.all(accountIds.flatMap(accountId => (byAccount.get(accountId) || []).map(calendarId => fetchEvents(accountId, calendarId)))),
+                Promise.all(accountIds.map(accountId => fetchTasks(accountId))),
+            ]);
+            const events = normalizeGoogleEvents(eventLists.flat())
+                .filter(e => e.title.trim().length > 0 && e.dateKey >= todayKey && e.dateKey <= endKey)
+                .sort((a, b) => a.dateKey < b.dateKey ? -1 : a.dateKey > b.dateKey ? 1 : (a.startText < b.startText ? -1 : 1));
+            const tasks = normalizeGoogleTasks(taskLists.flat())
+                .filter(t => t.title.trim().length > 0 && t.status !== 'completed' && t.status !== 'deleted' && t.dueKey != null && t.dueKey <= todayKey)
+                .sort((a, b) => (a.dueKey! < b.dueKey! ? -1 : 1));
+            if (events.length === 0 && tasks.length === 0) return '';
+            const clockOf = (startText: string): string => {
+                const m = /T(\d{2}:\d{2})/.exec(startText);
+                if (!m) return '';
+                try {
+                    if (charTz && /[zZ]|[+-]\d{2}:?\d{2}$/.test(startText)) {
+                        const d = new Date(startText);
+                        if (!Number.isNaN(d.getTime())) {
+                            return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: charTz }).format(d);
+                        }
+                    }
+                } catch { /* 回退原文切片 */ }
+                return m[1];
+            };
+            const lines: string[] = [];
+            for (const e of events) {
+                let line = `- 「${e.title}」${e.dateKey}`;
+                const clock = includeClock ? clockOf(e.startText) : '';
+                if (clock) line += ` ${clock}`;
+                lines.push(line);
+            }
+            for (const t of tasks) {
+                lines.push(`- 「${t.title}」到期 ${t.dueKey}`);
+            }
+            return `
+### 【Google 日程 · 近期】
+${lines.join('\n')}
+`;
+        } catch {
+            return '';
+        }
+    },
 };
 
 // ============================================
