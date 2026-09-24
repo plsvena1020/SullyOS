@@ -10,7 +10,8 @@
     "build:workers": "node scripts/build-workers.mjs",
     "test": "vitest",
     "test:run": "vitest run",
-    "dev:sync": "node scripts/watch-sync.mjs"
+    "dev:sync": "node scripts/watch-sync.mjs",
+    "deploy:vps": "node scripts/deploy-vps.mjs"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "1.0.1",
