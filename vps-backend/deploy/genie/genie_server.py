@@ -11,6 +11,7 @@
 预热必须走 HTTP 自 POST：Genie 2.0.2 的 Server.py 与 Internal.py 各有一份
 模块级 _reference_audios，函数式 API 写的那份不是 /tts 校验的那份。
 """
+import http.client
 import json
 import os
 import re
@@ -52,6 +53,9 @@ _SYNTH_LOCK = threading.Lock()
 _READY = threading.Event()
 _PENDING_TASKS = 0
 _PENDING_LOCK = threading.Lock()
+_POISON_LOCK = threading.Lock()
+_POISONED = False
+_STOP_LOCK = threading.Lock()
 
 
 class SpeakBusy(Exception):
@@ -80,6 +84,10 @@ class TooManyChunks(Exception):
 
 class ReferenceMissing(Exception):
     """参考音频缺失。"""
+
+
+class ServiceUnready(Exception):
+    """服务不可用：已毒化，需要重启进程才能恢复。"""
 
 
 def _load_emotions() -> dict:
@@ -200,14 +208,18 @@ def _tts_completed_pcm(chunk: str, timeout: float) -> bytes:
             )
             if time.monotonic() >= call_deadline:
                 raise SynthesisTimeout()
-        except (urllib.error.URLError, TimeoutError, SynthesisTimeout):
-            # 客户端断开不会取消 Genie 的后台任务；必须先停掉再让上层释放锁，
-            # 否则下一个请求会重置 TTSPlayer 全局队列，复现最初的挂死+垃圾音频。
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            SynthesisTimeout,
+            http.client.HTTPException,
+            ConnectionError,
+        ):
+            # 连接侧与读侧失败（IncompleteRead / RemoteDisconnected / ConnectionReset 等）
+            # 都不会取消 Genie 的后台任务：必须先停掉再让上层释放锁，否则下一个请求
+            # 会重置 TTSPlayer 全局队列，复现最初的挂死+垃圾音频。
             # _genie_post 会把 socket 超时转换成 SynthesisTimeout，因此也需在此接住。
-            try:
-                genie.stop()
-            except Exception:
-                pass
+            _stop_genie_safely("tts transport failure")
             raise
         if not os.path.isfile(path) or os.path.getsize(path) <= 44:
             raise RuntimeError("incomplete genie output")
@@ -234,6 +246,18 @@ def _tts_completed_pcm(chunk: str, timeout: float) -> bytes:
 
 def _synthesize(text: str, emotion: str) -> tuple[bytes, str]:
     deadline = time.monotonic() + SYNTH_TIMEOUT
+
+    finished = threading.Event()
+
+    def _watchdog() -> None:
+        # 等到 deadline 才动手；finished 先被置位说明本次已正常结束，不能误伤下一个请求。
+        if finished.wait(SYNTH_TIMEOUT):
+            return
+        print("[genie] deadline reached; stopping Genie", file=sys.stderr, flush=True)
+        _stop_genie_safely("deadline reached")
+
+    watchdog = threading.Thread(target=_watchdog, daemon=True)
+    watchdog.start()
 
     def remaining(cap: float) -> float:
         left = deadline - time.monotonic()
@@ -280,8 +304,15 @@ def _synthesize(text: str, emotion: str) -> tuple[bytes, str]:
         if exc.code == 404:
             raise ReferenceMissing() from exc
         if exc.code in (408, 504):
+            _stop_genie_safely(f"Genie HTTP {exc.code}")
             raise SynthesisTimeout() from exc
         raise RuntimeError(f"Genie HTTP {exc.code}") from exc
+    except SynthesisTimeout:
+        # remaining() 在 /tts 返回后抛出时，Genie 可能仍在收尾：统一先停再上抛。
+        _stop_genie_safely("SynthesisTimeout")
+        raise
+    finally:
+        finished.set()
 
 
 def _acquire_slot() -> bool:
@@ -299,7 +330,46 @@ def _release_slot() -> None:
         _PENDING_TASKS = max(0, _PENDING_TASKS - 1)
 
 
+def _mark_poisoned(reason: str) -> None:
+    """标记 TTSPlayer 状态不可信：此后不再放行任何请求，直到进程重启。"""
+    global _POISONED
+    with _POISON_LOCK:
+        _POISONED = True
+    print(f"[genie] POISONED: {reason}", file=sys.stderr, flush=True)
+
+
+def _is_poisoned() -> bool:
+    with _POISON_LOCK:
+        return _POISONED
+
+
+def _stop_genie_safely(reason: str) -> bool:
+    """停掉 Genie 后台 TTS。返回 True 表示确认已停；False 表示 stop 自身失败。
+
+    只在请求线程持有 _SYNTH_LOCK 时、或看门狗线程里调用，因此绝不能去拿
+    _SYNTH_LOCK（看门狗拿不到且会死锁），只用独立的 _STOP_LOCK 串行化。
+    """
+    with _STOP_LOCK:
+        for attempt in range(1, 4):
+            try:
+                genie.stop()
+                return True
+            except Exception as exc:  # noqa: BLE001
+                print(
+                    f"[genie] genie.stop() failed (attempt {attempt}/3): {exc!r}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                time.sleep(0.5)
+    _mark_poisoned(f"genie.stop() failed: {reason}")
+    return False
+
+
 def _speak_with_guard(text: str, emotion: str) -> tuple[bytes, str]:
+    if _is_poisoned():
+        # TTSPlayer 状态不可信，放行任何请求都会重演最初的挂死+垃圾音频。
+        # 复用已锁定的 warming_up 错误码，不新增契约里的码。
+        raise ServiceUnready()
     if not _acquire_slot():
         raise SpeakBusy()
     try:
@@ -340,6 +410,8 @@ async def speak_endpoint(request: Request):
         wav, resolved = await run_in_threadpool(_speak_with_guard, text, emotion)
     except SpeakBusy:
         return JSONResponse(status_code=503, content={"error": "busy"})
+    except ServiceUnready:
+        return JSONResponse(status_code=503, content={"error": "warming_up"})
     except LockTimeout:
         return JSONResponse(status_code=504, content={"error": "lock_timeout"})
     except SynthesisTimeout:

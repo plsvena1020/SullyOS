@@ -7,6 +7,7 @@
 import json
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -183,6 +184,63 @@ def main():
                           {"text": SENTENCE, "emotion": "sad"}])
     codes = sorted(o.status for o in outs3)
     ok &= check("triple_statuses", codes == [200, 200, 503], f"codes={codes}")
+
+    # 7 stop 自身失败必须毒化服务：之后所有请求 503 warming_up，直到进程重启
+    def poison_blocks_new_requests():
+        gs._POISONED = False
+        orig_stop = gs.genie.stop
+
+        def boom():
+            raise RuntimeError("stop unavailable")
+
+        gs.genie.stop = boom
+        try:
+            stopped = gs._stop_genie_safely("test")
+            poisoned = gs._is_poisoned()
+            raised = _raises(
+                lambda: gs._speak_with_guard("测试", "calm"), gs.ServiceUnready
+            )
+            return (not stopped) and poisoned and raised
+        finally:
+            gs.genie.stop = orig_stop
+            gs._POISONED = False
+
+    ok &= check("stop_failure_poisons_service", poison_blocks_new_requests(), "")
+
+    # 8 看门狗必须真的在 deadline 时刻打断阻塞的读，而不是等主线程自己返回后才停
+    def watchdog_interrupts_before_post_returns():
+        orig_post = gs._genie_post
+        orig_timeout = gs.SYNTH_TIMEOUT
+        orig_stop = gs.genie.stop
+        stop_times = []
+
+        def slow_post(path, payload, timeout):
+            time.sleep(3.0)
+            return b""
+
+        def rec_stop():
+            stop_times.append(time.monotonic())
+
+        gs._genie_post = slow_post
+        gs.genie.stop = rec_stop
+        gs.SYNTH_TIMEOUT = 1.0
+        gs._POISONED = False
+        try:
+            started = time.monotonic()
+            raised = _raises(
+                lambda: gs._synthesize("测试。", "calm"), gs.SynthesisTimeout
+            )
+            elapsed = time.monotonic() - started
+            # 主线程在 slow_post 里要睡满 3 秒；若 stop 发生在 2 秒前，
+            # 只可能是看门狗在 deadline 触发的。
+            return raised and bool(stop_times) and stop_times[0] - started < 2.0
+        finally:
+            gs._genie_post = orig_post
+            gs.genie.stop = orig_stop
+            gs.SYNTH_TIMEOUT = orig_timeout
+            gs._POISONED = False
+
+    ok &= check("watchdog_stops_at_deadline", watchdog_interrupts_before_post_returns(), "")
 
     print("ALL_PASS" if ok else "HAS_FAILURE", flush=True)
     return 0 if ok else 1
