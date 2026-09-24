@@ -8,11 +8,11 @@
 // 所以 keys 必须圈定 blobRef 自己的 id 命名空间——否则 GC 会把用户的模型当孤儿删掉。
 // （其他三族 id 都含 - 或 :，恰好也被 SDK 的字符集安全阀拦下，但那是兜底，不能当设计依赖。）
 
-import { createBlobStore, DEFAULT_PREFIX } from '@rei-standard/blob-store';
+import { createBlobStore } from '@rei-standard/blob-store';
 import { DB } from './db';
 
 export const blobStore = createBlobStore({
-    prefix: DEFAULT_PREFIX,
+    prefix: 'blobref:',
     adapter: {
         get: (id) => DB.getBlobAsset(id),
         put: (id, blob) => DB.putBlobAsset(id, blob),
