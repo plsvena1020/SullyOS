@@ -309,3 +309,67 @@ describe('上游发完终止事件但不关连接', () => {
         expect(text).toContain('data: [DONE]');
     });
 });
+
+describe('POST /v1/tts', () => {
+    // checkAuth 读 env.AMSG_CLIENT_TOKEN（index.js:61-68）
+    const ttsEnv = { AMSG_CLIENT_TOKEN: 'tok' };
+    const postTts = (
+        body: unknown,
+        headers: Record<string, string> = { 'x-client-token': 'tok' },
+    ) => worker.fetch(
+        new Request(`${AGENT}/agent/v1/tts`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...headers },
+            body: JSON.stringify(body),
+        }),
+        ttsEnv,
+        { waitUntil: () => {} },
+    );
+
+    it('鉴权失败时拒绝', async () => {
+        const res = await postTts({ text: 'hi' }, {});
+        expect(res.status).toBe(403);
+    });
+
+    it('把 body 原样转发到适配层并回传音频', async () => {
+        const wav = new Uint8Array([0x52, 0x49, 0x46, 0x46, 1, 2, 3, 4]).buffer;
+        const calls: Array<{ url: string; init: any }> = [];
+        vi.stubGlobal('fetch', vi.fn(async (url: string, init: any) => {
+            calls.push({ url: String(url), init });
+            return new Response(wav, { status: 200, headers: { 'content-type': 'audio/wav' } });
+        }));
+        const res = await postTts({ text: '你好', emotion: 'happy' });
+        expect(res.status).toBe(200);
+        expect(res.headers.get('content-type')).toContain('audio/wav');
+        expect(calls[0].url).toBe('http://127.0.0.1:9882/speak');
+        expect(JSON.parse(calls[0].init.body)).toEqual({ text: '你好', emotion: 'happy' });
+    });
+
+    it('X-Genie-Resolved-Emotion 响应头在成功时被转发给浏览器', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => new Response(new ArrayBuffer(64), {
+            status: 200,
+            headers: {
+                'content-type': 'audio/wav',
+                'X-Genie-Resolved-Emotion': 'calm',
+            },
+        })));
+        const res = await postTts({ text: 'x' });
+        expect(res.status).toBe(200);
+        expect(res.headers.get('x-genie-resolved-emotion')).toBe('calm');
+    });
+
+    it('503 忙 原样透传', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => new Response('{"error":"busy"}', {
+            status: 503, headers: { 'content-type': 'application/json' },
+        })));
+        const res = await postTts({ text: 'x' });
+        expect(res.status).toBe(503);
+    });
+
+    it('适配层不可达时返回 502 而不是抛异常', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('ECONNREFUSED'); }));
+        const res = await postTts({ text: 'x' });
+        expect(res.status).toBe(502);
+    });
+});
+
