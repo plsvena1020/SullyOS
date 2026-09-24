@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 export const PORT = Number(process.env.VOICE_RELAY_PORT || 8839);
 const HOST = '127.0.0.1';
 
-const ALLOW_HEADERS = ['Authorization', 'xi-api-key', 'model', 'X-MiniMax-Region', 'X-MiniMax-Group-Id', 'Content-Type', 'Accept'];
+const ALLOW_HEADERS = ['Authorization', 'xi-api-key', 'model', 'X-MiniMax-Region', 'X-MiniMax-Group-Id', 'X-MiniMax-API-Key', 'Content-Type', 'Accept'];
 
 export function applyCors(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
