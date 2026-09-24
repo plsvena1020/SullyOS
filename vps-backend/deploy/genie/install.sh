@@ -6,10 +6,26 @@ SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST=/opt/genie-tts
 UNIT=/etc/systemd/system/genie-tts.service
 
+install_if_needed() {
+  local mode="$1"
+  local source="$2"
+  local target="$3"
+  local source_abs
+  local target_abs
+
+  source_abs="$(readlink -f "$source")"
+  target_abs="$(readlink -f "$target")"
+  if [ "$source_abs" = "$target_abs" ]; then
+    chmod "$mode" "$target"
+    return 0
+  fi
+  install -m "$mode" "$source" "$target"
+}
+
 install -d -m 0755 "$DEST/refs"
-install -m 0644 "$SRC_DIR/genie_server.py" "$DEST/genie_server.py"
-install -m 0644 "$SRC_DIR/emotions.json"   "$DEST/refs/emotions.json"
-install -m 0644 "$SRC_DIR/test_speak.py"   "$DEST/test_speak.py"
+install_if_needed 0644 "$SRC_DIR/genie_server.py" "$DEST/genie_server.py"
+install_if_needed 0644 "$SRC_DIR/emotions.json" "$DEST/refs/emotions.json"
+install_if_needed 0644 "$SRC_DIR/test_speak.py" "$DEST/test_speak.py"
 
 grep -q 'genie_server.py' "$UNIT" || {
   echo "ERROR: $UNIT 的 ExecStart 未指向 genie_server.py" >&2
