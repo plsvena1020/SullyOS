@@ -61,12 +61,14 @@ def sane(body, low=1.0, high=3.0):
     return low <= dur <= high
 
 
-def _raises(fn, expected: str) -> bool:
+def _raises(fn, expected_type) -> bool:
     try:
         fn()
         return False
-    except ValueError as e:
-        return str(e) == expected
+    except ValueError:
+        return False
+    except expected_type:
+        return True
 
 
 def run_threaded(payloads):
@@ -108,7 +110,11 @@ def main():
     # 3 短句 + 长段无标点：必须切成两块而不是误判超长。
     #    先直接单测算法本身，否则"只检查 HTTP 非空"会假绿。
     sys.path.insert(0, "/opt/genie-tts")
-    from genie_server import _split_text as split_text
+    from genie_server import (
+        ChunkTooLong,
+        TooManyChunks,
+        _split_text as split_text,
+    )
 
     sample = "好的。" + "啊" * 100
     parts = split_text(sample)
@@ -119,7 +125,18 @@ def main():
     )
     ok &= check(
         "split_no_punctuation_300_raises",
-        _raises(lambda: split_text("啊" * 300), "chunk_too_long"),
+        _raises(lambda: split_text("啊" * 300), ChunkTooLong),
+        "",
+    )
+    ok &= check(
+        "split_typed_error_not_value_error",
+        _raises(lambda: split_text("啊" * 300), ChunkTooLong),
+        "",
+    )
+    # 30 个 61 字分片可稳定触发第 21 块；简报中的 200 字前缀会先命中 chunk_too_long。
+    ok &= check(
+        "split_too_many_chunks_raises",
+        _raises(lambda: split_text(("啊" * 60 + "。") * 30), TooManyChunks),
         "",
     )
 

@@ -14,6 +14,7 @@
 import json
 import os
 import re
+import sys
 import tempfile
 import threading
 import time
@@ -65,6 +66,22 @@ class SynthesisTimeout(Exception):
     """合成本身超时（含任一分块）。"""
 
 
+class EmptyText(Exception):
+    """输入文本为空。"""
+
+
+class ChunkTooLong(Exception):
+    """单个文本分块超过长度限制。"""
+
+
+class TooManyChunks(Exception):
+    """文本分块数量超过上限。"""
+
+
+class ReferenceMissing(Exception):
+    """参考音频缺失。"""
+
+
 def _load_emotions() -> dict:
     with open(os.path.join(REFS_DIR, "emotions.json"), "r", encoding="utf-8") as fh:
         return json.load(fh)
@@ -96,26 +113,29 @@ def _split_text(text: str) -> list[str]:
     """
     text = text.strip()
     if not text:
-        raise ValueError("empty")
+        raise EmptyText()
 
-    parts = re.findall(
+    matches = re.finditer(
         r"[^。！？；!?;\n]*[。！？；!?;\n]|[^。！？；!?;\n]+$", text
     )
-    if not parts:
-        raise ValueError("empty")
 
     chunks: list[str] = []
     buf = ""
+    found = False
 
     def flush() -> None:
         nonlocal buf
         if buf.strip():
+            if len(chunks) >= CHUNK_MAX_COUNT:
+                raise TooManyChunks()
             chunks.append(buf)
         buf = ""
 
-    for part in parts:
+    for m in matches:
+        part = m.group(0)
+        found = True
         if len(part) > CHUNK_MAX_CHARS:
-            raise ValueError("chunk_too_long")
+            raise ChunkTooLong()
         # 目标 60 字：单段本身就超过目标（长句无标点）时也要先 flush，
         # 否则 "好的。"+100字 会被合成一个 103 字块。
         if buf and (
@@ -129,10 +149,10 @@ def _split_text(text: str) -> list[str]:
             flush()
     flush()
 
-    if not chunks:
-        raise ValueError("empty")
+    if not found or not chunks:
+        raise EmptyText()
     if len(chunks) > CHUNK_MAX_COUNT:
-        raise ValueError("too_many_chunks")
+        raise TooManyChunks()
     return chunks
 
 
@@ -165,24 +185,41 @@ def _tts_completed_pcm(chunk: str, timeout: float) -> bytes:
     """
     fd, path = tempfile.mkstemp(prefix="genie-chunk-", suffix=".wav")
     os.close(fd)
+    call_deadline = time.monotonic() + timeout
     try:
-        _genie_post(
-            "/tts",
-            {
-                "character_name": CHARACTER,
-                "text": chunk,
-                "split_sentence": False,
-                "save_path": path,
-            },
-            timeout=timeout,
-        )
+        try:
+            _genie_post(
+                "/tts",
+                {
+                    "character_name": CHARACTER,
+                    "text": chunk,
+                    "split_sentence": False,
+                    "save_path": path,
+                },
+                timeout=timeout,
+            )
+            if time.monotonic() >= call_deadline:
+                raise SynthesisTimeout()
+        except (urllib.error.URLError, TimeoutError, SynthesisTimeout):
+            # 客户端断开不会取消 Genie 的后台任务；必须先停掉再让上层释放锁，
+            # 否则下一个请求会重置 TTSPlayer 全局队列，复现最初的挂死+垃圾音频。
+            # _genie_post 会把 socket 超时转换成 SynthesisTimeout，因此也需在此接住。
+            try:
+                genie.stop()
+            except Exception:
+                pass
+            raise
         if not os.path.isfile(path) or os.path.getsize(path) <= 44:
             raise RuntimeError("incomplete genie output")
         with wave.open(path, "rb") as wf:
             actual = (wf.getnchannels(), wf.getsampwidth(), wf.getframerate())
             if actual != (CHANNELS, BYTES_PER_SAMPLE, SAMPLE_RATE):
                 raise RuntimeError("unexpected genie wav format")
-            pcm = wf.readframes(wf.getnframes())
+            frames = wf.getnframes()
+            expected = frames * wf.getnchannels() * wf.getsampwidth()
+            pcm = wf.readframes(frames)
+            if expected <= 0 or len(pcm) != expected:
+                raise RuntimeError("truncated genie wav")
         if not pcm:
             raise RuntimeError("empty genie pcm")
         return pcm
@@ -191,15 +228,11 @@ def _tts_completed_pcm(chunk: str, timeout: float) -> bytes:
             os.remove(path)
         except FileNotFoundError:
             pass
+        except OSError:
+            pass
 
 
 def _synthesize(text: str, emotion: str) -> tuple[bytes, str]:
-    resolved, entry = _resolve_emotion(emotion)
-    wav_path = os.path.join(REFS_DIR, entry["wav"])
-    if not os.path.isfile(wav_path):
-        raise FileNotFoundError(wav_path)
-
-    # 整次合成共用一个 deadline：分块最多 20 次，不能变成 20 × 120s。
     deadline = time.monotonic() + SYNTH_TIMEOUT
 
     def remaining(cap: float) -> float:
@@ -208,24 +241,47 @@ def _synthesize(text: str, emotion: str) -> tuple[bytes, str]:
             raise SynthesisTimeout()
         return min(cap, left)
 
-    # 每次都重设参考：去掉跨进程缓存失效点，代价是每次多一次本地 HTTP（<50ms）。
-    _genie_post(
-        "/set_reference_audio",
-        {
-            "character_name": CHARACTER,
-            "audio_path": wav_path,
-            "audio_text": entry["text"],
-            "language": LANGUAGE,
-        },
-        timeout=remaining(30.0),
-    )
+    try:
+        resolved, entry = _resolve_emotion(emotion)
+        wav_path = os.path.join(REFS_DIR, entry["wav"])
+        if not os.path.isfile(wav_path):
+            raise FileNotFoundError(wav_path)
+        remaining(0.001)
 
-    pcm = bytearray()
-    for chunk in _split_text(text):
-        pcm.extend(_tts_completed_pcm(chunk, timeout=remaining(SYNTH_TIMEOUT)))
-    if not pcm:
-        raise RuntimeError("empty pcm")
-    return _wrap_pcm_as_wav(bytes(pcm)), resolved
+        # 每次都重设参考：去掉跨进程缓存失效点，代价是每次多一次本地 HTTP（<50ms）。
+        _genie_post(
+            "/set_reference_audio",
+            {
+                "character_name": CHARACTER,
+                "audio_path": wav_path,
+                "audio_text": entry["text"],
+                "language": LANGUAGE,
+            },
+            timeout=remaining(30.0),
+        )
+        remaining(0.001)
+
+        remaining(0.001)
+        chunks = _split_text(text)
+        remaining(0.001)
+        pcm = bytearray()
+        for chunk in chunks:
+            chunk_pcm = _tts_completed_pcm(chunk, timeout=remaining(SYNTH_TIMEOUT))
+            remaining(0.001)
+            pcm.extend(chunk_pcm)
+            remaining(0.001)
+        if not pcm:
+            raise RuntimeError("empty pcm")
+        remaining(0.001)
+        wav = _wrap_pcm_as_wav(bytes(pcm))
+        remaining(0.001)
+        return wav, resolved
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise ReferenceMissing() from exc
+        if exc.code in (408, 504):
+            raise SynthesisTimeout() from exc
+        raise RuntimeError(f"Genie HTTP {exc.code}") from exc
 
 
 def _acquire_slot() -> bool:
@@ -288,12 +344,18 @@ async def speak_endpoint(request: Request):
         return JSONResponse(status_code=504, content={"error": "lock_timeout"})
     except SynthesisTimeout:
         return JSONResponse(status_code=504, content={"error": "synth_timeout"})
-    except ValueError as exc:
-        code = str(exc)
-        return JSONResponse(status_code=400 if code == "empty" else 413, content={"error": code})
+    except EmptyText:
+        return JSONResponse(status_code=400, content={"error": "empty"})
+    except ChunkTooLong:
+        return JSONResponse(status_code=413, content={"error": "chunk_too_long"})
+    except TooManyChunks:
+        return JSONResponse(status_code=413, content={"error": "too_many_chunks"})
+    except ReferenceMissing:
+        return JSONResponse(status_code=500, content={"error": "reference_missing"})
     except FileNotFoundError:
         return JSONResponse(status_code=500, content={"error": "reference_missing"})
-    except Exception:
+    except Exception as exc:
+        print(f"[genie] synthesis failed: {exc}", file=sys.stderr, flush=True)
         return JSONResponse(status_code=500, content={"error": "synth_failed"})
 
     return Response(
@@ -311,16 +373,22 @@ def _warmup() -> None:
                 character_name=CHARACTER, onnx_model_dir=MODEL_DIR, language=LANGUAGE
             )
             _, entry = _resolve_emotion("calm")
+            ref_path = os.path.join(REFS_DIR, entry["wav"])
+            if not os.path.isfile(ref_path):
+                raise FileNotFoundError(ref_path)
             _genie_post(
                 "/set_reference_audio",
                 {
                     "character_name": CHARACTER,
-                    "audio_path": os.path.join(REFS_DIR, entry["wav"]),
+                    "audio_path": ref_path,
                     "audio_text": entry["text"],
                     "language": LANGUAGE,
                 },
                 timeout=30.0,
             )
+            probe_pcm = _tts_completed_pcm("你好。", timeout=60.0)
+            if not probe_pcm:
+                raise RuntimeError("empty warmup probe pcm")
             _READY.set()
             print(f"[genie] warmup ok on attempt {attempt}", flush=True)
             return
