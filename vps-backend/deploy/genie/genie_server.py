@@ -183,6 +183,8 @@ def _abort_inflight_response() -> None:
     只 close() 唤醒不了另一个线程里阻塞的 recv：内核不会因为同一进程里
     另一个线程 close(fd) 就立刻把那次 recv 叫醒。必须先 shutdown(SHUT_RDWR)，
     让对端 FIN/RST 到达、那次读返回错误或 0 字节，再 close 释放 fd。
+    shutdown 失败也不意味着请求会挂住：读仍受 settimeout(resp_left) 约束，
+    且调用方随后照样会调 _stop_genie_safely()，TTSPlayer 状态不会被漏掉。
     """
     with _INFLIGHT_LOCK:
         sock = _INFLIGHT_SOCK
@@ -207,6 +209,10 @@ def _genie_post(path: str, payload: dict, timeout: float) -> bytes:
     }
     deadline = time.monotonic() + timeout
     conn = http.client.HTTPConnection(HOST, PORT, timeout=timeout)
+    # 边界说明：timeout 参数会经 socket.create_connection 应用到 sock.connect()，
+    # 调用方传的是 remaining(cap)，由本次 deadline 派生。所以建连阶段和读响应头
+    # 阶段本来就受 socket timeout 约束、不会越过 deadline；看门狗的 socket abort
+    # 是在此之上的额外强制打断，不是唯一的边界。
     try:
         conn.connect()
         # 建连后立刻登记底层 socket：连响应头都还没到的阶段也能被 deadline 打断。
@@ -365,8 +371,8 @@ def _synthesize(text: str, emotion: str) -> tuple[bytes, str]:
         wav = _wrap_pcm_as_wav(bytes(pcm))
         remaining(0.001)
         return wav, resolved
-    except http.client.HTTPException as exc:
-        code = getattr(exc, "code", None)
+    except _GenieHTTPError as exc:
+        code = exc.code
         if code == 404:
             raise ReferenceMissing() from exc
         if code in (408, 504):
@@ -379,6 +385,15 @@ def _synthesize(text: str, emotion: str) -> tuple[bytes, str]:
         # 但若看门狗已经接手停机，就不要跟它抢 _STOP_LOCK。
         if not _DEADLINE_FIRED.is_set():
             _stop_genie_safely("SynthesisTimeout")
+        raise
+    except (ConnectionError, http.client.HTTPException) as exc:
+        # 看门狗 abort socket 后，主线程的读会抛这些传输异常。deadline 已触发时，
+        # 它们就是超时的一部分，必须映射成 synth_timeout；否则会落到端点的兜底
+        # 分支变成 500 synth_failed，破坏调用方依赖的错误码契约。
+        # 注意本分支必须排在 except _GenieHTTPError 之后：_GenieHTTPError 是
+        # http.client.HTTPException 的子类，顺序反了会把 404/504 映射吃掉。
+        if _DEADLINE_FIRED.is_set():
+            raise SynthesisTimeout() from exc
         raise
     finally:
         finished.set()

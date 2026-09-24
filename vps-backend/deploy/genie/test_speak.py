@@ -211,7 +211,8 @@ def main():
         all(
             o.status == 200 or (o.status == 504 and o.error == "lock_timeout")
             for o in admitted
-        ),
+        )
+        and sum(o.status == 200 for o in admitted) >= 1,
         f"codes={codes} admitted={[(o.status, o.error) for o in admitted]}",
     )
     ok &= check(
@@ -229,8 +230,8 @@ def main():
     long_codes = sorted(o.status for o in outs_long)
     ok &= check(
         "long_text_lock_timeout",
-        long_codes == [200, 503, 504]
-        and any(o.error == "lock_timeout" for o in outs_long),
+        sorted((o.status, o.error) for o in outs_long)
+        == [(200, None), (503, "busy"), (504, "lock_timeout")],
         f"codes={long_codes} errors={[(o.status, o.error) for o in outs_long]}",
     )
 
