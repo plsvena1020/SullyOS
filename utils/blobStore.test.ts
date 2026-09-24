@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { DB } from './db';
+import { blobStore } from './blobStore';
 
 // fake-indexeddb 已由 test-setup.ts 注入。blob_assets 是混用表（blobRef 图片之外还有
 // VRM 模型、Live2D 运行时缓存、遗留陪伴语音），listBlobAssetIds 是 GC 的世界观边界：
@@ -19,5 +20,11 @@ describe('DB.listBlobAssetIds（blobRef 命名空间过滤）', () => {
 
         const ids = await DB.listBlobAssetIds();
         expect([...ids].sort()).toEqual(['b_bbb', 'img_aaa']);
+    });
+});
+
+describe('blobStore singleton', () => {
+    it('pins the blobref namespace prefix', () => {
+        expect(blobStore.prefix).toBe('blobref:');
     });
 });
