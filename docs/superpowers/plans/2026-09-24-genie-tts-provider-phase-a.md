@@ -24,7 +24,7 @@
 - 不引入新依赖
 - commit message 用英文
 - 动过含中文文件后跑 `pnpm vitest run utils/mojibakeGuard.test.ts` + U+FFFD 字节扫
-- 阶段 A 完成时前端仍只显示三家 provider，这是**预期状态**
+- 阶段 A 完成时设置页仍显示原有 provider 四选一，**没有任何可见变化**，这是预期状态
 
 ## 关键实测事实（执行时不要重新调查，也不要写出会失败的断言）
 
@@ -64,11 +64,10 @@
 | `vps-backend/deploy/genie/emotions.json` | 情绪 → `{wav, text}`，7 条 |
 | `vps-backend/deploy/genie/install.sh` | 装到 `/opt/genie-tts`、更新 unit、重启、带超时的自检 |
 | `vps-backend/deploy/genie/test_speak.py` | 适配层冒烟测试，覆盖 Review Focus 1/2/3/4/5/8 |
-| `types.ts` | `TtsProvider` 加 `'genie'`；`voicePrompts` 加 `genie?` |
-| `utils/ttsProvider.ts` | provider 归一化与提示词 override 的 genie 分支 |
-| `utils/genieTts.ts` | **新建**。浏览器客户端 + 文本清洗器 `cleanTextForTtsGenie` |
+| `types.ts` | `APIConfig` 加 3 个配置字段（**不改** `TtsProvider`、**不改** `voicePrompts`） |
+| `utils/genieTts.ts` | **新建**。浏览器客户端 + 4 个导出：`isGenieVoiceEnabled`、`resolveGenieEmotion`、`cleanTextForTtsGenie`、`synthesizeSpeechGenieDetailed` |
 | `utils/genieTts.test.ts` | **新建** |
-| `utils/ttsRouter.ts` | 7 处分发点；`providerUsesRawVoiceMarkup` 改白名单；`SynthOptions` 加 export |
+| `utils/ttsRouter.ts` | 7 处分流，全部读 `isGenieVoiceEnabled`；`providerUsesRawVoiceMarkup` 改判定；`SynthOptions` 加 export |
 | `utils/ttsRouter.test.ts` | **新建**（当前不存在） |
 | `worker/main-agent/src/index.js` | 加 `ttsProxy`（无状态转发） |
 | `worker/main-agent/src/index.test.ts` | 加 `/v1/tts` 测试 |
@@ -641,20 +640,22 @@ journalctl -u genie-tts --since '10 minutes ago' | grep -iE 'oom|killed' || echo
 
 ---
 
-### Task 2: provider 类型、路由与浏览器客户端
+### Task 2: 配置字段、路由分流与浏览器客户端
 
 **Files:**
-- Modify: `types.ts:403`、`types.ts:446-451`
-- Modify: `utils/ttsProvider.ts:12-13`、`utils/ttsProvider.ts:59-63`
+- Modify: `types.ts`（`APIConfig` 内加 3 个字段；**不动** `TtsProvider` 第 403 行、**不动** `voicePrompts` 第 446-451 行）
 - Modify: `utils/ttsRouter.ts:28`（加 `export`）、`:31-45`、`:47-62`、`:79-87`、`:90-96`、`:99-104`、`:106-111`、`:114-115`
 - Create: `utils/genieTts.ts`、`utils/genieTts.test.ts`、`utils/ttsRouter.test.ts`
 
+**不要动**：`utils/ttsProvider.ts`（不改归一化、不加 provider 取值）。**不新增任何提示词**（见 spec §4.3）。
+
 **Interfaces:**
-- Consumes: Task 1 的 `/speak` 错误契约与响应头。
-- Produces:
-  - `TtsProvider` 新增 `'genie'`
-  - `synthesizeSpeechGenieDetailed(text, char, apiConfig, options?): Promise<TtsResult>`（从 `./genieTts` 导出）
-  - `cleanTextForTtsGenie(raw: string): string`（从 `./genieTts` 导出，`ttsRouter` 两个分支共用）
+- Consumes: Task 1 的 `/speak` 错误契约与 `X-Genie-Resolved-Emotion` 响应头。
+- Produces（全部从 `./genieTts` 导出）:
+  - `isGenieVoiceEnabled(apiConfig: APIConfig): boolean` — 语义 `apiConfig.genieVoiceEnabled !== false`
+  - `resolveGenieEmotion(options: SynthOptions | undefined, apiConfig: APIConfig): string` — 永远返回 7 个白名单之一
+  - `cleanTextForTtsGenie(raw: string): string`
+  - `synthesizeSpeechGenieDetailed(text, char, apiConfig, options?): Promise<TtsResult>`
 
 - [ ] **Step 1: 写 `utils/genieTts.test.ts`（先失败）**
 
@@ -662,7 +663,12 @@ journalctl -u genie-tts --since '10 minutes ago' | grep -iE 'oom|killed' || echo
 
 ```typescript
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { cleanTextForTtsGenie, synthesizeSpeechGenieDetailed } from './genieTts';
+import {
+  cleanTextForTtsGenie,
+  isGenieVoiceEnabled,
+  resolveGenieEmotion,
+  synthesizeSpeechGenieDetailed,
+} from './genieTts';
 
 const AGENT = 'https://agent.test';
 
@@ -676,7 +682,8 @@ function makeResponse(status: number, body: ArrayBuffer | string, contentType = 
 }
 
 describe('synthesizeSpeechGenieDetailed', () => {
-  const apiConfig = { ttsProvider: 'genie' } as any;
+  // Genie 是独立开关，不进 TtsProvider；默认开启即 undefined。
+  const apiConfig = { ttsProvider: 'minimax' } as any;
   const char = { id: 'c1' } as any;
 
   beforeEach(() => {
@@ -744,6 +751,38 @@ describe('synthesizeSpeechGenieDetailed', () => {
   });
 });
 
+describe('isGenieVoiceEnabled', () => {
+  it('undefined 视为开启（老用户升级后自动生效）', () => {
+    expect(isGenieVoiceEnabled({} as any)).toBe(true);
+  });
+  it('只有显式 false 才关闭', () => {
+    expect(isGenieVoiceEnabled({ genieVoiceEnabled: false } as any)).toBe(false);
+    expect(isGenieVoiceEnabled({ genieVoiceEnabled: true } as any)).toBe(true);
+  });
+});
+
+describe('resolveGenieEmotion', () => {
+  it('auto 模式跟随 options.emotion', () => {
+    expect(resolveGenieEmotion({ emotion: 'sad' }, {} as any)).toBe('sad');
+  });
+  it('auto 模式遇非白名单回落 calm', () => {
+    expect(resolveGenieEmotion({ emotion: 'disgusted' }, {} as any)).toBe('calm');
+    expect(resolveGenieEmotion(undefined, {} as any)).toBe('calm');
+  });
+  it('fixed 模式忽略 options.emotion，用配置值', () => {
+    expect(resolveGenieEmotion(
+      { emotion: 'sad' },
+      { genieEmotionMode: 'fixed', genieEmotion: 'angry' } as any,
+    )).toBe('angry');
+  });
+  it('fixed 模式配置值非法时回落 calm', () => {
+    expect(resolveGenieEmotion(
+      undefined,
+      { genieEmotionMode: 'fixed', genieEmotion: 'nope' } as any,
+    )).toBe('calm');
+  });
+});
+
 describe('cleanTextForTtsGenie', () => {
   it('只保留 <语音> 块内的正文', () => {
     expect(cleanTextForTtsGenie('你说真的假的？<语音 emotion="surprised">Wait, are you serious?</语音><字幕>等等……你是认真的？</字幕>'))
@@ -797,6 +836,24 @@ const ERROR_TEXT: Record<string, string> = {
   genie_unavailable: '语音服务暂时不可用',
 };
 
+/** Genie 不加进 TtsProvider 联合类型，用独立开关。undefined 视为 true，老用户自动开启。 */
+export function isGenieVoiceEnabled(apiConfig: APIConfig): boolean {
+  return apiConfig.genieVoiceEnabled !== false;
+}
+
+const GENIE_EMOTIONS = ['calm', 'happy', 'sad', 'angry', 'surprised', 'fearful', 'fluent'] as const;
+
+/** auto 跟随 <语音 emotion>，fixed 用配置值；非白名单一律回落 calm。 */
+export function resolveGenieEmotion(
+  options: SynthOptions | undefined,
+  apiConfig: APIConfig,
+): string {
+  const raw = apiConfig.genieEmotionMode === 'fixed'
+    ? apiConfig.genieEmotion
+    : options?.emotion;
+  return raw && (GENIE_EMOTIONS as readonly string[]).includes(raw) ? raw : 'calm';
+}
+
 /** Genie 不理解任何 inline cue：只保留 <语音> 块内的正文，其余全剥。 */
 export function cleanTextForTtsGenie(raw: string): string {
   return cleanVoiceMarkupForDisplay(cleanTextForTts(raw))
@@ -812,7 +869,6 @@ export async function synthesizeSpeechGenieDetailed(
   options?: SynthOptions,
 ): Promise<TtsResult> {
   void char;
-  void apiConfig;
   const spoken = cleanTextForTtsGenie(text);
   if (!spoken) throw new Error('没有可朗读的文字');
 
@@ -830,7 +886,7 @@ export async function synthesizeSpeechGenieDetailed(
     const res = await fetch(`${base}/agent/v1/tts`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ text: spoken, emotion: options?.emotion ?? 'calm' }),
+      body: JSON.stringify({ text: spoken, emotion: resolveGenieEmotion(options, apiConfig) }),
       signal: controller.signal,
     });
     if (!res.ok) throw new Error(await readErrorText(res));
@@ -863,31 +919,27 @@ async function readErrorText(res: Response): Promise<string> {
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); pnpm vitest run utils/genieTts.test.ts`
-Expected: 9 tests passed。
+Expected: 14 tests passed（7 条 synthesize + 2 条 isGenieVoiceEnabled + 4 条 resolveGenieEmotion + 2 条 cleanTextForTtsGenie = 15，若数量不同以实际为准，重点是 0 failed）。
 
-- [ ] **Step 5: 改 `types.ts`**
+- [ ] **Step 5: 改 `types.ts`（只加配置字段）**
 
-`types.ts:403`：
-
-```typescript
-export type TtsProvider = 'minimax' | 'fishaudio' | 'elevenlabs' | 'genie';
-```
-
-`types.ts:446-451` 的 `voicePrompts` 加 `genie?: string;`。
-
-- [ ] **Step 6: 改 `utils/ttsProvider.ts`
-
-第 12-13 行改为：
+在 `APIConfig` 接口内（与 `ttsProvider`、`voicePrompts` 同级）加三个字段：
 
 ```typescript
-export const normalizeTtsProvider = (raw: unknown): TtsProvider =>
-  raw === 'fishaudio' ? 'fishaudio'
-  : raw === 'elevenlabs' ? 'elevenlabs'
-  : raw === 'genie' ? 'genie'
-  : 'minimax';
+  /** Genie 自建中文语音。undefined 视为 true（升级后默认开启）。 */
+  genieVoiceEnabled?: boolean;
+  /** 情绪来源：'auto' 跟随 <语音 emotion>；'fixed' 固定用 genieEmotion。 */
+  genieEmotionMode?: 'auto' | 'fixed';
+  /** 固定模式下使用的情绪，7 项之一；非法值回落 calm。 */
+  genieEmotion?: string;
 ```
 
-第 59-63 行的对象字面量加一行 `genie: typeof overrides?.genie === 'string' ? overrides.genie : undefined,`。
+**不要改** `TtsProvider`（第 403 行）与 `voicePrompts`（第 446-451 行）。**不要碰** `utils/ttsProvider.ts`——归一化逻辑保持原样。
+
+- [ ] **Step 6: 跑一次类型检查确认没碰坏**
+
+Run: `[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); npx tsc --noEmit 2>&1 | Select-String "types.ts"`
+Expected: 无输出。存量错误不算，只要 `types.ts` 零命中。
 
 - [ ] **Step 7: 改 `utils/ttsRouter.ts`**
 
@@ -897,55 +949,54 @@ export const normalizeTtsProvider = (raw: unknown): TtsProvider =>
 export type SynthOptions = { languageBoost?: string; groupId?: string; emotion?: string };
 ```
 
-第 31-45 行 `assertTtsLanguageSupported` 开头改为（把原第 37 行的 `const provider` 删掉，避免重复声明）：
+第 31-45 行 `assertTtsLanguageSupported` 开头插入（**保留**原第 37 行的 `const provider`，它下面还要用）：
 
 ```typescript
-  const provider = resolveTtsProvider(apiConfig);
-  if (provider === 'genie' && (languageBoost || '').trim()) {
-    throw new Error('Genie-TTS 目前只支持中文（含中英混读），请先关闭其他朗读语种');
+  if (isGenieVoiceEnabled(apiConfig) && (languageBoost || '').trim()) {
+    throw new Error('Genie 自建语音目前只支持中文（含中英混读），请先关闭其他朗读语种');
   }
-  if ((languageBoost || '').trim().toLowerCase() !== 'yue') return;
 ```
 
-第 47-62 行 `synthesizeSpeechDetailed` 在 elevenlabs 分支后加：
+第 47-62 行 `synthesizeSpeechDetailed` 在 `assertTtsLanguageSupported(...)` 那一行**之后**、`const provider = ...` 之前插入：
 
 ```typescript
-  if (provider === 'genie') {
+  if (isGenieVoiceEnabled(apiConfig)) {
     return synthesizeSpeechGenieDetailed(text, char, apiConfig, options);
   }
 ```
 
-并 import：`import { cleanTextForTtsGenie, synthesizeSpeechGenieDetailed } from './genieTts';`
+并 import：`import { cleanTextForTtsGenie, isGenieVoiceEnabled, synthesizeSpeechGenieDetailed } from './genieTts';`
 
-第 79-87 行 `characterHasVoice` 的 fish 分支前加：
-
-```typescript
-  if (provider === 'genie') return true;
-```
-
-第 90-96 行 `canSynthesizeSpeech` 的 `if (!characterHasVoice(...)) return false;` 之后加：
+第 79-87 行 `characterHasVoice`，在 `const provider = resolveTtsProvider(apiConfig);` 之后加：
 
 ```typescript
-  if (provider === 'genie') return true;
+  if (isGenieVoiceEnabled(apiConfig)) return true;
 ```
 
-第 99-104 行 `cleanTextForTtsProvider` 的 elevenlabs 分支后加：
+第 90-96 行 `canSynthesizeSpeech`，在 `const provider = resolveTtsProvider(apiConfig);` 之后、`if (provider === 'fishaudio')` 之前加：
 
 ```typescript
-  if (provider === 'genie') return cleanTextForTtsGenie(text);
+  if (isGenieVoiceEnabled(apiConfig)) return true;
 ```
 
-第 106-111 行 `stripTtsMarkupForDisplay` 的 elevenlabs 分支后加：
+第 99-104 行 `cleanTextForTtsProvider`，在 `const provider = resolveTtsProvider(apiConfig);` 之后加：
 
 ```typescript
-  if (provider === 'genie') return cleanVoiceMarkupForDisplay(text);
+  if (isGenieVoiceEnabled(apiConfig)) return cleanTextForTtsGenie(text);
 ```
 
-第 114-115 行改为白名单：
+第 106-111 行 `stripTtsMarkupForDisplay`，在 `const provider = resolveTtsProvider(apiConfig);` 之后加：
+
+```typescript
+  if (isGenieVoiceEnabled(apiConfig)) return cleanVoiceMarkupForDisplay(text);
+```
+
+第 114-115 行整段替换为：
 
 ```typescript
 /** 只有 Fish / ElevenLabs 的清洗器需要看到原始 inline cue；MiniMax 用已消毒的 speech，Genie 不支持任何 cue。 */
 export const providerUsesRawVoiceMarkup = (apiConfig: APIConfig): boolean => {
+  if (isGenieVoiceEnabled(apiConfig)) return false;
   const provider = resolveTtsProvider(apiConfig);
   return provider === 'fishaudio' || provider === 'elevenlabs';
 };
@@ -957,7 +1008,6 @@ export const providerUsesRawVoiceMarkup = (apiConfig: APIConfig): boolean => {
 
 ```typescript
 import { describe, expect, it } from 'vitest';
-import { normalizeTtsProvider } from './ttsProvider';
 import {
   assertTtsLanguageSupported,
   canSynthesizeSpeech,
@@ -967,51 +1017,58 @@ import {
   stripTtsMarkupForDisplay,
 } from './ttsRouter';
 
-describe('genie provider', () => {
-  it('normalizeTtsProvider 认得 genie', () => {
-    expect(normalizeTtsProvider('genie')).toBe('genie');
-    expect(normalizeTtsProvider('nonsense')).toBe('minimax');
+describe('Genie 开关分流', () => {
+  // 开：默认（undefined 视为 true）
+  const ON = { genieVoiceEnabled: undefined, ttsProvider: 'minimax' } as any;
+  // 关：显式 false，回退原 provider
+  const OFF = { genieVoiceEnabled: false, ttsProvider: 'minimax' } as any;
+
+  it('characterHasVoice 开启时无条件 true（无 per-char 音色配置）', () => {
+    expect(characterHasVoice({ id: 'x' } as any, ON)).toBe(true);
   });
 
-  it('characterHasVoice 对 genie 无条件 true（无 per-char 音色配置）', () => {
-    expect(characterHasVoice({ id: 'x' } as any, { ttsProvider: 'genie' } as any)).toBe(true);
+  it('characterHasVoice 关闭时回到原 provider 判定', () => {
+    expect(characterHasVoice({ id: 'x' } as any, OFF)).toBe(false);
+    expect(characterHasVoice({ id: 'x', voiceProfile: { voiceId: 'v' } } as any, OFF)).toBe(true);
   });
 
-  it('canSynthesizeSpeech 对 genie 无条件 true（无 API Key）', () => {
-    expect(canSynthesizeSpeech({ id: 'x' } as any, { ttsProvider: 'genie' } as any)).toBe(true);
+  it('canSynthesizeSpeech 开启时无条件 true（无 API Key）', () => {
+    expect(canSynthesizeSpeech({ id: 'x' } as any, ON)).toBe(true);
   });
 
-  it('providerUsesRawVoiceMarkup 是白名单（回归 Fish cue 被原样念出）', () => {
-    expect(providerUsesRawVoiceMarkup({ ttsProvider: 'genie' } as any)).toBe(false);
-    expect(providerUsesRawVoiceMarkup({ ttsProvider: 'fishaudio' } as any)).toBe(true);
-    expect(providerUsesRawVoiceMarkup({ ttsProvider: 'elevenlabs' } as any)).toBe(true);
-    expect(providerUsesRawVoiceMarkup({ ttsProvider: 'minimax' } as any)).toBe(false);
+  it('providerUsesRawVoiceMarkup 开启时为 false（回归 Fish cue 被原样念出）', () => {
+    expect(providerUsesRawVoiceMarkup(ON)).toBe(false);
+    expect(providerUsesRawVoiceMarkup({ genieVoiceEnabled: false, ttsProvider: 'fishaudio' } as any)).toBe(true);
+    expect(providerUsesRawVoiceMarkup({ genieVoiceEnabled: false, ttsProvider: 'elevenlabs' } as any)).toBe(true);
+    expect(providerUsesRawVoiceMarkup({ genieVoiceEnabled: false, ttsProvider: 'minimax' } as any)).toBe(false);
   });
 
-  it('cleanTextForTtsProvider 对 genie 只留 <语音> 块内正文', () => {
+  it('cleanTextForTtsProvider 开启时只留 <语音> 块内正文', () => {
     const out = cleanTextForTtsProvider(
       '你说真的假的？<语音 emotion="surprised">(laughs)你认真的？</语音><字幕>等等</字幕>',
-      { ttsProvider: 'genie' } as any,
+      ON,
     );
     expect(out).toBe('你认真的？');
     expect(out).not.toContain('laughs');
   });
 
-  it('stripTtsMarkupForDisplay 对 genie 保留可读正文', () => {
+  it('cleanTextForTtsProvider 关闭时按原 provider 走', () => {
+    const out = cleanTextForTtsProvider('你好<#0.5#>世界', OFF);
+    expect(typeof out).toBe('string');
+  });
+
+  it('stripTtsMarkupForDisplay 开启时保留可读正文', () => {
     const out = stripTtsMarkupForDisplay(
       '正文一<语音 emotion="happy">口语一</语音><字幕>字幕一</字幕>',
-      { ttsProvider: 'genie' } as any,
+      ON,
     );
     expect(out).toContain('正文一');
     expect(out).not.toContain('<语音');
   });
 
-  it('assertTtsLanguageSupported 对 genie 拒绝粤语', () => {
-    expect(() => assertTtsLanguageSupported(
-      { id: 'x' } as any,
-      { ttsProvider: 'genie' } as any,
-      'yue',
-    )).toThrow();
+  it('assertTtsLanguageSupported 开启时拒绝粤语', () => {
+    expect(() => assertTtsLanguageSupported({ id: 'x' } as any, ON, 'yue')).toThrow();
+    expect(() => assertTtsLanguageSupported({ id: 'x' } as any, OFF, 'yue')).not.toThrow();
   });
 });
 ```
@@ -1034,7 +1091,7 @@ Expected: 1 passed。
 - [ ] **Step 12: 提交**
 
 ```bash
-git add types.ts utils/ttsProvider.ts utils/ttsRouter.ts utils/ttsRouter.test.ts utils/genieTts.ts utils/genieTts.test.ts
+git add types.ts utils/ttsRouter.ts utils/ttsRouter.test.ts utils/genieTts.ts utils/genieTts.test.ts
 git commit -m "feat(tts): add genie provider and browser client"
 ```
 
@@ -1271,18 +1328,19 @@ git commit -m "chore(vite): dev proxy for /agent so localhost can reach VPS TTS"
 阶段 A 全部满足才算完成：
 
 1. Task 1 Step 7-10 全过，`test_speak.py` 打印 `ALL_PASS`，`NRestarts` 不增长、`MemoryPeak` ≤ 5G、输出 `NO_OOM`
-2. `pnpm vitest run utils/ttsRouter utils/ttsProvider utils/genieTts worker/main-agent` 全绿
-3. `npx tsc --noEmit` 对 `types.ts` / `utils/ttsProvider.ts` / `utils/ttsRouter.ts` / `utils/genieTts.ts` 零命中
+2. `pnpm vitest run utils/ttsRouter utils/genieTts worker/main-agent` 全绿
+3. `npx tsc --noEmit` 对 `types.ts` / `utils/ttsRouter.ts` / `utils/genieTts.ts` 零命中
 4. `pnpm vitest run utils/mojibakeGuard.test.ts` 绿 + U+FFFD 字节扫零
 5. `worker/main-agent/src/index.js` 与 `worker.bundle.js` 的 SHA-256 相等
 6. localhost 端到端三条都 200 + 合法 WAV，时长在 1.0-3.0s，`angry` 与 calm 哈希至少一个不同
-7. **Phase B 未污染**：对 `git diff --name-only <阶段A起始commit>..HEAD` 做路径白名单检查，结果**不得**出现 `apps/Settings.tsx`、`components/date/DateSession.tsx`、`apps/CallApp.tsx`、`apps/Chat.tsx`、`utils/promptPresetCatalog.ts`、`utils/chatPrompts.ts`、`utils/ttsCache.ts`（这些都是 Phase B 的文件）。设置页仍显示三家 provider 是预期状态。
+7. **Phase B 未污染**：对 `git diff --name-only <阶段A起始commit>..HEAD` 做路径白名单检查，结果**不得**出现 `apps/Settings.tsx`、`components/date/DateSession.tsx`、`apps/CallApp.tsx`、`apps/Chat.tsx`、`utils/ttsCache.ts`（这些是 Phase B 的文件）。**也不得出现** `utils/ttsProvider.ts`、`utils/promptPresetCatalog.ts`、`utils/chatPrompts.ts`、`utils/promptPresetSeeding.ts`、`utils/presetEffective.ts`、`utils/promptCallRegistry.ts`——开关方案不需要动它们。设置页仍显示原有 provider 四选一是预期状态。
 
 ## 阶段 A 不做的事
 
-- 设置页第四个选项、角色页试听（Phase B）
-- `voice.genie` 提示词指南及 8 处接线（Phase B）
-- `DateSession.tsx:352` 缓存键修正（Phase B）
+- 设置页的 Genie 开关 / 情绪下拉 / 试听按钮、角色页试听（Phase B）
+- **任何提示词改动**——包括原初稿里的第 6 套 `voice.genie` 指南（已取消，见 spec §4.3）
+- `DateSession.tsx` 缓存键修正（Phase B）
 - `ttsCache.ts` 让 Genie 跳过共享缓存（Phase B）
 - Chat/Call 下载文件后缀 `.wav`（Phase B）
 - Capacitor APK 走 `agentUrl` 直连（Phase B）
+- 删掉或改动原有 minimax / 鱼声 / ElevenLabs 三家（永久不做，它们是 Genie 关闭时的回退路径）

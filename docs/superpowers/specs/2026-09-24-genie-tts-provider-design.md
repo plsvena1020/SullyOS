@@ -4,9 +4,37 @@
 
 ## 1. 目标
 
-让自建中文 TTS（Genie-TTS，VPS 本机 9882）成为 SullyOS 的第 4 个 TTS provider，角色可选用、可试听，并支持按情绪切换音色；对话正文显示纯文本，情绪等 TTS 专属信息不可见。
+让自建中文 TTS（Genie-TTS，VPS 本机 9882）成为一个**独立开关**而不是第 4 个 TTS provider，并支持按情绪切换音色；对话正文显示纯文本，情绪等 TTS 专属信息不可见。
+
+**与初稿的关键差异（2026-09-24 用户决定）**：初稿把 Genie 设计成第 4 个 provider，要改 `TtsProvider` 联合类型、provider 归一化、Settings 四选一，并新增第 6 套 provider 专属语音提示词 + 8 处接线。改为独立开关后这些全部不需要：
+
+- 不改 `TtsProvider` 联合类型，不加 `'genie'` 取值
+- 不改 `utils/ttsProvider.ts` 的归一化
+- **不新增第 6 套语音提示词，不改 `utils/promptPresetCatalog.ts` 及其 8 处接线**——复用现成那套教 `<语音 emotion="...">` 的指南即可，情绪值直接驱动参考音频选择
+- Settings 从「四选一 radio」改为「一个开关 + 情绪下拉 + 试听」
+- 开关默认**开启**；关闭时自动回退到原有 minimax / 鱼声 / ElevenLabs 三家，这三家代码**保留不动**
 
 **非目标（明确不做）**：读错字/拼音修正。已验证 Genie 不支持（`ChineseG2P.py:41-43` 的 `pattern_filter` 会把 `<熬|ao2>`、`[熬|ao2]`、`熬(ao2)` 全部删成 `熬二`），且 Genie 公开输入只有文本、无请求级 phoneme 接口。唯一发音覆盖是服务端词表 `polyphonic.pickle`，不是请求级。
+
+## 1.1 新增配置
+
+`APIConfig`（`types.ts`）新增字段：
+
+```typescript
+/** Genie 自建中文语音。undefined 视为 true（升级后默认开启）。 */
+genieVoiceEnabled?: boolean;
+/** 情绪来源：'auto' 跟随 <语音 emotion>；'fixed' 固定用 genieEmotion。 */
+genieEmotionMode?: 'auto' | 'fixed';
+genieEmotion?: string;
+```
+
+读取必须用 `utils/genieTts.ts` 导出的 `isGenieVoiceEnabled(apiConfig)`，语义是 `apiConfig.genieVoiceEnabled !== false`（只有显式 `false` 才关闭），这样老用户的 `os_api_config` 没有该字段时自动开启。**不要在调用点散写 `!== false`，统一走这个函数。**
+
+情绪解析规则（`utils/genieTts.ts` 的 `resolveGenieEmotion(options, apiConfig)`）：
+
+1. `genieEmotionMode` 未设或 `'auto'` → 用 `options?.emotion`，不在 7 个白名单内则回落 `'calm'`
+2. `'fixed'` → 用 `genieEmotion`，不在白名单内则回落 `'calm'`
+3. 白名单 = `calm / happy / sad / angry / surprised / fearful / fluent`
 
 ## 2. 已实测的事实（执行时不要重新调查）
 
@@ -51,7 +79,8 @@
 
 ```
 浏览器 utils/genieTts.ts
-  POST {agentUrl}/v1/tts  { text, emotion }      ← 复用现有 agentUrl/agentToken
+  POST {agentUrl}/agent/v1/tts  { text, emotion }  ← 复用现有 agentUrl/agentToken
+       （agentRouting 只 trim 不剥尾斜杠，客户端自己 replace(/\/+$/, '')）
   → functions/_lib/backendProxy.js 或 api/backend-proxy.ts（同源，剥 /agent）
   → VPS Caddy handle_path /agent/* → 127.0.0.1:8830
   → main-agent checkAuth → ttsProxy（无状态转发）
@@ -101,21 +130,17 @@ fluent                                   → emo-fluent.wav    + 「下午三点
 
 | 文件:行号 | 改动 |
 |---|---|
-| `types.ts:403` | `TtsProvider` 加 `'genie'` |
-| `types.ts:425` | `APIConfig.ttsProvider?: TtsProvider` 不用改（已复用） |
-| `types.ts:446-451` | `voicePrompts` 加 `genie?: string` |
-| `utils/ttsProvider.ts:12-13` | `normalizeTtsProvider` 加 `'genie'` 分支；`VoicePromptKey`（`:53`）自动含 genie |
-| `utils/ttsProvider.ts:59-63` | `setVoicePromptOverrides` 加 genie 键 |
-| `utils/ttsRouter.ts:31-45` | `assertTtsLanguageSupported`：provider 为 genie 时，`languageBoost` 非空即抛错（Genie 未验证粤语/日/韩） |
-| `utils/ttsRouter.ts:47-62` | `synthesizeSpeechDetailed` 加 genie 分支 |
-| `utils/ttsRouter.ts:79-87` | `characterHasVoice`：provider 为 genie **无条件 return true**（单一 ether 音色，无 per-char 配置） |
-| `utils/ttsRouter.ts:90-96` | `canSynthesizeSpeech`：provider 为 genie **无条件 return true**（无 API Key）。否则语音条永不显示 |
-| `utils/ttsRouter.ts:99-104` | `cleanTextForTtsProvider`：genie 用纯文本清洗（去掉所有 `<语音>`/`<字幕>`/动作词，不保留任何 inline cue） |
-| `utils/ttsRouter.ts:106-111` | `stripTtsMarkupForDisplay`：genie 与 minimax 同走 `cleanVoiceMarkupForDisplay` |
-| `utils/ttsRouter.ts:114-115` | `providerUsesRawVoiceMarkup` **改为白名单** `p === 'fishaudio' \|\| p === 'elevenlabs'`。当前实现 `!== 'minimax'` 会把 Fish 的 `(laughs)` 原样送进 Genie |
-| `utils/genieTts.ts` | **新建**。`synthesizeSpeechGenieDetailed(text, char, apiConfig, options)`：调 `/v1/tts`（带 `text` + `options.emotion`），把 `audio/wav` 响应转 Blob URL，对齐 `TtsResult` 形状。错误映射：503→忙、504→超时、413→文本过长，其余→通用失败 |
+| `types.ts`（`APIConfig` 内） | **新增** `genieVoiceEnabled?: boolean`、`genieEmotionMode?: 'auto' \| 'fixed'`、`genieEmotion?: string`。**不改** `TtsProvider`（第 403 行）、**不改** `voicePrompts`（第 446-451 行） |
+| `utils/genieTts.ts` | **新建**。导出 `isGenieVoiceEnabled(apiConfig)`、`resolveGenieEmotion(options, apiConfig)`、`cleanTextForTtsGenie(raw)`、`synthesizeSpeechGenieDetailed(text, char, apiConfig, options?)` |
+| `utils/ttsRouter.ts:31-45` | `assertTtsLanguageSupported`：Genie 开启时 `languageBoost` 非空即抛错（未验证粤语/日/韩） |
+| `utils/ttsRouter.ts:47-62` | `synthesizeSpeechDetailed` 最前面加 Genie 分支（见下） |
+| `utils/ttsRouter.ts:79-87` | `characterHasVoice`：Genie 开启时 **无条件 return true**（单一 ether 音色，无 per-char 配置） |
+| `utils/ttsRouter.ts:90-96` | `canSynthesizeSpeech`：Genie 开启时 **无条件 return true**（无 API Key）。否则语音条永不显示 |
+| `utils/ttsRouter.ts:99-104` | `cleanTextForTtsProvider`：Genie 开启时用 `cleanTextForTtsGenie` |
+| `utils/ttsRouter.ts:106-111` | `stripTtsMarkupForDisplay`：Genie 开启时走 `cleanVoiceMarkupForDisplay` |
+| `utils/ttsRouter.ts:114-115` | `providerUsesRawVoiceMarkup` 改为：Genie 开启 → `false`；否则 `p === 'fishaudio' \|\| p === 'elevenlabs'`。当前实现 `!== 'minimax'` 会把 Fish 的 `(laughs)` 原样送进 Genie |
 | `utils/ttsCache.ts:44-72` | 复用现有缓存，但 Genie 的 key 必须含 `emotion`（见 §5） |
-| `components/date/DateSession.tsx:352` | `const cacheKey = dialogueText;` → 必须并入 `currentLineEmotionRef.current`（`emotion`）与语种。当前同句 calm/sad 直接复用第一条音频 |
+| `components/date/DateSession.tsx:352` | `const cacheKey = dialogueText;` → 必须并入 `currentLineEmotionRef.current`（emotion）与语种。当前同句 calm/sad 直接复用第一条音频 |
 | `components/date/DateSession.tsx:384-393,405-425,496-500` | 同上，三处内存缓存键一并修 |
 | `apps/Chat.tsx:713-727` | 下载/分享文件名后缀按真实 MIME 决定，Genie 是 `.wav` 不是 `.mp3` |
 | `apps/CallApp.tsx:1416-1422` | 同上 |
@@ -124,27 +149,19 @@ fluent                                   → emo-fluent.wav    + 「下午三点
 | `vite.config.ts` 代理段 | 新增 `'/agent'` dev proxy，target 取自环境变量（**禁止把 VPS 域名写进仓库**） |
 | `utils/networkFailureDiagnosis.ts:426-430` | 相对路径 `/agent/v1/tts` 在 Capacitor APK 不可用；须走已配置的 `agentUrl` 直连（与现有 agent 调用一致） |
 
-### 4.3 提示词（第六套 `voice.genie`）
+### 4.3 提示词：**不新增任何东西**
 
-必须在**全部 6 处**接线，漏一处会导致保存的指南被启动迁移抹掉：
+初稿要加第 6 套 `voice.genie` 指南并改 8 处接线，改为开关方案后**全部取消**。
 
-| 文件:行号 | 改动 |
-|---|---|
-| `utils/promptPresetCatalog.ts:142-181` | 新增 `voice.genie` 内置指南正文 |
-| `utils/chatPrompts.ts:38-63` | 同步选择器加 genie |
-| `utils/chatPrompts.ts:1214-1277` | **改造成 provider-aware**：当前主提示硬编码要求输出 `(laughs)/(sighs)`，与 Genie 指南冲突。Genie 路径只要求 `<语音 emotion="...">` 八种标签，不要求动作词 |
-| `apps/CallApp.tsx:355-370` | Call 提示词与显示清洗加 genie 分支 |
-| `utils/presetEffective.ts:59-65` | 生效映射加 genie |
-| `utils/promptPresetSeeding.ts:88-115` | 旧 `voicePrompts` 迁移表加 genie。**`:113-115` 会删除整个旧 `voicePrompts` 对象，漏掉会导致用户刚保存的 Genie 指南被启动迁移抹掉** |
-| `utils/promptCallRegistry.ts:25` | 调用登记加 genie |
-| `utils/promptPresetCatalog.test.ts:33-38` | 快照对拍加 genie |
+理由：情绪来源是现成那套指南已经在教的 `<语音 emotion="happy">` 八种标签（`utils/promptPresetCatalog.ts:142-181` 的 `voice.minimax`）。Genie 不需要专属措辞——它只是把 emotion 字符串映射到参考音频。动作词（`(laughs)`/`(sighs)`）由 `cleanTextForTtsGenie` 在发送前剥掉，不需要让模型别写。
 
-### 4.4 设置与角色页（试听）
+**注意**：`utils/chatPrompts.ts:1214-1277` 的主提示硬编码要求输出动作词，这是**既有行为，不改**。Genie 路径在客户端清洗掉即可。
+
+### 4.4 设置与角色页
 
 | 文件:行号 | 改动 |
 |---|---|
-| `apps/Settings.tsx:667-684` | `localTtsProvider` 初始化加 genie（当前只显式接受 Fish/ElevenLabs，其余显示 MiniMax） |
-| `apps/Settings.tsx:3197-3254` | provider 选择加第四项；**新增试听按钮**（当前只有静态选择，无试听实现） |
+| `apps/Settings.tsx:3197-3254` | 在 provider 选择区**上方**新增「Genie 自建语音」开关（默认开）；下方新增情绪模式下拉（`auto` / `fixed`）与固定情绪下拉（7 项）；新增「试听」按钮。**不改** provider 四选一 |
 | 角色页 | 新增「用这个声音试听一句」 |
 
 试听是**新功能**，不是照抄。失败要显示可执行原因（如"Genie 未就绪"），不能静默无反应。
@@ -215,19 +232,23 @@ VPS pull + 重启 main-agent 后，手机端真实链路冒烟：选 Genie → �
 
 范围偏大，拆成两个可独立验收的阶段。**必须按序**，阶段 A 不通过不要进阶段 B。
 
-**阶段 A：VPS 适配层 + 最小可用链路**
-- VPS：`/speak` 端点（锁、队列上限 2、情绪表、分块、WAV 包裹、错误传播）+ `emotions.json`
-- 仓库：`types.ts`、`utils/ttsProvider.ts`、`utils/ttsRouter.ts`（7 处分发点）、`utils/genieTts.ts`（新建）、`worker/main-agent/src/index.js` + 其测试 + bundle 重建、`vite.config.ts` dev proxy
-- 验收：§8.1 全过 + §8.2 的 1-6 条。此阶段结束时已有可用 API，但前端尚未接入 provider 选择，UI 仍显示三家。
+**阶段 A：VPS 适配层 + 最小可用链路**（对应 `docs/superpowers/plans/2026-09-24-genie-tts-provider-phase-a.md`）
+- VPS：`/speak` 端点（锁、队列上限 2、情绪表、分块、WAV 包裹、错误传播、readiness）+ `emotions.json`
+- 仓库：`types.ts`（只加 3 个配置字段）、`utils/genieTts.ts`（新建）、`utils/ttsRouter.ts`（7 处分流，全部读 `isGenieVoiceEnabled`）、`worker/main-agent/src/index.js` + 其测试 + bundle 重建、`vite.config.ts` dev proxy
+- 验收：§8.1 全过 + §8.2 的 1-6 条。此阶段结束时 `/agent/v1/tts` 可用，但前端还没接开关，行为不变。
 
-**阶段 B：用户可见面 + 提示词 + 缓存修正**
-- 提示词第六套 `voice.genie` 及 8 处接线（§4.3）
-- Settings 四选一 + 试听、角色页试听（§4.4）
-- DateSession 缓存键修正、`ttsCache.ts` 跳过 Genie、Chat/Call 下载后缀修正（§4.2 与 §5）
-- `networkFailureDiagnosis.ts` 的 Capacitor 说明
+**阶段 B：用户可见面 + 缓存修正**
+- `apps/Settings.tsx`：开关 + 情绪模式 + 固定情绪 + 试听
+- 角色页：试听
+- `DateSession.tsx` 缓存键（4 处）、`ttsCache.ts` 让 Genie 跳过共享缓存、`Chat.tsx:713-727` 与 `CallApp.tsx:1416-1422` 下载后缀改 `.wav`、`networkFailureDiagnosis.ts` 的 Capacitor 说明
+- **不含**任何提示词改动（§4.3 已取消）
 - 验收：§8.2 全过 + §8.3 冒烟。
 
-拆分理由：阶段 A 是纯接口，可独立压测与回滚；阶段 B 触面最广（16 个文件），出问题时能立刻判定在 UI/提示词层而非合成层。
+拆分理由：阶段 A 是纯接口，可独立压测与回滚；阶段 B 触面最广，出问题时能立刻判定在 UI/缓存层而非合成层。
+
+## 9.1 改为开关方案后，阶段 B 的工作量变化
+
+初稿阶段 B 要碰 16 个文件（含 8 个提示词接线点），改后降到 7 个：Settings、角色页、DateSession、ttsCache、Chat、CallApp、networkFailureDiagnosis。**提示词那 8 个接线点全部不需要了。**
 
 ## 10. 用户已定的决策（2026-09-24）
 
