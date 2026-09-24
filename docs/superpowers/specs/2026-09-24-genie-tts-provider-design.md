@@ -21,7 +21,7 @@
 `APIConfig`（`types.ts`）新增字段：
 
 ```typescript
-/** Genie 自建中文语音。undefined 视为 true（升级后默认开启）。 */
+/** Genie 自建中文语音。阶段 A 为 opt-in：undefined 视为 false。见 §10.1。 */
 genieVoiceEnabled?: boolean;
 /** 情绪来源：'auto' 跟随 <语音 emotion>；'fixed' 固定用 genieEmotion。 */
 genieEmotionMode?: 'auto' | 'fixed';
@@ -165,7 +165,7 @@ fluent                                   → emo-fluent.wav    + 「下午三点
 | 文件:行号 | 改动 |
 |---|---|
 | `utils/chatPrompts.ts:52-63` | `resolveVoiceActingGuide()` 开头加一个分支：Genie 开启 → 返回 `GENIE_VOICE_ACTING_GUIDE` 常量（定义在本文件），不走 provider 选择 |
-| `utils/chatPrompts.ts` | 新增 `GENIE_VOICE_ACTING_GUIDE` 常量（约 10 行）：教 `<语音 emotion="...">` 的 8 个取值、每条消息最多一个标签、不要复读文字 |
+| `utils/chatPrompts.ts` | 新增 `GENIE_VOICE_ACTING_GUIDE` 常量（约 10 行）：教 `<语音 emotion="...">` 的 **7 个可用取值**（`happy/sad/angry/fearful/surprised/calm/fluent`，不含未录音的 `disgusted`）、每条消息最多一个标签、不要复读文字。**并把 `:1228/1256` 写死的 8 个情绪列表、`:1242/1265` 写死的动作词规则参数化**，否则新旧两块会自相矛盾 |
 | `utils/ttsProvider.ts` | 新增 `setGenieVoiceEnabled` / `isGenieVoiceEnabledSync` 模块级单例（照现有 `setTtsProvider` 模式，因 `resolveVoiceActingGuide` 拿不到 apiConfig） |
 | `context/OSContext.tsx:2158` 附近 | `apiConfig.genieVoiceEnabled` 变化时调 `setGenieVoiceEnabled`（与现有 `setTtsProvider` 同一处同步） |
 
@@ -209,7 +209,7 @@ Genie 的缓存键**必须**至少含：`provider + normalizedEmotion + language
 1. **不改 Caddy**（`/agent/*` 已存在且剥前缀）。
 2. **不改 `api/backend-proxy.ts` / `functions/_lib/backendProxy.js`**（二进制 body 已透明转发）。
 3. **不把 VPS 域名或 Token 写进仓库**，一律走 `agentUrl`/`agentToken`/环境变量。
-4. **不改 `context/OSContext.tsx:2158-2167`**（provider 与 voicePrompt 同步是通用的）。
+4. **`context/OSContext.tsx` 只在既有 `setTtsProvider` 那个 effect 里加一行**（`:2157-2159`），并把 `apiConfig.genieVoiceEnabled` 加进依赖数组。不新建第二个同步点。
 5. **不新增 Genie API Key**。
 6. **不动** `gptsovits` 相关（已删除，不恢复）。
 7. 不做拼音/SSML/多角色音色。
