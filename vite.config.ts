@@ -138,6 +138,16 @@ export default defineConfig({
           return `/v1/text-to-speech/${encodeURIComponent(voiceId)}/stream?output_format=${encodeURIComponent(outputFormat)}`;
         },
       },
+      // Genie-TTS 走 VPS 后端。target 只从环境变量来，禁止把真实域名写进仓库。
+      // 默认的 127.0.0.1:8830 只在 dev server 本身跑在 VPS 上时才成立——所有服务端口
+      // 只听 VPS 的 127.0.0.1、由 Caddy 反代出公网（见 notes/ethernet-branch-context.md）。
+      // 从本机跑 pnpm dev 时必须把 VITE_AGENT_PROXY_TARGET 指向 VPS 的公网后端源，
+      // 否则代理会连一个本机不存在的端口，表现为 ECONNREFUSED 而不是清晰的报错。
+      // 不加 rewrite：main-agent 自己在 index.js 里剥 /agent 前缀（见那里的 plain 变量）。
+      '/agent': {
+        target: process.env.VITE_AGENT_PROXY_TARGET || 'http://127.0.0.1:8830',
+        changeOrigin: true,
+      },
     }
   },
   build: {
