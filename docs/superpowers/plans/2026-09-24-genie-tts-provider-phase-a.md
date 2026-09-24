@@ -772,13 +772,13 @@ journalctl -u genie-tts --since '10 minutes ago' | grep -iE 'oom|killed' || echo
 **边界（哪些不碰）：**
 - **不改** `TtsProvider` 联合类型、**不改** `normalizeTtsProvider()`、**不改** `VoicePromptKey`
 - `utils/ttsProvider.ts` 只新增 `setGenieVoiceEnabled` / `isGenieVoiceEnabledSync`，不动 `setTtsProvider` / `getTtsProvider` / `setVoicePromptOverrides`
-- `utils/chatPrompts.ts` 只新增 `GENIE_VOICE_ACTING_GUIDE` 与 `resolveVoiceActingGuide` 开头的一个分支；**不改** `chatVoiceEnabled` 主门禁，也不改 `:1214-1277` 的整体结构
+- `utils/chatPrompts.ts` **新增**模块级 `GENIE_VOICE_ACTING_GUIDE` 常量、`resolveVoiceActingGuide` 开头的一个分支；并**只参数化** `:1228` / `:1242` / `:1256` / `:1265` 这四处现有文案（两处写死的 8 个情绪列表 + 两处写死的动作词规则），改成引用 `voiceEmotionList` / `voiceCueRule`。除此之外**不改**：不动 `chatVoiceEnabled` 门禁、不动 `:1214-1278` 的分支结构、不动 else 分支的禁止规则
 - **不碰** `utils/promptPresetCatalog.ts`、`utils/promptPresetSeeding.ts`、`utils/presetEffective.ts`、`utils/promptCallRegistry.ts`、`utils/promptPresetRuntime.ts`
 
 **Interfaces:**
 - Consumes: Task 1 的 `/speak` 错误契约与 `X-Genie-Resolved-Emotion` 响应头。
 - Produces（全部从 `./genieTts` 导出）:
-  - `isGenieVoiceEnabled(apiConfig: APIConfig): boolean` — 语义 `apiConfig.genieVoiceEnabled !== false`
+  - `isGenieVoiceEnabled(apiConfig: APIConfig): boolean` — 语义 `apiConfig.genieVoiceEnabled === true`（阶段 A 是 opt-in）
   - `resolveGenieEmotion(options: SynthOptions | undefined, apiConfig: APIConfig): string` — 永远返回 7 个白名单之一
   - `cleanTextForTtsGenie(raw: string): string`
   - `synthesizeSpeechGenieDetailed(text, char, apiConfig, options?): Promise<TtsResult>`
@@ -808,8 +808,8 @@ function makeResponse(status: number, body: ArrayBuffer | string, contentType = 
 }
 
 describe('synthesizeSpeechGenieDetailed', () => {
-  // Genie 是独立开关，不进 TtsProvider；默认开启即 undefined。
-  const apiConfig = { ttsProvider: 'minimax' } as any;
+  // Genie 是独立开关，不进 TtsProvider；阶段 A 是 opt-in，测试里必须显式写 true。
+  const apiConfig = { genieVoiceEnabled: true, ttsProvider: 'minimax' } as any;
   const char = { id: 'c1' } as any;
 
   beforeEach(() => {
@@ -1059,7 +1059,7 @@ Expected: 15 tests passed, 0 failed。
 在 `APIConfig` 接口内（与 `ttsProvider`、`voicePrompts` 同级）加三个字段：
 
 ```typescript
-  /** Genie 自建中文语音。undefined 视为 true（升级后默认开启）。 */
+  /** Genie 自建中文语音。阶段 A 是 opt-in：undefined 视为 false。见 spec §10.1。 */
   genieVoiceEnabled?: boolean;
   /** 情绪来源：'auto' 跟随 <语音 emotion>；'fixed' 固定用 genieEmotion。 */
   genieEmotionMode?: 'auto' | 'fixed';
@@ -1196,7 +1196,7 @@ describe('Genie 开关单例', () => {
 
 **必须同时参数化前两处，否则新指南会和硬编码块自相矛盾**（`:1256` 教 8 个情绪含 `disgusted`、`:1265` 要求写 `(laughs)/(sighs)`；而 Genie 只有 7 个可用情绪、动作词会被剥掉）：
 
-在 `utils/chatPrompts.ts:1214` 之前插入：
+在 `utils/chatPrompts.ts:1215` 的 `if (char.chatVoiceEnabled) {` **之后**、`:1218` 的 `if (voiceLang) {` **之前**插入（放在 if 块内，角色没开语音消息时连计算都不发生）：
 
 ```typescript
   const genieVoice = isGenieVoiceEnabledSync();
@@ -1220,7 +1220,7 @@ describe('Genie 开关单例', () => {
 
 并 import `isGenieVoiceEnabledSync` from `./ttsProvider`。
 
-新增常量（约 10 行，模板字符串里反引号用**单个** `\`` 转义，不要写 `\\``）：
+新增常量（**必须放在模块级、`resolveVoiceActingGuide`（第 52 行）之前的文件顶部**，避免 TDZ；模板字符串里反引号用**单个** `\`` 转义，不要写 `\\``）：
 
 ```typescript
 /**
@@ -1394,7 +1394,7 @@ Expected: 1 passed。
 - [ ] **Step 16: 提交**
 
 ```bash
-git add types.ts utils/ttsRouter.ts utils/ttsRouter.test.ts utils/genieTts.ts utils/genieTts.test.ts utils/ttsProvider.ts utils/chatPrompts.ts context/OSContext.tsx apps/CallApp.tsx
+git add types.ts utils/ttsRouter.ts utils/ttsRouter.test.ts utils/genieTts.ts utils/genieTts.test.ts utils/ttsProvider.ts utils/ttsProvider.genie.test.ts utils/chatPrompts.ts context/OSContext.tsx apps/CallApp.tsx
 git commit -m "feat(tts): add Genie routing switch and browser client"
 ```
 

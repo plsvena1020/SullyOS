@@ -28,7 +28,12 @@ genieEmotionMode?: 'auto' | 'fixed';
 genieEmotion?: string;
 ```
 
-读取必须用 `utils/genieTts.ts` 导出的 `isGenieVoiceEnabled(apiConfig)`，语义是 `apiConfig.genieVoiceEnabled !== false`（只有显式 `false` 才关闭），这样老用户的 `os_api_config` 没有该字段时自动开启。**不要在调用点散写 `!== false`，统一走这个函数。**
+读取必须用 `utils/genieTts.ts` 导出的 `isGenieVoiceEnabled(apiConfig)`。
+
+- **阶段 A** 语义是 `apiConfig.genieVoiceEnabled === true`，`undefined` 视为 **false**（opt-in）。
+- **阶段 B** 由设置页开关的默认勾选负责写入 `true`（见 §10.1）。
+
+**不要在调用点散写 `=== true` 或 `!== false`，统一走这个函数。**
 
 情绪解析规则（`utils/genieTts.ts` 的 `resolveGenieEmotion(options, apiConfig)`）：
 
