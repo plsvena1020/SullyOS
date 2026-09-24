@@ -48,6 +48,7 @@ SAMPLE_RATE = 32000
 BYTES_PER_SAMPLE = 2
 CHANNELS = 1
 STOP_CALL_TIMEOUT = 10.0
+STOP_TOTAL_BUDGET = 10.0
 STOP_RETRIES = 3
 WATCHDOG_CLEANUP_WAIT = 35.0
 
@@ -288,19 +289,28 @@ def _tts_completed_pcm(chunk: str, timeout: float) -> bytes:
             if _claim_stop():
                 _stop_genie_safely("tts transport failure")
             raise
-        if not os.path.isfile(path) or os.path.getsize(path) <= 44:
-            raise RuntimeError("incomplete genie output")
-        with wave.open(path, "rb") as wf:
-            actual = (wf.getnchannels(), wf.getsampwidth(), wf.getframerate())
-            if actual != (CHANNELS, BYTES_PER_SAMPLE, SAMPLE_RATE):
-                raise RuntimeError("unexpected genie wav format")
-            frames = wf.getnframes()
-            expected = frames * wf.getnchannels() * wf.getsampwidth()
-            pcm = wf.readframes(frames)
-            if expected <= 0 or len(pcm) != expected:
-                raise RuntimeError("truncated genie wav")
-        if not pcm:
-            raise RuntimeError("empty genie pcm")
+        try:
+            if not os.path.isfile(path) or os.path.getsize(path) <= 44:
+                raise RuntimeError("incomplete genie output")
+            with wave.open(path, "rb") as wf:
+                actual = (wf.getnchannels(), wf.getsampwidth(), wf.getframerate())
+                if actual != (CHANNELS, BYTES_PER_SAMPLE, SAMPLE_RATE):
+                    raise RuntimeError("unexpected genie wav format")
+                frames = wf.getnframes()
+                expected = frames * wf.getnchannels() * wf.getsampwidth()
+                pcm = wf.readframes(frames)
+                if expected <= 0 or len(pcm) != expected:
+                    raise RuntimeError("truncated genie wav")
+            if not pcm:
+                raise RuntimeError("empty genie pcm")
+        except Exception:
+            # 借 save_path 判定成功的前提是「确认干净完成」；校验失败就是没确认。
+            # /tts 的 HTTP 200 可能早于后台任务收尾，此时 TTSPlayer 仍可能活着，
+            # 必须先停再让上层释放 _SYNTH_LOCK，否则下一个请求会重置它的全局队列，
+            # 复现最初的挂死 + 垃圾音频。
+            if _claim_stop():
+                _stop_genie_safely("output validation failed")
+            raise
         return pcm
     finally:
         try:
@@ -312,9 +322,8 @@ def _tts_completed_pcm(chunk: str, timeout: float) -> bytes:
 
 
 def _synthesize(text: str, emotion: str, deadline: float) -> tuple[bytes, str]:
-    global _STOP_CLAIMED
     _DEADLINE_FIRED.clear()
-    _STOP_CLAIMED = False
+    _reset_stop_claim()
 
     finished = threading.Event()
     watchdog_done = threading.Event()
@@ -486,6 +495,17 @@ def _claim_stop() -> bool:
         return True
 
 
+def _reset_stop_claim() -> None:
+    """开启一个新的停机生命周期。复位必须在 _STOP_OWNER_LOCK 下做。
+
+    _STOP_CLAIMED 是模块级的，而合成受 _SYNTH_LOCK 保护、同一时刻只有一个；
+    但 _warmup 不持有该锁，它也必须能开启新周期，所以复位走同一把 owner 锁。
+    """
+    global _STOP_CLAIMED
+    with _STOP_OWNER_LOCK:
+        _STOP_CLAIMED = False
+
+
 def _stop_genie_safely(reason: str) -> bool:
     """停掉 Genie 后台 TTS。True = 已确认停；False = 无法确认，调用方须毒化。
 
@@ -496,9 +516,22 @@ def _stop_genie_safely(reason: str) -> bool:
     "卡死未返回"绝不能重试——上一个 runner 还卡在 TTSPlayer 内部，再起一个
     只会让多个 genie.stop() 并发操作同一个单例。遇到卡死直接毒化。
     """
+    # 所有重试共享一个总预算，而不是每次尝试各拿 STOP_CALL_TIMEOUT。
+    # 单次「在 10 秒内抛出异常」完全可能耗时接近 10 秒，三次相加就接近 30 秒，
+    # 足以让整个响应越过客户端预算。预算耗尽后直接毒化，不再重试。
+    budget_end = time.monotonic() + STOP_TOTAL_BUDGET
     with _STOP_LOCK:
         for attempt in range(1, STOP_RETRIES + 1):
-            status = _try_genie_stop(STOP_CALL_TIMEOUT)
+            left = budget_end - time.monotonic()
+            if left <= 0:
+                print(
+                    f"[genie] genie.stop() budget {STOP_TOTAL_BUDGET}s exhausted "
+                    f"after {attempt - 1} attempt(s)",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                break
+            status = _try_genie_stop(min(STOP_CALL_TIMEOUT, left))
             if status == "ok":
                 return True
             if status == "hung":
@@ -605,14 +638,21 @@ async def speak_endpoint(request: Request):
 
 
 def _warmup() -> None:
-    global _STOP_CLAIMED
     time.sleep(5)
     for attempt in range(1, 6):
-        # 每次尝试都要重新建立停机生命周期。_STOP_CLAIMED 只在 _synthesize 里复位，
-        # 而 warmup 直接调 _tts_completed_pcm、不经过 _synthesize：若不复位，
-        # 第一次尝试认领过停机后，后续尝试的传输失败会拿到 False 而不再停机，
-        # 于是上一轮可能仍在跑的 TTSPlayer 被下一轮重入。
-        _STOP_CLAIMED = False
+        # 每次尝试都要开启新的停机生命周期。warmup 直接调 _tts_completed_pcm、
+        # 不经过 _synthesize：若不复位，首次认领后后续尝试的传输失败会拿到
+        # False 而不再停机，上一轮可能仍在跑的 TTSPlayer 就被下一轮重入。
+        _reset_stop_claim()
+        if _is_poisoned():
+            # stop 卡死会毒化，而那个卡死的 runner 仍可能活在 TTSPlayer 内部。
+            # 此时再 load_character 或重置认领，等于让它与旧 stop 并发操作同一
+            # 单例。宁可停在 503 warming_up 等进程重启，也不要继续试。
+            print(
+                f"[genie] warmup attempt {attempt} skipped: service is poisoned",
+                flush=True,
+            )
+            return
         try:
             genie.load_character(
                 character_name=CHARACTER, onnx_model_dir=MODEL_DIR, language=LANGUAGE

@@ -528,21 +528,87 @@ def main():
 
     ok &= check("stop_retry_budget_is_proportional", stop_retry_budget_is_proportional(), "")
 
-    # 11 warmup 每次尝试都要复位 stop 认领。
-    #     warmup 直接调 _tts_completed_pcm、不经 _synthesize，而 _STOP_CLAIMED 只在
-    #     _synthesize 里复位：若 warmup 不复位，第一次尝试认领后，后续尝试的传输失败
-    #     会拿到 False 而不再停机，上一轮可能仍在跑的 TTSPlayer 就被下一轮重入。
-    #     _warmup 本身要 sleep 5 秒并打真实 Genie，无法在冒烟里跑，因此这里做源码断言。
-    def warmup_resets_stop_claim():
-        import inspect
 
-        genie_server._STOP_CLAIMED = True
+    # 12 输出校验失败必须恰好触发一次 stop。
+    #     /tts 返回 200 但 save_path 没写成合法 WAV，此时后台 TTSPlayer 可能仍没收尾；
+    #     若直接放锁，下一个请求会重置它的全局队列。旧测试只断言抛 RuntimeError，
+    #     那是 mock 行为断言，不是生命周期契约。
+    def output_validation_failure_stops_genie():
+        orig_post = genie_server._genie_post
+        orig_stop = genie_server.genie.stop
+        calls = []
+
+        # 返回 200 但不写盘：mkstemp 留下的是 0 字节文件，必然校验失败
+        genie_server._genie_post = lambda *a, **k: b""
+        genie_server.genie.stop = lambda: calls.append(1)
+        genie_server._STOP_CLAIMED = False
+        genie_server._DEADLINE_FIRED.clear()
         try:
-            return "_STOP_CLAIMED = False" in inspect.getsource(genie_server._warmup)
+            try:
+                genie_server._tts_completed_pcm("测试", 1.0)
+                return False
+            except RuntimeError as exc:
+                return str(exc) == "incomplete genie output" and len(calls) == 1
         finally:
+            genie_server._genie_post = orig_post
+            genie_server.genie.stop = orig_stop
             genie_server._STOP_CLAIMED = False
+            genie_server._DEADLINE_FIRED.clear()
 
-    ok &= check("warmup_resets_stop_claim", warmup_resets_stop_claim(), "")
+    ok &= check("output_validation_failure_stops_genie", output_validation_failure_stops_genie(), "")
+
+    # 13 stop 的重试共享一个总预算。
+    #     单次「在单次上限内抛异常」可以耗时接近该上限；若无总预算，三次相加
+    #     就接近 3 倍，足以让整个响应越过客户端预算。这里把两者都调小来快速验证。
+    def stop_total_budget_is_enforced():
+        orig_stop = genie_server.genie.stop
+        orig_budget = genie_server.STOP_TOTAL_BUDGET
+        orig_per_try = genie_server.STOP_CALL_TIMEOUT
+
+        def slow_raise():
+            time.sleep(0.30)
+            raise RuntimeError("slow stop unavailable")
+
+        genie_server.genie.stop = slow_raise
+        genie_server.STOP_TOTAL_BUDGET = 0.45
+        genie_server.STOP_CALL_TIMEOUT = 0.40
+        genie_server._STOP_CLAIMED = False
+        genie_server._POISONED = False
+        try:
+            started = time.monotonic()
+            genie_server._stop_genie_safely("test")
+            elapsed = time.monotonic() - started
+            # 预算 0.45s、单次 0.30s：最多跑两次（0.6s > 0.45 会在第二次前被截断），
+            # 绝不能跑满三次的 0.9s。
+            return elapsed < 0.75
+        finally:
+            genie_server.genie.stop = orig_stop
+            genie_server.STOP_TOTAL_BUDGET = orig_budget
+            genie_server.STOP_CALL_TIMEOUT = orig_per_try
+            genie_server._POISONED = False
+
+    ok &= check("stop_total_budget_is_enforced", stop_total_budget_is_enforced(), "")
+
+    # 14 毒化后 warmup 必须跳过，不再 load_character。
+    #     stop 卡死会毒化，而那个卡死的 runner 仍可能活在 TTSPlayer 内部；
+    #     此时重入等于让它与旧 stop 并发操作同一单例。
+    def warmup_skips_when_poisoned():
+        orig_poisoned = genie_server._POISONED
+        orig_sleep = time.sleep
+        orig_load = genie_server.genie.load_character
+        loaded = []
+        genie_server._POISONED = True
+        genie_server.genie.load_character = lambda *a, **k: loaded.append(1)
+        time.sleep = lambda *a, **k: None
+        try:
+            genie_server._warmup()
+            return loaded == []
+        finally:
+            genie_server._POISONED = orig_poisoned
+            time.sleep = orig_sleep
+            genie_server.genie.load_character = orig_load
+
+    ok &= check("warmup_skips_when_poisoned", warmup_skips_when_poisoned(), "")
 
     print("ALL_PASS" if ok else "HAS_FAILURE", flush=True)
     return 0 if ok else 1
