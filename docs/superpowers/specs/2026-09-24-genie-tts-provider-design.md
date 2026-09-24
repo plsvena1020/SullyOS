@@ -143,19 +143,35 @@ fluent                                   → emo-fluent.wav    + 「下午三点
 | `components/date/DateSession.tsx:352` | `const cacheKey = dialogueText;` → 必须并入 `currentLineEmotionRef.current`（emotion）与语种。当前同句 calm/sad 直接复用第一条音频 |
 | `components/date/DateSession.tsx:384-393,405-425,496-500` | 同上，三处内存缓存键一并修 |
 | `apps/Chat.tsx:713-727` | 下载/分享文件名后缀按真实 MIME 决定，Genie 是 `.wav` 不是 `.mp3` |
-| `apps/CallApp.tsx:1416-1422` | 同上 |
+| `apps/CallApp.tsx:1205` | **必须改**。当前 `if (activeTtsProvider !== 'minimax')` 才进 router，而默认 provider 就是 minimax → **Genie 永远走不到**。改成 `if (isGenieVoiceEnabled(apiConfig) \|\| activeTtsProvider !== 'minimax')`。**只改这一小段路由，不动 CallApp 的提示词段** |
+| `utils/ttsProvider.ts` | 新增 `setGenieVoiceEnabled` / `isGenieVoiceEnabledSync` 单例（供 `resolveVoiceActingGuide` 用，它拿不到 apiConfig） |
 | `worker/main-agent/src/index.js:787 后` | 新增 `ttsProxy`（照 `webdavProxy` 模式：读 JSON body、转发到 `127.0.0.1:9882/speak`、原样回传 status/headers/body）+ 一行 `if (plain === '/v1/tts')`。**不持有情绪状态** |
 | `worker/main-agent/src/index.test.ts` | 新增：鉴权失败、body 透传、503/504 透传、未知 emotion 透传 |
 | `vite.config.ts` 代理段 | 新增 `'/agent'` dev proxy，target 取自环境变量（**禁止把 VPS 域名写进仓库**） |
 | `utils/networkFailureDiagnosis.ts:426-430` | 相对路径 `/agent/v1/tts` 在 Capacitor APK 不可用；须走已配置的 `agentUrl` 直连（与现有 agent 调用一致） |
 
-### 4.3 提示词：**不新增任何东西**
+### 4.3 提示词：只加一小段 Genie 专属指南（2026-09-24 用户决定）
 
-初稿要加第 6 套 `voice.genie` 指南并改 8 处接线，改为开关方案后**全部取消**。
+**核实结论（推翻初稿假设）**：初稿以为"复用现成那套教 `<语音 emotion>` 的指南"即可，实测不成立——
 
-理由：情绪来源是现成那套指南已经在教的 `<语音 emotion="happy">` 八种标签（`utils/promptPresetCatalog.ts:142-181` 的 `voice.minimax`）。Genie 不需要专属措辞——它只是把 emotion 字符串映射到参考音频。动作词（`(laughs)`/`(sighs)`）由 `cleanTextForTtsGenie` 在发送前剥掉，不需要让模型别写。
+- `utils/promptPresetCatalog.ts:145`（`voice.minimax`）只教 `<#0.6#>` 停顿与呼吸节奏，**没提** `<语音 emotion>`
+- `utils/promptPresetCatalog.ts:154`（`voice.fish`）**明文禁止**："别用圆括号 `(sighs)`、中文 `[轻声]`、全角【】、或 `<语音 emotion>` 属性"
+- `voice.elevenlabsStd`（172 行）禁止一切标签；`voice.date`（181 行）教的是 `[v:xxx]`
+- 真正教 `<语音 emotion="...">` 的是 `utils/chatPrompts.ts:1255-1256` 的硬编码块，但它在 `if (char.chatVoiceEnabled)` 分支内；`:1277` 的 else 分支**明令禁止**模型写语音标签
+- `:1273` 追加的 `resolveVoiceActingGuide()` 返回的是 **按 provider 选的**指南——provider 若是鱼声，教的东西与 `:1256` 直接冲突
 
-**注意**：`utils/chatPrompts.ts:1214-1277` 的主提示硬编码要求输出动作词，这是**既有行为，不改**。Genie 路径在客户端清洗掉即可。
+**解法（最小改动，3 个文件约 20 行）**：Genie 开启时，`resolveVoiceActingGuide()` 直接返回 Genie 专属短指南，不走 provider 选择。这样情绪标签必然被教到，且与任何 provider 指南不冲突。
+
+| 文件:行号 | 改动 |
+|---|---|
+| `utils/chatPrompts.ts:52-63` | `resolveVoiceActingGuide()` 开头加一个分支：Genie 开启 → 返回 `GENIE_VOICE_ACTING_GUIDE` 常量（定义在本文件），不走 provider 选择 |
+| `utils/chatPrompts.ts` | 新增 `GENIE_VOICE_ACTING_GUIDE` 常量（约 10 行）：教 `<语音 emotion="...">` 的 8 个取值、每条消息最多一个标签、不要复读文字 |
+| `utils/ttsProvider.ts` | 新增 `setGenieVoiceEnabled` / `isGenieVoiceEnabledSync` 模块级单例（照现有 `setTtsProvider` 模式，因 `resolveVoiceActingGuide` 拿不到 apiConfig） |
+| `context/OSContext.tsx:2158` 附近 | `apiConfig.genieVoiceEnabled` 变化时调 `setGenieVoiceEnabled`（与现有 `setTtsProvider` 同一处同步） |
+
+**为什么指南字符串放 `chatPrompts.ts` 而不是 `promptPresetCatalog.ts`**：放进 catalog 就要连带改 `promptPresetSeeding.ts` 的迁移表（`:113-115` 会删整个旧 `voicePrompts` 对象，漏一处就会抹掉用户数据）、`presetEffective.ts`、`promptCallRegistry.ts`、以及快照测试——这正是初稿里"8 处接线"的来源。Genie 指南短且专用，v1 不可在预设面板里编辑；这是有意取舍，不是遗漏。
+
+**仍然不改**：`voice.minimax` / `voice.fish` / `voice.elevenlabs*` / `voice.date` 四套现有指南正文一律不动；`chatPrompts.ts:1214-1277` 的主结构（`if chatVoiceEnabled` / `else` 禁止）也不动。
 
 ### 4.4 设置与角色页
 
@@ -233,28 +249,43 @@ VPS pull + 重启 main-agent 后，手机端真实链路冒烟：选 Genie → �
 范围偏大，拆成两个可独立验收的阶段。**必须按序**，阶段 A 不通过不要进阶段 B。
 
 **阶段 A：VPS 适配层 + 最小可用链路**（对应 `docs/superpowers/plans/2026-09-24-genie-tts-provider-phase-a.md`）
-- VPS：`/speak` 端点（锁、队列上限 2、情绪表、分块、WAV 包裹、错误传播、readiness）+ `emotions.json`
-- 仓库：`types.ts`（只加 3 个配置字段）、`utils/genieTts.ts`（新建）、`utils/ttsRouter.ts`（7 处分流，全部读 `isGenieVoiceEnabled`）、`worker/main-agent/src/index.js` + 其测试 + bundle 重建、`vite.config.ts` dev proxy
-- 验收：§8.1 全过 + §8.2 的 1-6 条。此阶段结束时 `/agent/v1/tts` 可用，但前端还没接开关，行为不变。
+- VPS：`/speak` 端点（锁、队列上限 2、情绪表、分块、WAV 包裹、错误传播、readiness、**用 `save_path` 是否生成作为合成成功信号**）+ `emotions.json`
+- 仓库：`types.ts`（只加 3 个配置字段）、`utils/genieTts.ts`（新建）、`utils/ttsRouter.ts`（7 处分流）、`apps/CallApp.tsx:1205`（补漏接）、`utils/ttsProvider.ts`（单例）、`utils/chatPrompts.ts`（Genie 短指南）、`context/OSContext.tsx`（单例同步）、`worker/main-agent/src/index.js` + 其测试 + bundle 重建、`vite.config.ts` dev proxy
+- 验收：§8.1 全过 + §8.2 的 1-6 条。此阶段结束时 `/agent/v1/tts` 可用，但**没有 UI 开关**，且默认关闭（见 §10.1），所以对现有用户零行为变化。
 
 **阶段 B：用户可见面 + 缓存修正**
-- `apps/Settings.tsx`：开关 + 情绪模式 + 固定情绪 + 试听
+- `apps/Settings.tsx`：开关 + 情绪模式 + 固定情绪 + 试听。**开关 UI 的默认勾选状态为开**，用户第一次保存即写入 `genieVoiceEnabled: true`（这就是"默认开启"的落地方式）
 - 角色页：试听
 - `DateSession.tsx` 缓存键（4 处）、`ttsCache.ts` 让 Genie 跳过共享缓存、`Chat.tsx:713-727` 与 `CallApp.tsx:1416-1422` 下载后缀改 `.wav`、`networkFailureDiagnosis.ts` 的 Capacitor 说明
-- **不含**任何提示词改动（§4.3 已取消）
 - 验收：§8.2 全过 + §8.3 冒烟。
 
 拆分理由：阶段 A 是纯接口，可独立压测与回滚；阶段 B 触面最广，出问题时能立刻判定在 UI/缓存层而非合成层。
 
-## 9.1 改为开关方案后，阶段 B 的工作量变化
+## 9.1 改为开关方案后的工作量变化
 
-初稿阶段 B 要碰 16 个文件（含 8 个提示词接线点），改后降到 7 个：Settings、角色页、DateSession、ttsCache、Chat、CallApp、networkFailureDiagnosis。**提示词那 8 个接线点全部不需要了。**
+初稿阶段 B 要碰 16 个文件（含 8 个提示词接线点），改后降到 7 个。提示词只多出 3 个文件、约 20 行（`chatPrompts.ts` 的短指南 + `ttsProvider.ts` 单例 + `OSContext.tsx` 同步），不进 `promptPresetCatalog.ts`，因此**不碰** `promptPresetSeeding.ts` / `presetEffective.ts` / `promptCallRegistry.ts` 那条会抹用户数据的迁移链。
 
 ## 10. 用户已定的决策（2026-09-24）
 
 1. **队列上限 = 2**。第 3 条并发直接 503 走纯文本回退，不等待。
 2. **`disgusted` 不补录**。陪伴场景用不上，且最容易录假；所有未映射情绪回落 `calm`。
 3. **试听放设置页 + 角色页两处**。
+4. **情绪来源靠加一小段提示词**（`chatPrompts.ts` 的 Genie 专属短指南），不改 catalog 现有四套指南。
+5. **原三家 minimax / 鱼声 / ElevenLabs 保留**，作为开关关闭时的回退路径。
+
+## 10.1 「默认开启」的正确落地方式（重要）
+
+用户要的是"默认开启"，但**阶段 A 不能这么做**：
+
+- 阶段 A 没有 UI 开关。若把 `undefined` 视为开启，所有老用户升级后会被立刻切到 Genie，且**界面上无法关掉**。
+- 同时 `characterHasVoice` / `canSynthesizeSpeech` 在开启时无条件为真，会让语音条对所有人出现——包括没配主代理、Genie 未部署、非中文朗读语种、Date 缓存串音的情况。
+- 这与阶段 A「对现有用户零行为变化」的前提直接矛盾。
+
+因此：
+
+- **阶段 A**：`isGenieVoiceEnabled(apiConfig)` 语义为 `apiConfig.genieVoiceEnabled === true`，即**纯 opt-in**。`resolveGenieEmotion` 回落 `calm` 的逻辑不变。
+- **阶段 B**：Settings 的开关 UI 默认勾选为「开」，用户第一次保存配置时写入 `genieVoiceEnabled: true`。这才是"默认开启"——新用户/首次进入设置的用户会看到它已勾上，老用户在此之前保持原样。
+- 若用户希望**老用户升级即生效**，那需要一次显式的数据迁移（给 `os_api_config` 补写 `genieVoiceEnabled: true`），并且必须先把 Date 缓存键、设置开关、readiness 一起做完，即等同提前执行阶段 B 的部分内容。**当前不做**，留到阶段 B 结束时单独决定。
 
 ## 11. 已知不做的后续项
 

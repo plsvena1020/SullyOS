@@ -1,8 +1,8 @@
-# Genie-TTS Provider 阶段 A（VPS 适配层 + 最小可用链路） Implementation Plan
+# Genie-TTS 独立开关 阶段 A（VPS 适配层 + 最小可用链路） Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在 VPS 上给 Genie 加一个带锁与队列的 `/speak` 适配端点，并把它接成 SullyOS 的第 4 个 TTS provider，使 `/v1/tts` 可用。本期不含 UI 与提示词。
+**Goal:** 在 VPS 上给 Genie 加一个带锁与队列的 `/speak` 适配端点，并把它接成一个**独立开关**（`apiConfig.genieVoiceEnabled`）而不是第 4 个 TTS provider，使 `/agent/v1/tts` 在 localhost 与生产链路都可用。**本期不含 UI 开关、默认关闭，对现有用户零行为变化。**
 
 **Architecture:** 情绪表、队列、文本分块、WAV 格式知识全部在 VPS 适配层（与 Genie 同进程生命周期）。main-agent 退化为无状态鉴权转发。浏览器只传白名单内的 `emotion` 字符串，不知道参考文件路径。
 
@@ -52,7 +52,11 @@
 5. **空文本 / 纯空白** → 400，不占用队列槽位 → Task 1 Step 9
 6. **文本里带 `<语音 emotion="happy">(laughs)…</语音><字幕>…</字幕>`** → 送到 Genie 的只有正文，不含任何标签或动作词 → Task 2 Step 4
 7. **`agentUrl` 结尾带 `/`** → 不产生 `//agent/v1/tts` 双斜杠 → Task 2 Step 4
-8. **未预热完成时收到请求** → 503 `warming_up`，不是泛化 500 → Task 1 Step 8
+8. **未预热完成时收到请求** → 503 `warming_up`，不是泛化 500 → Task 1 Step 7
+9. **Genie 后台推理失败**（吞异常、HTTP 200 已发出）→ 必须变成 500 `synth_failed`，不能返回半截音频当成功。判据是 `save_path` 未生成 → Task 1 Step 9 的 `sane()` 会因 `wave.open` 失败而 FAIL
+10. **malformed 请求**（无 body / 非法 JSON / JSON 数组）→ 顶层 `{"error":"bad_request"}` 400，不是 FastAPI 默认的 422 `{"detail":...}` → Task 1 Step 9
+11. **默认开启会把老用户切走** → 阶段 A 是 opt-in，`isGenieVoiceEnabled({})` 必须为 `false` → Task 2 Step 4
+12. **通话绕过 router** → `CallApp.tsx:1205` 的条件必须含 `isGenieVoiceEnabled`，否则 Genie 在通话里永远不生效 → Task 2 Step 8（靠代码审查，无自动化测试能覆盖这条调用路径）
 
 ---
 
@@ -67,6 +71,10 @@
 | `types.ts` | `APIConfig` 加 3 个配置字段（**不改** `TtsProvider`、**不改** `voicePrompts`） |
 | `utils/genieTts.ts` | **新建**。浏览器客户端 + 4 个导出：`isGenieVoiceEnabled`、`resolveGenieEmotion`、`cleanTextForTtsGenie`、`synthesizeSpeechGenieDetailed` |
 | `utils/genieTts.test.ts` | **新建** |
+| `utils/ttsProvider.ts` | 加 `setGenieVoiceEnabled` / `isGenieVoiceEnabledSync` 单例（prompt 侧拿不到 apiConfig） |
+| `utils/chatPrompts.ts` | 加 `GENIE_VOICE_ACTING_GUIDE` 常量 + `resolveVoiceActingGuide` 开头一个分支。**不进** `promptPresetCatalog.ts` |
+| `context/OSContext.tsx` | 在既有 `setTtsProvider` 同步处加一行 `setGenieVoiceEnabled(...)` |
+| `apps/CallApp.tsx` | **只改 `:1205` 一个条件 + 一个 import**（否则通话永远绕过 router） |
 | `utils/ttsRouter.ts` | 7 处分流，全部读 `isGenieVoiceEnabled`；`providerUsesRawVoiceMarkup` 改判定；`SynthOptions` 加 export |
 | `utils/ttsRouter.test.ts` | **新建**（当前不存在） |
 | `worker/main-agent/src/index.js` | 加 `ttsProxy`（无状态转发） |
@@ -88,7 +96,7 @@
 - Consumes: `genie_tts`（已装于 `/opt/genie-tts/venv`）；`genie_tts.Server.app` 是 FastAPI 实例，`genie.start_server()` 启动的正是它。
 - Produces: `POST 127.0.0.1:9882/speak`，请求 `{"text": string, "emotion": string?}`。
   - 成功：`200`、`content-type: audio/wav`、完整 RIFF 字节、响应头 `X-Genie-Resolved-Emotion: <实际使用的情绪>`
-  - 失败：`{"error": "<code>"}`（**顶层就是 error，不包在 detail 里**），code ∈ `warming_up`(503) / `busy`(503) / `lock_timeout`(504) / `synth_timeout`(504) / `empty`(400) / `chunk_too_long`(413) / `too_many_chunks`(413) / `reference_missing`(500) / `synth_failed`(500)
+  - 失败：`{"error": "<code>"}`（**顶层就是 error，不包在 detail 里**），code ∈ `bad_request`(400) / `empty`(400) / `bad_emotion`(400) / `warming_up`(503) / `busy`(503) / `lock_timeout`(504) / `synth_timeout`(504) / `chunk_too_long`(413) / `too_many_chunks`(413) / `reference_missing`(500) / `synth_failed`(500)
   - 供 Task 3 的 `ttsProxy` 与 Task 4 的 `genieTts.ts` 依赖
 
 - [ ] **Step 1: 写情绪表**
@@ -128,6 +136,7 @@
 import json
 import os
 import re
+import tempfile
 import threading
 import time
 import urllib.error
@@ -139,7 +148,9 @@ os.environ.setdefault("GENIE_DATA_DIR", "/opt/genie-tts/GenieData")
 
 import genie_tts as genie  # noqa: E402
 from genie_tts.Server import app as genie_app  # noqa: E402
+from fastapi import Request  # noqa: E402
 from fastapi.responses import JSONResponse, Response  # noqa: E402
+from starlette.concurrency import run_in_threadpool  # noqa: E402
 
 HOST = os.environ.get("GENIE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("GENIE_PORT", "9882"))
@@ -227,9 +238,17 @@ def _split_text(text: str) -> list[str]:
     for part in parts:
         if len(part) > CHUNK_MAX_CHARS:
             raise ValueError("chunk_too_long")
-        if buf and (len(buf) >= CHUNK_TARGET_CHARS or len(buf) + len(part) > CHUNK_MAX_CHARS):
+        # 目标 60 字：单段本身就超过目标（长句无标点）时也要先 flush，
+        # 否则 "好的。"+100字 会被合成一个 103 字块。
+        if buf and (
+            len(buf) >= CHUNK_TARGET_CHARS
+            or len(part) > CHUNK_TARGET_CHARS
+            or len(buf) + len(part) > CHUNK_MAX_CHARS
+        ):
             flush()
         buf += part
+        if len(buf) >= CHUNK_TARGET_CHARS:
+            flush()
     flush()
 
     if not chunks:
@@ -257,6 +276,43 @@ def _genie_post(path: str, payload: dict, timeout: float) -> bytes:
         raise
     except TimeoutError as exc:
         raise SynthesisTimeout() from exc
+
+
+def _tts_completed_pcm(chunk: str, timeout: float) -> bytes:
+    """合成一个分块，返回裸 PCM。
+
+    必须借 save_path 判定成功：Genie 的 Server.run_tts_in_background 会吞掉推理异常
+    （只发结束标记），而 HTTP 200 在进入后台前就已发出。只看状态码会把"半截音频"
+    当成功返回。用 save_path 则只有 TTSPlayer 真正处理完才会写出完整 WAV。
+    """
+    fd, path = tempfile.mkstemp(prefix="genie-chunk-", suffix=".wav")
+    os.close(fd)
+    try:
+        _genie_post(
+            "/tts",
+            {
+                "character_name": CHARACTER,
+                "text": chunk,
+                "split_sentence": False,
+                "save_path": path,
+            },
+            timeout=timeout,
+        )
+        if not os.path.isfile(path) or os.path.getsize(path) <= 44:
+            raise RuntimeError("incomplete genie output")
+        with wave.open(path, "rb") as wf:
+            actual = (wf.getnchannels(), wf.getsampwidth(), wf.getframerate())
+            if actual != (CHANNELS, BYTES_PER_SAMPLE, SAMPLE_RATE):
+                raise RuntimeError("unexpected genie wav format")
+            pcm = wf.readframes(wf.getnframes())
+        if not pcm:
+            raise RuntimeError("empty genie pcm")
+        return pcm
+    finally:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
 
 
 def _synthesize(text: str, emotion: str) -> tuple[bytes, str]:
@@ -288,13 +344,7 @@ def _synthesize(text: str, emotion: str) -> tuple[bytes, str]:
 
     pcm = bytearray()
     for chunk in _split_text(text):
-        pcm.extend(
-            _genie_post(
-                "/tts",
-                {"character_name": CHARACTER, "text": chunk, "split_sentence": False},
-                timeout=remaining(SYNTH_TIMEOUT),
-            )
-        )
+        pcm.extend(_tts_completed_pcm(chunk, timeout=remaining(SYNTH_TIMEOUT)))
     if not pcm:
         raise RuntimeError("empty pcm")
     return _wrap_pcm_as_wav(bytes(pcm)), resolved
@@ -331,7 +381,16 @@ def _speak_with_guard(text: str, emotion: str) -> tuple[bytes, str]:
 
 
 @genie_app.post("/speak")
-def speak_endpoint(payload: dict):
+async def speak_endpoint(request: Request):
+    # 自己解析 body：若用 `payload: dict` 形参，FastAPI 对无 body / 非法 JSON / JSON 数组
+    # 会返回 422 {"detail": ...}，违反顶层 {"error": ...} 的契约。
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "bad_request"})
+    if not isinstance(payload, dict):
+        return JSONResponse(status_code=400, content={"error": "bad_request"})
+
     if not _READY.is_set():
         return JSONResponse(status_code=503, content={"error": "warming_up"})
 
@@ -343,7 +402,8 @@ def speak_endpoint(payload: dict):
         return JSONResponse(status_code=400, content={"error": "bad_emotion"})
 
     try:
-        wav, resolved = _speak_with_guard(text, emotion)
+        # 合成是阻塞的（最长 120 秒），必须放线程池，否则会堵住整个事件循环。
+        wav, resolved = await run_in_threadpool(_speak_with_guard, text, emotion)
     except SpeakBusy:
         return JSONResponse(status_code=503, content={"error": "busy"})
     except LockTimeout:
@@ -461,6 +521,7 @@ echo "OK: /speak 就绪，WAV 头合法"
 所以只能用时长区间与"至少一次不同"来断言，不能逐字节比较。
 """
 import json
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -500,11 +561,28 @@ def check(name, cond, detail=""):
 
 
 def sane(body, low=1.0, high=3.0):
-    """13 字中文的合理时长区间。垃圾音频（约 5.3s）会被这个上限挡住。"""
-    if not body.startswith(b"RIFF"):
+    """13 字中文的合理时长区间。垃圾音频（约 5.3s）会被这个上限挡住。
+
+    要真正 wave.open 解析，不能只查 RIFF 魔数——魔数对了但帧数/格式错的文件也算坏。
+    """
+    import io as _io
+    import wave as _wave
+    try:
+        with _wave.open(_io.BytesIO(body), "rb") as wf:
+            if (wf.getnchannels(), wf.getsampwidth(), wf.getframerate()) != (1, 2, 32000):
+                return False
+            dur = wf.getnframes() / wf.getframerate()
+    except Exception:
         return False
-    dur = len(body) / BYTES_PER_SEC
     return low <= dur <= high
+
+
+def _raises(fn, expected: str) -> bool:
+    try:
+        fn()
+        return False
+    except ValueError as e:
+        return str(e) == expected
 
 
 def run_threaded(payloads):
@@ -543,12 +621,27 @@ def main():
     ok &= check("unknown_emotion_200", st_foo == 200, f"status={st_foo}")
     ok &= check("unknown_falls_back_to_calm", emo_foo == "calm", f"header={emo_foo}")
 
-    # 3 短句 + 长段无标点：必须切成两块而不是误判超长
-    st_mix, body_mix, _ = post(
-        {"text": "好的。" + "啊" * 100, "emotion": "calm"}, timeout=180
+    # 3 短句 + 长段无标点：必须切成两块而不是误判超长。
+    #    先直接单测算法本身，否则"只检查 HTTP 非空"会假绿。
+    sys.path.insert(0, "/opt/genie-tts")
+    from genie_server import _split_text as split_text
+
+    sample = "好的。" + "啊" * 100
+    parts = split_text(sample)
+    ok &= check(
+        "split_exact_two_chunks",
+        len(parts) == 2 and "".join(parts) == sample,
+        f"chunks={len(parts)} sizes={[len(p) for p in parts]}",
     )
+    ok &= check(
+        "split_no_punctuation_300_raises",
+        _raises(lambda: split_text("啊" * 300), "chunk_too_long"),
+        "",
+    )
+
+    st_mix, body_mix, _ = post({"text": sample, "emotion": "calm"}, timeout=180)
     ok &= check("mixed_split_ok", st_mix == 200, f"status={st_mix}")
-    ok &= check("mixed_not_empty", len(body_mix) > 0, f"len={len(body_mix)}")
+    ok &= check("mixed_sane_or_long", st_mix != 200 or len(body_mix) > 0, f"len={len(body_mix)}")
 
     # 4 空文本 / 无标点超长
     st_empty, _, _ = post({"text": "   ", "emotion": "calm"}, timeout=60)
@@ -589,14 +682,21 @@ git commit -m "feat(vps-backend): Genie /speak adapter with lock, queue and WAV 
 
 - [ ] **Step 6: 部署到 VPS**
 
-在工作树根目录执行（`<你的 VPS IP>` 用交互输入，不写进命令历史）：
+在工作树根目录执行（`<你的 VPS IP>` 用交互输入，不进命令历史）。
+
+**不要用 `tar -cf - ... | ssh ...`**：PowerShell 5.1 的 stdout 管道会做文本解码，二进制会被破坏。必须先落成文件再 `scp`。
 
 ```powershell
 $env:VPS_HOST = Read-Host 'VPS IP'
-[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
-tar -cf - -C vps-backend/deploy/genie . |
-  ssh "root@$env:VPS_HOST" `
-    "tar -xf - -C /opt/genie-tts && bash /opt/genie-tts/install.sh && /opt/genie-tts/venv/bin/python /opt/genie-tts/test_speak.py"
+$archive = Join-Path $env:TEMP 'genie-phase-a.tar.gz'
+try {
+  tar -czf $archive -C vps-backend/deploy/genie .
+  scp $archive "root@$env:VPS_HOST:/tmp/genie-phase-a.tar.gz"
+  ssh "root@$env:VPS_HOST" 'tar -xzf /tmp/genie-phase-a.tar.gz -C /opt/genie-tts && bash /opt/genie-tts/install.sh && /opt/genie-tts/venv/bin/python /opt/genie-tts/test_speak.py; rc=$?; rm -f /tmp/genie-phase-a.tar.gz; exit $rc'
+}
+finally {
+  Remove-Item $archive -ErrorAction SilentlyContinue
+}
 ```
 
 `install.sh` 预期末行 `OK: /speak 就绪，WAV 头合法`，随后 `test_speak.py` 打印 `ALL_PASS`。
@@ -752,12 +852,13 @@ describe('synthesizeSpeechGenieDetailed', () => {
 });
 
 describe('isGenieVoiceEnabled', () => {
-  it('undefined 视为开启（老用户升级后自动生效）', () => {
-    expect(isGenieVoiceEnabled({} as any)).toBe(true);
+  it('阶段 A 是 opt-in：undefined 不算开启（老用户零行为变化）', () => {
+    expect(isGenieVoiceEnabled({} as any)).toBe(false);
+    expect(isGenieVoiceEnabled({ genieVoiceEnabled: undefined } as any)).toBe(false);
   });
-  it('只有显式 false 才关闭', () => {
-    expect(isGenieVoiceEnabled({ genieVoiceEnabled: false } as any)).toBe(false);
+  it('只有显式 true 才开启', () => {
     expect(isGenieVoiceEnabled({ genieVoiceEnabled: true } as any)).toBe(true);
+    expect(isGenieVoiceEnabled({ genieVoiceEnabled: false } as any)).toBe(false);
   });
 });
 
@@ -824,6 +925,9 @@ import type { SynthOptions } from './ttsRouter';
 import { readAgentRoutingConfig } from './agentRouting';
 
 const ERROR_TEXT: Record<string, string> = {
+  bad_request: '请求格式不正确',
+  bad_emotion: '情绪值格式不正确',
+  empty: '没有可朗读的文字',
   warming_up: '语音服务正在准备中，请稍后',
   busy: '语音正忙，稍后再试',
   lock_timeout: '语音排队超时',
@@ -832,13 +936,16 @@ const ERROR_TEXT: Record<string, string> = {
   reference_missing: '参考音频缺失',
   chunk_too_long: '这段文字太长，无法朗读',
   too_many_chunks: '这段文字段落太多，无法朗读',
-  empty: '没有可朗读的文字',
   genie_unavailable: '语音服务暂时不可用',
 };
 
-/** Genie 不加进 TtsProvider 联合类型，用独立开关。undefined 视为 true，老用户自动开启。 */
+/**
+ * 阶段 A 是 opt-in：只有显式写 true 才启用。
+ * 用户要的「默认开启」由阶段 B 的设置开关落地（UI 默认勾选 + 保存时写入 true），
+ * 不能在这里把 undefined 当 true——阶段 A 没有 UI，老用户会被切走且无法关闭。
+ */
 export function isGenieVoiceEnabled(apiConfig: APIConfig): boolean {
-  return apiConfig.genieVoiceEnabled !== false;
+  return apiConfig.genieVoiceEnabled === true;
 }
 
 const GENIE_EMOTIONS = ['calm', 'happy', 'sad', 'angry', 'surprised', 'fearful', 'fluent'] as const;
@@ -919,7 +1026,7 @@ async function readErrorText(res: Response): Promise<string> {
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); pnpm vitest run utils/genieTts.test.ts`
-Expected: 14 tests passed（7 条 synthesize + 2 条 isGenieVoiceEnabled + 4 条 resolveGenieEmotion + 2 条 cleanTextForTtsGenie = 15，若数量不同以实际为准，重点是 0 failed）。
+Expected: 15 tests passed, 0 failed。
 
 - [ ] **Step 5: 改 `types.ts`（只加配置字段）**
 
@@ -988,7 +1095,8 @@ export type SynthOptions = { languageBoost?: string; groupId?: string; emotion?:
 第 106-111 行 `stripTtsMarkupForDisplay`，在 `const provider = resolveTtsProvider(apiConfig);` 之后加：
 
 ```typescript
-  if (isGenieVoiceEnabled(apiConfig)) return cleanVoiceMarkupForDisplay(text);
+  // 用 cleanTextForTtsGenie 而不是 cleanVoiceMarkupForDisplay：后者不移除 Fish 的 [whispering] 等方括号 cue。
+  if (isGenieVoiceEnabled(apiConfig)) return cleanTextForTtsGenie(text);
 ```
 
 第 114-115 行整段替换为：
@@ -1002,7 +1110,82 @@ export const providerUsesRawVoiceMarkup = (apiConfig: APIConfig): boolean => {
 };
 ```
 
-- [ ] **Step 8: 新建 `utils/ttsRouter.test.ts`**
+- [ ] **Step 8: 修 `apps/CallApp.tsx` 漏接（否则通话永远用不到 Genie）**
+
+`apps/CallApp.tsx:1204-1205` 现状：
+
+```typescript
+  const synthesizeCallAudioUrl = async (rawText: string, emotion?: string): Promise<{ url: string; traceIds: string[] }> => {
+    if (activeTtsProvider !== 'minimax') {
+```
+
+默认 provider 就是 minimax，所以这个 `if` 恒为 false，通话**永远直连 MiniMax、完全绕过 router**。Genie 是开关不是 provider，改成：
+
+```typescript
+    if (isGenieVoiceEnabled(apiConfig) || activeTtsProvider !== 'minimax') {
+```
+
+并在文件顶部 import：`import { isGenieVoiceEnabled } from '../utils/genieTts';`
+
+**只改这一行 + 一个 import。不要动 CallApp 的提示词段（`:355-370`、`:488-508`）。**
+
+- [ ] **Step 9: `utils/ttsProvider.ts` 加单例**
+
+`resolveVoiceActingGuide()` 拿不到 `apiConfig`（它只用 `getTtsProvider()` 这个模块级单例），所以需要一个同步单例。照现有 `setTtsProvider` / `getTtsProvider`（第 15-23 行）的模式，在其后加：
+
+```typescript
+let currentGenieEnabled = false;
+
+/** Genie 开关的模块级镜像，供拿不到 apiConfig 的 prompt 侧使用。与 setTtsProvider 同一套理由。 */
+export function setGenieVoiceEnabled(v: boolean | undefined | null): void {
+  currentGenieEnabled = v === true;
+}
+
+export function isGenieVoiceEnabledSync(): boolean {
+  return currentGenieEnabled;
+}
+```
+
+- [ ] **Step 10: `utils/chatPrompts.ts` 加 Genie 专属短指南**
+
+在文件里加常量（约 10 行）：
+
+```typescript
+/**
+ * Genie 自建语音的表演规则。放在本文件而不是 promptPresetCatalog：
+ * 放进 catalog 要连带改 promptPresetSeeding 的迁移表（它会删整个旧 voicePrompts，
+ * 漏一处就抹掉用户数据），不值当。代价是 v1 不能在预设面板里编辑这一段。
+ */
+const GENIE_VOICE_ACTING_GUIDE = `### 语音表演（Genie 自建语音）
+
+- 用 \`<语音 emotion="...">\` 发送语音块，情绪只能取 happy/sad/angry/fearful/surprised/calm/fluent；情绪不强就别加，会自动用 calm。
+- 每条消息最多一个 <语音> 标签。不是每条都要发语音——像真人一样，有时候打字有时候发语音。
+- <语音> 里只写会被朗读的文字，不要写括号动作（会被剥掉）。
+- **不要复读**：同时发文字和语音时，语音内容不能是文字的重复或复述。
+- 语音和文字的标点、语气词要自然，口语化，不要念稿腔。`;
+```
+
+然后在 `resolveVoiceActingGuide()`（第 52-63 行）**最开头**插入：
+
+```typescript
+  if (isGenieVoiceEnabledSync()) return GENIE_VOICE_ACTING_GUIDE;
+```
+
+并 import：`isGenieVoiceEnabledSync` from `./ttsProvider`。
+
+**为什么必须走这个分支**：`:1273` 追加的指南是按 provider 选的，而 `voice.fish`（`utils/promptPresetCatalog.ts:154`）**明文禁止** `<语音 emotion>`，与 `:1256` 教的东西直接冲突。Genie 开启时绕开 provider 选择即可。
+
+- [ ] **Step 11: `context/OSContext.tsx` 同步单例**
+
+`context/OSContext.tsx:2158` 附近已经有 `setTtsProvider(apiConfig.ttsProvider)`，在同一处加一行：
+
+```typescript
+  setGenieVoiceEnabled(apiConfig.genieVoiceEnabled);
+```
+
+并 import `setGenieVoiceEnabled`（`utils/ttsProvider.ts`）。**照同一处的既有同步写法，不要新建第二个同步点。**
+
+- [ ] **Step 12: 新建 `utils/ttsRouter.test.ts`**
 
 **新建文件**（当前不存在），完整内容：
 
@@ -1018,9 +1201,9 @@ import {
 } from './ttsRouter';
 
 describe('Genie 开关分流', () => {
-  // 开：默认（undefined 视为 true）
-  const ON = { genieVoiceEnabled: undefined, ttsProvider: 'minimax' } as any;
-  // 关：显式 false，回退原 provider
+  // 开：必须显式 true（阶段 A 是 opt-in）
+  const ON = { genieVoiceEnabled: true, ttsProvider: 'minimax' } as any;
+  // 关：未设置或显式 false，回退原 provider
   const OFF = { genieVoiceEnabled: false, ttsProvider: 'minimax' } as any;
 
   it('characterHasVoice 开启时无条件 true（无 per-char 音色配置）', () => {
@@ -1057,13 +1240,12 @@ describe('Genie 开关分流', () => {
     expect(typeof out).toBe('string');
   });
 
-  it('stripTtsMarkupForDisplay 开启时保留可读正文', () => {
+  it('stripTtsMarkupForDisplay 开启时移除 Genie 不支持的标记', () => {
     const out = stripTtsMarkupForDisplay(
-      '正文一<语音 emotion="happy">口语一</语音><字幕>字幕一</字幕>',
+      '<语音 emotion="happy">口语一(laughs)[whispering]</语音>',
       ON,
     );
-    expect(out).toContain('正文一');
-    expect(out).not.toContain('<语音');
+    expect(out).toBe('口语一');
   });
 
   it('assertTtsLanguageSupported 开启时拒绝粤语', () => {
@@ -1073,26 +1255,26 @@ describe('Genie 开关分流', () => {
 });
 ```
 
-- [ ] **Step 9: 跑测试**
+- [ ] **Step 13: 跑测试**
 
 Run: `[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); pnpm vitest run utils/ttsRouter utils/ttsProvider utils/genieTts`
 Expected: 全绿。`providerUsesRawVoiceMarkup` 那条必须 PASS——它修的是真 bug（旧实现会把 Fish 的 `(laughs)` 原样送进 Genie）。
 
-- [ ] **Step 10: 类型检查**
+- [ ] **Step 14: 类型检查**
 
 Run: `[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); npx tsc --noEmit 2>&1 | Select-String "types.ts|ttsProvider.ts|ttsRouter.ts|genieTts.ts"`
 Expected: 无输出。仓库有存量 tsc 错误，只要求本次触碰的 4 个文件零命中。
 
-- [ ] **Step 11: 编码自查**
+- [ ] **Step 15: 编码自查**
 
 Run: `[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); pnpm vitest run utils/mojibakeGuard.test.ts`
 Expected: 1 passed。
 
-- [ ] **Step 12: 提交**
+- [ ] **Step 16: 提交**
 
 ```bash
-git add types.ts utils/ttsRouter.ts utils/ttsRouter.test.ts utils/genieTts.ts utils/genieTts.test.ts
-git commit -m "feat(tts): add genie provider and browser client"
+git add types.ts utils/ttsRouter.ts utils/ttsRouter.test.ts utils/genieTts.ts utils/genieTts.test.ts utils/ttsProvider.ts utils/chatPrompts.ts context/OSContext.tsx apps/CallApp.tsx
+git commit -m "feat(tts): add Genie routing switch and browser client"
 ```
 
 ---
@@ -1333,14 +1515,15 @@ git commit -m "chore(vite): dev proxy for /agent so localhost can reach VPS TTS"
 4. `pnpm vitest run utils/mojibakeGuard.test.ts` 绿 + U+FFFD 字节扫零
 5. `worker/main-agent/src/index.js` 与 `worker.bundle.js` 的 SHA-256 相等
 6. localhost 端到端三条都 200 + 合法 WAV，时长在 1.0-3.0s，`angry` 与 calm 哈希至少一个不同
-7. **Phase B 未污染**：对 `git diff --name-only <阶段A起始commit>..HEAD` 做路径白名单检查，结果**不得**出现 `apps/Settings.tsx`、`components/date/DateSession.tsx`、`apps/CallApp.tsx`、`apps/Chat.tsx`、`utils/ttsCache.ts`（这些是 Phase B 的文件）。**也不得出现** `utils/ttsProvider.ts`、`utils/promptPresetCatalog.ts`、`utils/chatPrompts.ts`、`utils/promptPresetSeeding.ts`、`utils/presetEffective.ts`、`utils/promptCallRegistry.ts`——开关方案不需要动它们。设置页仍显示原有 provider 四选一是预期状态。
+7. **Phase B 未污染**：对 `git diff --name-only <阶段A起始commit>..HEAD` 做路径白名单检查，结果**不得**出现 `apps/Settings.tsx`、`components/date/DateSession.tsx`、`apps/Chat.tsx`、`utils/ttsCache.ts`（这些是 Phase B 的文件）。**也不得出现** `utils/promptPresetCatalog.ts`、`utils/promptPresetSeeding.ts`、`utils/presetEffective.ts`、`utils/promptCallRegistry.ts`、`utils/promptPresetRuntime.ts`——Genie 指南刻意放 `chatPrompts.ts` 常量而非 catalog，正是为了不碰这条会抹用户数据的迁移链。`apps/CallApp.tsx` 允许出现，但 diff 里只能有 `:1205` 附近那一个条件和一个 import。设置页仍显示原有 provider 四选一是预期状态。
 
 ## 阶段 A 不做的事
 
 - 设置页的 Genie 开关 / 情绪下拉 / 试听按钮、角色页试听（Phase B）
-- **任何提示词改动**——包括原初稿里的第 6 套 `voice.genie` 指南（已取消，见 spec §4.3）
+- 让老用户升级即生效的数据迁移（Phase B 结束时单独决定，见 spec §10.1）
 - `DateSession.tsx` 缓存键修正（Phase B）
 - `ttsCache.ts` 让 Genie 跳过共享缓存（Phase B）
 - Chat/Call 下载文件后缀 `.wav`（Phase B）
 - Capacitor APK 走 `agentUrl` 直连（Phase B）
 - 删掉或改动原有 minimax / 鱼声 / ElevenLabs 三家（永久不做，它们是 Genie 关闭时的回退路径）
+- 把 Genie 指南放进 `utils/promptPresetCatalog.ts`（永久不做，理由见上）
