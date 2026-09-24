@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import handler from './index.js';
 import { HOME_SERVER_CONFIG_DEFAULTS } from './store.js';
@@ -186,5 +186,66 @@ describe('sullyos-home 路由', () => {
     });
     const get = await call(env, '/home/config/c1');
     expect((await get.json() as any).config.roundIntervalMin).toBe(10);
+  });
+});
+
+describe('POST /home/speak', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('Genie-TTS 成功时返回 WAV data URL，并使用 ether 角色', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response(new Uint8Array([1, 2, 3]), {
+      status: 200,
+      headers: { 'content-type': 'audio/wav' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const res = await call(authedEnv(makeDb()), '/home/speak', {
+      method: 'POST',
+      body: JSON.stringify({ text: '你好' }),
+    });
+    const result = await res.json() as { fallback: boolean; audioUrl: string | null };
+
+    expect(res.status).toBe(200);
+    expect(result.fallback).toBe(false);
+    expect(result.audioUrl).toMatch(/^data:audio\/wav;base64,/);
+    const encodedAudio = result.audioUrl!.split(',')[1];
+    const decodedAudio = Buffer.from(encodedAudio, 'base64');
+    expect(Array.from(decodedAudio.subarray(0, 4))).toEqual([0x52, 0x49, 0x46, 0x46]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(String(url).endsWith(':9882/tts')).toBe(true);
+    const requestBody = JSON.parse(String(init.body)) as {
+      character_name: string;
+      split_sentence: boolean;
+    };
+    expect(requestBody.character_name).toBe('ether');
+    expect(requestBody.split_sentence).toBe(true);
+  });
+
+  it('Genie-TTS 404 时回退纯文本', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('not found', { status: 404 })));
+
+    const res = await call(authedEnv(makeDb()), '/home/speak', {
+      method: 'POST',
+      body: JSON.stringify({ text: '你好' }),
+    });
+    const result = await res.json() as { fallback: boolean; audioUrl: string | null };
+
+    expect(result.fallback).toBe(true);
+    expect(result.audioUrl).toBeNull();
+  });
+
+  it('Genie-TTS 请求异常时回退纯文本', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('boom')));
+
+    const res = await call(authedEnv(makeDb()), '/home/speak', {
+      method: 'POST',
+      body: JSON.stringify({ text: '你好' }),
+    });
+    const result = await res.json() as { fallback: boolean; audioUrl: string | null };
+
+    expect(result.fallback).toBe(true);
   });
 });
