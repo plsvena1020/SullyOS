@@ -400,8 +400,12 @@ def _is_poisoned() -> bool:
         return _POISONED
 
 
-def _try_genie_stop(timeout: float) -> bool:
-    """在有界时间内调一次 genie.stop()。返回 True 表示它正常返回。
+def _try_genie_stop(timeout: float) -> str:
+    """在有界时间内调一次 genie.stop()。
+
+    返回 "ok"（正常返回）、"raised"（抛了异常）、"hung"（超时仍未返回）。
+    三种必须分开：抛异常说明 stop 内部炸了，卡死说明它根本不理人，运维要查的
+    方向完全不同，日志不能把两者混成同一句。
 
     故意放进独立线程再 join：genie.stop() 自己没有超时，永久阻塞时我们不能
     被它拖住。放弃等待并毒化，好过无限期占着 _SYNTH_LOCK。
@@ -419,7 +423,9 @@ def _try_genie_stop(timeout: float) -> bool:
     worker = threading.Thread(target=runner, daemon=True)
     worker.start()
     worker.join(timeout)
-    return bool(outcome) and outcome[0]
+    if not outcome:
+        return "hung"
+    return "ok" if outcome[0] else "raised"
 
 
 def _stop_genie_safely(reason: str) -> bool:
@@ -430,11 +436,16 @@ def _stop_genie_safely(reason: str) -> bool:
     """
     with _STOP_LOCK:
         for attempt in range(1, STOP_RETRIES + 1):
-            if _try_genie_stop(STOP_CALL_TIMEOUT):
+            status = _try_genie_stop(STOP_CALL_TIMEOUT)
+            if status == "ok":
                 return True
+            detail = (
+                f"did not return within {STOP_CALL_TIMEOUT}s"
+                if status == "hung"
+                else "raised an exception"
+            )
             print(
-                f"[genie] genie.stop() attempt {attempt}/{STOP_RETRIES} "
-                f"did not return within {STOP_CALL_TIMEOUT}s",
+                f"[genie] genie.stop() attempt {attempt}/{STOP_RETRIES} {detail}",
                 file=sys.stderr,
                 flush=True,
             )
