@@ -270,6 +270,52 @@ def main():
 
     ok &= check("poison_during_lock_wait_blocked", poison_during_lock_wait_blocks_admission(), "")
 
+    # 10 真实 socket：服务端建连后永不响应，证明 abort 真的能唤醒阻塞中的读，
+    #    且 socket 在响应头到达之前就已被登记。
+    def real_socket_abort_wakes_blocked_read():
+        import http.server
+
+        class Hang(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                time.sleep(30)  # 建连后不写任何响应头
+
+            def log_message(self, *args):
+                pass
+
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Hang)
+        port = srv.server_address[1]
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+        orig_host = genie_server.HOST
+        orig_port = genie_server.PORT
+        outcome = []
+        try:
+            genie_server.HOST = "127.0.0.1"
+            genie_server.PORT = port
+
+            def caller():
+                try:
+                    genie_server._genie_post("/set_reference_audio", {"text": "x"}, 30.0)
+                    outcome.append("returned")
+                except BaseException as exc:  # noqa: BLE001
+                    outcome.append(f"raised:{type(exc).__name__}")
+
+            worker = threading.Thread(target=caller, daemon=True)
+            worker.start()
+            time.sleep(0.5)  # 让它完成建连并阻塞在读响应头上
+            registered = genie_server._INFLIGHT_SOCK is not None
+            genie_server._abort_inflight_response()
+            worker.join(5)
+            # socket timeout 给的是 30 秒，所以能在 5 秒内退出只可能是 abort 生效
+            return registered and len(outcome) == 1 and outcome[0] != "returned"
+        finally:
+            genie_server.HOST = orig_host
+            genie_server.PORT = orig_port
+            genie_server._INFLIGHT_SOCK = None
+            srv.shutdown()
+
+    ok &= check("socket_abort_wakes_blocked_read", real_socket_abort_wakes_blocked_read(), "")
+
     print("ALL_PASS" if ok else "HAS_FAILURE", flush=True)
     return 0 if ok else 1
 

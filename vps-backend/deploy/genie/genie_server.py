@@ -19,8 +19,7 @@ import sys
 import tempfile
 import threading
 import time
-import urllib.error
-import urllib.request
+import socket
 import wave
 from io import BytesIO
 
@@ -61,7 +60,7 @@ _POISONED = False
 _STOP_LOCK = threading.Lock()
 _DEADLINE_FIRED = threading.Event()
 _INFLIGHT_LOCK = threading.Lock()
-_INFLIGHT_RESPONSE = None
+_INFLIGHT_SOCK = None
 
 
 class SpeakBusy(Exception):
@@ -94,6 +93,14 @@ class ReferenceMissing(Exception):
 
 class ServiceUnready(Exception):
     """服务不可用：已毒化，需要重启进程才能恢复。"""
+
+
+class _GenieHTTPError(http.client.HTTPException):
+    """Genie HTTP 响应携带的状态码异常。"""
+
+    def __init__(self, code: int):
+        self.code = code
+        super().__init__(f"Genie HTTP {code}")
 
 
 def _load_emotions() -> dict:
@@ -171,51 +178,66 @@ def _split_text(text: str) -> list[str]:
 
 
 def _abort_inflight_response() -> None:
-    """关闭当前正在读的 HTTP 响应，唤醒被阻塞的 resp.read()。
+    """强制打断当前在途的本地 HTTP 请求，让阻塞中的读立刻返回。
 
-    这是 deadline 到点时真正能给出硬上限的手段：无论 genie.stop() 成没成功，
-    关掉 socket 都会让主线程的读立刻抛错返回，而不是无限期挂着。
+    只 close() 唤醒不了另一个线程里阻塞的 recv：内核不会因为同一进程里
+    另一个线程 close(fd) 就立刻把那次 recv 叫醒。必须先 shutdown(SHUT_RDWR)，
+    让对端 FIN/RST 到达、那次读返回错误或 0 字节，再 close 释放 fd。
     """
     with _INFLIGHT_LOCK:
-        resp = _INFLIGHT_RESPONSE
-    if resp is None:
+        sock = _INFLIGHT_SOCK
+    if sock is None:
         return
     try:
-        resp.close()
-    except Exception as exc:  # noqa: BLE001
-        print(
-            f"[genie] closing inflight response failed: {exc!r}",
-            file=sys.stderr,
-            flush=True,
-        )
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    try:
+        sock.close()
+    except OSError:
+        pass
 
 
 def _genie_post(path: str, payload: dict, timeout: float) -> bytes:
-    global _INFLIGHT_RESPONSE
-    req = urllib.request.Request(
-        f"http://{HOST}:{PORT}{path}",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"content-type": "application/json"},
-        method="POST",
-    )
+    global _INFLIGHT_SOCK
+    body = json.dumps(payload).encode("utf-8")
+    headers = {
+        "content-type": "application/json",
+        "content-length": str(len(body)),
+    }
+    deadline = time.monotonic() + timeout
+    conn = http.client.HTTPConnection(HOST, PORT, timeout=timeout)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            with _INFLIGHT_LOCK:
-                _INFLIGHT_RESPONSE = resp
-            try:
-                return resp.read()
-            finally:
-                with _INFLIGHT_LOCK:
-                    if _INFLIGHT_RESPONSE is resp:
-                        _INFLIGHT_RESPONSE = None
-    except urllib.error.HTTPError:
-        raise
-    except urllib.error.URLError as exc:
-        if isinstance(exc.reason, TimeoutError):
-            raise SynthesisTimeout() from exc
-        raise
+        conn.connect()
+        # 建连后立刻登记底层 socket：连响应头都还没到的阶段也能被 deadline 打断。
+        with _INFLIGHT_LOCK:
+            _INFLIGHT_SOCK = conn.sock
+        conn.request("POST", path, body=body, headers=headers)
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise SynthesisTimeout()
+        if conn.sock is not None:
+            # 把剩余时间压到 socket 上，避免响应头阶段又拖满整个 timeout。
+            conn.sock.settimeout(left)
+        resp = conn.getresponse()
+        if conn.sock is not None:
+            resp_left = deadline - time.monotonic()
+            if resp_left <= 0:
+                raise SynthesisTimeout()
+            conn.sock.settimeout(resp_left)
+        if resp.status >= 400:
+            raise _GenieHTTPError(resp.status)
+        return resp.read()
     except TimeoutError as exc:
         raise SynthesisTimeout() from exc
+    finally:
+        with _INFLIGHT_LOCK:
+            if _INFLIGHT_SOCK is conn.sock:
+                _INFLIGHT_SOCK = None
+        try:
+            conn.close()
+        except OSError:
+            pass
 
 
 def _tts_completed_pcm(chunk: str, timeout: float) -> bytes:
@@ -243,7 +265,6 @@ def _tts_completed_pcm(chunk: str, timeout: float) -> bytes:
             if time.monotonic() >= call_deadline:
                 raise SynthesisTimeout()
         except (
-            urllib.error.URLError,
             TimeoutError,
             SynthesisTimeout,
             http.client.HTTPException,
@@ -294,11 +315,10 @@ def _synthesize(text: str, emotion: str) -> tuple[bytes, str]:
             if finished.wait(left):
                 return
             _DEADLINE_FIRED.set()
-            print("[genie] deadline reached; stopping Genie", file=sys.stderr, flush=True)
-            _stop_genie_safely("deadline reached")
-            # genie.stop() 只是让 TTSPlayer 结束；真正能把主线程从阻塞的
-            # resp.read() 里拉出来的是关掉 socket。两者都做，才谈得上硬上限。
+            print("[genie] deadline reached; aborting socket", file=sys.stderr, flush=True)
+            # 先打断读，deadline 才立得住；stop 放在后面做清理。
             _abort_inflight_response()
+            _stop_genie_safely("deadline reached")
         finally:
             watchdog_done.set()
 
@@ -345,14 +365,15 @@ def _synthesize(text: str, emotion: str) -> tuple[bytes, str]:
         wav = _wrap_pcm_as_wav(bytes(pcm))
         remaining(0.001)
         return wav, resolved
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:
+    except http.client.HTTPException as exc:
+        code = getattr(exc, "code", None)
+        if code == 404:
             raise ReferenceMissing() from exc
-        if exc.code in (408, 504):
+        if code in (408, 504):
             if not _DEADLINE_FIRED.is_set():
-                _stop_genie_safely(f"Genie HTTP {exc.code}")
+                _stop_genie_safely(f"Genie HTTP {code}")
             raise SynthesisTimeout() from exc
-        raise RuntimeError(f"Genie HTTP {exc.code}") from exc
+        raise RuntimeError(f"Genie HTTP {code}") from exc
     except SynthesisTimeout:
         # remaining() 可能在 /tts 返回后抛出，此时 Genie 可能仍在收尾。
         # 但若看门狗已经接手停机，就不要跟它抢 _STOP_LOCK。
@@ -433,19 +454,26 @@ def _stop_genie_safely(reason: str) -> bool:
 
     请求线程、看门狗线程、warmup 线程都可能调用，因此只用独立的 _STOP_LOCK
     串行化，绝不去拿 _SYNTH_LOCK（看门狗拿不到，warmup 也没持锁）。
+
+    只有"抛异常"才重试：那种情况 runner 已经退出，重试是安全的。
+    "卡死未返回"绝不能重试——上一个 runner 还卡在 TTSPlayer 内部，再起一个
+    只会让多个 genie.stop() 并发操作同一个单例。遇到卡死直接毒化。
     """
     with _STOP_LOCK:
         for attempt in range(1, STOP_RETRIES + 1):
             status = _try_genie_stop(STOP_CALL_TIMEOUT)
             if status == "ok":
                 return True
-            detail = (
-                f"did not return within {STOP_CALL_TIMEOUT}s"
-                if status == "hung"
-                else "raised an exception"
-            )
+            if status == "hung":
+                print(
+                    f"[genie] genie.stop() hung on attempt {attempt}; not retrying",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                _mark_poisoned(f"genie.stop() hung: {reason}")
+                return False
             print(
-                f"[genie] genie.stop() attempt {attempt}/{STOP_RETRIES} {detail}",
+                f"[genie] genie.stop() attempt {attempt}/{STOP_RETRIES} raised an exception",
                 file=sys.stderr,
                 flush=True,
             )
