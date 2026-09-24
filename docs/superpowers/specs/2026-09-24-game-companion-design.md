@@ -70,6 +70,8 @@ XCI 只能离线解包做剧本知识库（需 `prod.keys`，`hactool`/`nxdumpto
 - 发送节拍（拟人）：看一会儿再开口，不逐句跟；滚动累积近段剧情为上下文，值得反应（笑点/反转/发糖/选项）才触发，无感则跳过；语音最小间隔 15s、文字 8s（均可配）；排队只留 1 条（新覆盖旧或合并），内容聊看法不复读单句。
 - 提示球：悬浮窗收起态默认用当前 char 头像，点击展开气泡与输入；换角色自动换头像。
 - 展开态：就是和 char 的游戏频道聊天——气泡栈（验证期只看近 20 条 history，后续可翻）＋回复输入框＋紧凑控制行（文字/语音/双开、抢话开关、音量、记不记得）；点提示球/收起键折叠。
+- 语音输入：全局按住说话快捷键（可配，默认空、首次引导绑定），松开 200–500ms 拖尾确认端点后转写发送。
+- STT：sherpa-onnx + SenseVoice int8（229MB，CPU 约 17x 实时，中文 CER 约 8%）+ Silero VAD 端点（商用前核对 LICENSE），Windows/Android 同一套 C++/ONNX 栈；低端降级 streaming-paraformer，Vosk 仅无网络兜底。
 - 游戏频道独立：独立队列、独立节流，永不进 `ProactiveChat.start/resume`，`markAmsgStateDirty`/autoArchive 默认关闭，高频字幕不污染 30 分钟主动消息。
 
 ## 8. 记忆政策（精简+手动）
