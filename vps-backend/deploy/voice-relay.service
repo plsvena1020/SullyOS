@@ -1,0 +1,12 @@
+[Unit]
+Description=SullyOS voice relay
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/sullyos/sullyos-repo/vps-backend/src/voice-relay
+ExecStart=/usr/bin/node run.js
+Restart=on-failure
+Environment=VOICE_RELAY_PORT=8839
+
+[Install]
+WantedBy=multi-user.target
