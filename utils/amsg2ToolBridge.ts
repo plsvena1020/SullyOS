@@ -19,7 +19,6 @@ import {
   RealtimeConfig,
   UserProfile,
 } from '../types';
-import { ActiveMsgClient } from './activeMsgClient';
 import { ActiveMsgStore } from './activeMsgStore';
 import { buildDuplicateToolMessage, toolCallFingerprint, type ToolCallRecord } from './agenticToolFeedback';
 import {
@@ -297,6 +296,7 @@ async function handleSchedule(args: Record<string, any>, deps: Amsg2ToolDeps): P
     expirePolicy,
   };
 
+  const { ActiveMsgClient } = await import('./activeMsgClient');
   const result = await ActiveMsgClient.scheduleCharacterTask({
     // selfScheduled：角色自己排的要带标记进任务 metadata——连发上限的到点兜底闸只拦
     // 带它的任务，用户在面板里亲手排的不带、不受限（面板走的是同一个入口但不传这个）。
@@ -371,6 +371,7 @@ async function handleCancel(args: Record<string, any>, deps: Amsg2ToolDeps): Pro
   if (!task) return error!;
 
   try {
+    const { ActiveMsgClient } = await import('./activeMsgClient');
     await ActiveMsgClient.cancelTask(task.taskUuid);
   } catch (e) {
     // 远端取消失败绝不静默移除本地记录（Codex #4）——否则远端 recurring 照发、
