@@ -218,13 +218,14 @@ def _genie_post(path: str, payload: dict, timeout: float) -> bytes:
         # 建连后立刻登记底层 socket：连响应头都还没到的阶段也能被 deadline 打断。
         with _INFLIGHT_LOCK:
             _INFLIGHT_SOCK = conn.sock
-        conn.request("POST", path, body=body, headers=headers)
         left = deadline - time.monotonic()
         if left <= 0:
             raise SynthesisTimeout()
         if conn.sock is not None:
-            # 把剩余时间压到 socket 上，避免响应头阶段又拖满整个 timeout。
+            # 必须在 conn.request() 之前设置：写请求体也要受本次剩余时间约束，
+            # 否则它用的还是构造连接时的旧 timeout。
             conn.sock.settimeout(left)
+        conn.request("POST", path, body=body, headers=headers)
         resp = conn.getresponse()
         if conn.sock is not None:
             resp_left = deadline - time.monotonic()

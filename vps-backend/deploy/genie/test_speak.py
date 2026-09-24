@@ -366,6 +366,59 @@ def main():
 
     ok &= check("socket_abort_wakes_blocked_read", real_socket_abort_wakes_blocked_read(), "")
 
+    # 11 端到端：真实 _synthesize + 真实 hang server，由 watchdog 按绝对 deadline
+    #     自动 abort，主读线程必须远早于 server 的 30 秒 timeout 退出。
+    #     这条同时覆盖前面的 watchdog 测试和 socket 测试各自覆盖的那一半。
+    def watchdog_drives_real_socket_abort():
+        import http.server
+
+        class HangHeaders(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                # 故意不回任何响应头，让客户端阻塞在读响应头上
+                time.sleep(30)
+
+            def log_message(self, *args):
+                pass
+
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), HangHeaders)
+        port = srv.server_address[1]
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+        orig_host = genie_server.HOST
+        orig_port = genie_server.PORT
+        orig_timeout = genie_server.SYNTH_TIMEOUT
+        orig_stop = genie_server.genie.stop
+        stop_calls = []
+        try:
+            genie_server.HOST = "127.0.0.1"
+            genie_server.PORT = port
+            genie_server.SYNTH_TIMEOUT = 1.0
+            genie_server.genie.stop = lambda: stop_calls.append(1)
+            genie_server._POISONED = False
+
+            started = time.monotonic()
+            # 不手动 abort：完全交给 watchdog 的绝对 deadline
+            raised = _raises(
+                lambda: genie_server._synthesize("测试。", "calm"),
+                genie_server.SynthesisTimeout,
+            )
+            elapsed = time.monotonic() - started
+            # 1.0s 的 SYNTH_TIMEOUT 同时决定了客户端 socket timeout 和看门狗的
+            # 触发时刻，两者都在 1 秒附近；上限放到 20 秒是为了证明「确实退出了」
+            # 且「watchdog 真的调过 stop」，而不是去区分是谁先到的。
+            return raised and elapsed < 20.0 and len(stop_calls) >= 1
+        finally:
+            genie_server.HOST = orig_host
+            genie_server.PORT = orig_port
+            genie_server.SYNTH_TIMEOUT = orig_timeout
+            genie_server.genie.stop = orig_stop
+            genie_server._POISONED = False
+            genie_server._INFLIGHT_SOCK = None
+            genie_server._DEADLINE_FIRED.clear()
+            srv.shutdown()
+
+    ok &= check("watchdog_drives_real_socket_abort", watchdog_drives_real_socket_abort(), "")
+
     print("ALL_PASS" if ok else "HAS_FAILURE", flush=True)
     return 0 if ok else 1
 
