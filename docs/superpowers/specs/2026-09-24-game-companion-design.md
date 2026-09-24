@@ -70,6 +70,7 @@ XCI 只能离线解包做剧本知识库（需 `prod.keys`，`hactool`/`nxdumpto
 - 发送节拍（拟人）：看一会儿再开口，不逐句跟；滚动累积近段剧情为上下文，值得反应（笑点/反转/发糖/选项）才触发，无感则跳过；语音最小间隔 15s、文字 8s（均可配）；排队只留 1 条（新覆盖旧或合并），内容聊看法不复读单句。
 - 提示球：悬浮窗收起态默认用当前 char 头像，点击展开气泡与输入；换角色自动换头像。
 - 展开态：就是和 char 的游戏频道聊天——气泡栈（验证期只看近 20 条 history，后续可翻）＋回复输入框＋紧凑控制行（文字/语音/双开、抢话开关、音量、记不记得）；点提示球/收起键折叠。
+- 单独游戏 App：陪玩全部 UX 收敛到 SullyOS 内一个独立游戏 App（频道聊天、悬浮窗开关与控制、风格画像查看）；采集层（PC sidecar/平板原生服务）只产文字事件不做 UI。
 - 语音输入：全局按住说话快捷键（可配，默认空、首次引导绑定），松开 200–500ms 拖尾确认端点后转写发送。
 - STT：sherpa-onnx + SenseVoice int8（229MB，CPU 约 17x 实时，中文 CER 约 8%）+ Silero VAD 端点（商用前核对 LICENSE），Windows/Android 同一套 C++/ONNX 栈；低端降级 streaming-paraformer，Vosk 仅无网络兜底。
 - 游戏频道独立：独立队列、独立节流，永不进 `ProactiveChat.start/resume`，`markAmsgStateDirty`/autoArchive 默认关闭，高频字幕不污染 30 分钟主动消息。
@@ -100,13 +101,13 @@ XCI 只能离线解包做剧本知识库（需 `prod.keys`，`hactool`/`nxdumpto
 
 ## 11. 分阶段路线
 
-- 验证期（本 spec）：PC 最小闭环 6 件 + 平板最小配（MediaProjection + ROI 2–3fps + ML Kit + 单条悬浮窗，无音频）。
+- 验证期（本 spec）：PC 最小闭环 6 件 + 平板最小配（MediaProjection + ROI 2–3fps + ML Kit + 单条悬浮窗，无音频），双端都要跑通才算过。
 - Phase 2：音频链路（预生成+抢话开关+说完不截断）与三档切换。
 - Phase 3：XCI 离线剧本库 + 行级匹配 + 路线提示。
 
 ## 12. 预估触碰文件清单（写执行计划时冻结， spec 阶段不动代码）
 
-新增（臆测，需执行计划确认）：`sidecar/`（WGC 采集、OCR 管线、localhost 桥）、`tablet-companion/`（前台服务、MediaProjection、overlay）、`overlay/`（PC 悬浮窗）。
+新增（臆测，需执行计划确认）：`apps/` 下独立游戏 App（名称执行计划冻结，承载 §7 全部 UX）、`sidecar/`（WGC 采集、OCR 管线、localhost 桥）、`tablet-companion/`（前台服务、MediaProjection、overlay）、`overlay/`（PC 悬浮窗）。
 现有只读候选：`context/OSContext.tsx`（游戏频道事件）、`utils/ttsRouter.ts`、`apps/CallApp.tsx`、`utils/perspectiveTelemetry.ts`、`utils/proactiveChat.ts`（明确不复用触发，只做隔离）、`utils/proactivePushConfig.ts`、`utils/speechToText.ts`、`utils/callAudioFeed.ts`、`index.html`、`vite.config.ts`、`dev-local.bat`。
 禁区：`utils/proactiveChat.ts` 的分钟级调度链路不得改触发语义；`FORCE_DISABLED` 的 Worker 开关不动。
 
