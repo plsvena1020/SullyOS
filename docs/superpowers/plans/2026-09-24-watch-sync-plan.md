@@ -18,6 +18,7 @@
 - 远程验证 curl 一律加 `--noproxy "*"`（本机 HTTPS 走代理，直连 VPS 必须绕过）。
 - 构建失败绝不同步；校验失败打印回滚命令，不自动执行。
 - 测试命令 `pnpm vitest run <file>`；Windows PowerShell 5.1，注意引号转义。
+- `logs/watch-sync.log` 超 500KB 只留末尾；VPS 备份目录只保留最新 3 个（成功部署后删更老的）。
 
 ## Review Focus
 
@@ -217,7 +218,7 @@ git commit -m "feat(deploy): sync lib with debounce and asset compare"
 
 ```js
 // scripts/watch-sync.mjs
-import { watch, appendFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { watch, appendFileSync, writeFileSync, existsSync, rmSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { shouldIgnore, createDebouncer, run } from './sync-lib.mjs';
@@ -229,6 +230,9 @@ const DEBOUNCE_MS = Number(process.env.WATCH_SYNC_DEBOUNCE ?? 5000);
 
 function log(line) {
   appendFileSync(LOG, new Date().toISOString() + ' ' + line + '\n');
+  try {
+    if (statSync(LOG).size > 512000) writeFileSync(LOG, readFileSync(LOG, 'utf8').slice(-400000));
+  } catch {}
   console.log(line);
 }
 
@@ -341,6 +345,7 @@ if (!cmp.ok) {
   process.exit(1);
 }
 rmSync(TGZ_LOCAL, { force: true });
+sh('ssh', [HOST, `ls -dt ${REMOTE_DIR}.bak-* 2>/dev/null | tail -n +4 | xargs -r rm -rf`]);
 console.log('DEPLOY OK. Rollback: ssh ' + HOST + ' "mv <backup-dir> ' + REMOTE_DIR + '"（备份名见上方 backup: 行）');
 ```
 
