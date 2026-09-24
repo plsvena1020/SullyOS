@@ -143,6 +143,10 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
+    // 关 modulePreload：Vite 会把 __vitePreload helper 发到 MP 包并被 vendor 引用，
+    // 形成 vendor->MP 边，与 MP->vendor 边构成求值顺序 hazard（2026-09-24 黑屏根因）。
+    // 关掉后动态 import 照常工作，仅失去 link 预取提示。
+    modulePreload: false,
     chunkSizeWarningLimit: 2000,
     rollupOptions: {
       // 关键修复：将这些包排除在打包之外，让浏览器通过 index.html 的 importmap 加载
@@ -176,9 +180,8 @@ export default defineConfig({
             if (id.includes('@pixi/') || /[\\/]node_modules[\\/]pixi\.js[\\/]/.test(id)) {
               return 'vendor-live2d';
             }
-            if (id.includes('react') || id.includes('react-dom') || id.includes('scheduler')) {
-              return 'vendor-react';
-            }
+            // vendor-react 已合并回 vendor：含 react 子串的包若独立成桶，
+            // 必与 vendor 形成 Circular chunk（2026-09-24 黑屏根因），启动期绑定未初始化。
             if (id.includes('@phosphor-icons')) {
               return 'vendor-icons';
             }
