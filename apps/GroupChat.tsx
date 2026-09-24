@@ -7,6 +7,7 @@ import { DB } from '../utils/db';
 import { Message, GroupProfile, CharacterProfile, MessageType, ChatTheme, BubbleStyle, EmojiCategory } from '../types';
 import { safeResponseJson } from '../utils/safeApi';
 import Modal from '../components/os/Modal';
+import BottomSheet from '../components/os/BottomSheet';
 import { ContextBuilder } from '../utils/context';
 import { injectMemoryPalace } from '../utils/memoryPalace/pipeline';
 import { deleteGroupMemoriesByGroupId } from '../utils/memoryPalace/groupPipeline';
@@ -2328,13 +2329,14 @@ ${memberTimeline || '(暂无互动记录)'}
             </Modal>
 
             {/* 群「白框自定义」底部 sheet —— 写到 group.chromeCustomCss，叠加在全局之上（对齐私聊做法） */}
-            {activeGroup && modalType === 'chrome-css' && (
-                <div className="fixed inset-0 z-[110] flex items-end justify-center bg-black/5 animate-fade-in" onClick={() => setModalType('none')}>
-                    <div
-                        className="w-full max-h-[68vh] overflow-y-auto rounded-t-3xl border-t border-white/60 bg-white/95 p-5 shadow-[0_-12px_40px_rgba(15,23,42,0.18)] backdrop-blur-xl animate-slide-up [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-                        style={{ paddingBottom: 'calc(1.25rem + var(--safe-bottom))' }}
-                        onClick={(e) => e.stopPropagation()}
-                    >
+            {activeGroup && (
+                <BottomSheet
+                    open={modalType === 'chrome-css'}
+                    onClose={() => setModalType('none')}
+                    maxHeight="68vh"
+                    overlayClassName="z-[110] bg-black/5"
+                    panelClassName="rounded-t-3xl border-t border-white/60 bg-white/95 px-5 pt-5 shadow-[0_-12px_40px_rgba(15,23,42,0.18)] backdrop-blur-xl [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden pb-[calc(1.25rem+var(--safe-bottom))]"
+                >
                         <div className="mb-2 flex items-start justify-between">
                             <div>
                                 <div className="text-sm font-bold text-slate-800">白框自定义 · {activeGroup.name}</div>
@@ -2346,7 +2348,6 @@ ${memberTimeline || '(暂无互动记录)'}
                             value={activeGroup.chromeCustomCss || ''}
                             onChange={(css) => { updateGroup(activeGroup.id, { chromeCustomCss: css }); setActiveGroup({ ...activeGroup, chromeCustomCss: css }); }}
                         />
-                    </div>
                     {/* 脱离 CSS 控制的救援键：portal 到 body + id 守护，坏 CSS 也点得到（逐字复用私聊方案） */}
                     {createPortal(
                         <>
@@ -2365,11 +2366,11 @@ ${memberTimeline || '(暂无互动记录)'}
                         </>,
                         getPortalHost(),
                     )}
-                </div>
+                </BottomSheet>
             )}
 
             {/* 群「提示音」底部 sheet —— 默认独立存 group.chatSound；绑定后写进 chromeCustomCss 的 @sully-sound 指令 */}
-            {activeGroup && modalType === 'chrome-sound' && (() => {
+            {activeGroup && (() => {
                 const boundSound = parseWhiteboxSound(activeGroup.chromeCustomCss);
                 const isBound = !!activeGroup.chatSoundBound || !!boundSound;
                 const curSound: WhiteboxSound | null = isBound ? boundSound : (activeGroup.chatSound || null);
@@ -2389,12 +2390,13 @@ ${memberTimeline || '(暂无互动记录)'}
                     }
                 };
                 return (
-                    <div className="fixed inset-0 z-[110] flex items-end justify-center bg-black/5 animate-fade-in" onClick={() => setModalType('none')}>
-                        <div
-                            className="w-full max-h-[68vh] overflow-y-auto rounded-t-3xl border-t border-white/60 bg-white/95 p-5 shadow-[0_-12px_40px_rgba(15,23,42,0.18)] backdrop-blur-xl animate-slide-up [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-                            style={{ paddingBottom: 'calc(1.25rem + var(--safe-bottom))' }}
-                            onClick={(e) => e.stopPropagation()}
-                        >
+                    <BottomSheet
+                        open={modalType === 'chrome-sound'}
+                        onClose={() => setModalType('none')}
+                        maxHeight="68vh"
+                        overlayClassName="z-[110] bg-black/5"
+                        panelClassName="rounded-t-3xl border-t border-white/60 bg-white/95 px-5 pt-5 shadow-[0_-12px_40px_rgba(15,23,42,0.18)] backdrop-blur-xl [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden pb-[calc(1.25rem+var(--safe-bottom))]"
+                    >
                             <div className="mb-3 flex items-start justify-between">
                                 <div>
                                     <div className="text-sm font-bold text-slate-800">提示音 · {activeGroup.name}</div>
@@ -2409,8 +2411,7 @@ ${memberTimeline || '(暂无互动记录)'}
                                 onChangeBound={changeBound}
                                 hint={<>🔔 只在 <b>成员新发的消息成为最新一条</b> 时响一次。这里是<b>本群专属</b>；不设则用「外观 → 聊天界面」里的全局默认提示音。</>}
                             />
-                        </div>
-                    </div>
+                    </BottomSheet>
                 );
             })()}
 

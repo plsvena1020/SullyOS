@@ -5,6 +5,7 @@
 import React from 'react';
 import { CharacterProfile } from '../../types';
 import { LifestreamDepth } from '../../utils/handbookGenerator';
+import BottomSheet from '../os/BottomSheet';
 import { PAPER_TONES, CUTE_STACK, WashiTape } from './paper';
 import { HeartSticker, StarSticker, SparkleDot } from './stickers';
 import { Sparkle, X } from '@phosphor-icons/react';
@@ -30,8 +31,6 @@ const HandbookCharPicker: React.FC<PickerProps> = ({
     onToggleChat, onToggleLife, onCancel, onConfirm, generating,
     depth, onDepthChange,
 }) => {
-    if (!visible) return null;
-
     const renderRow = (
         c: CharacterProfile,
         excluded: boolean,
@@ -71,24 +70,13 @@ const HandbookCharPicker: React.FC<PickerProps> = ({
     );
 
     return (
-        <div
-            className="absolute inset-0 z-50 flex items-end justify-center animate-fade-in"
-            style={{ background: 'rgba(122,90,114,0.4)', backdropFilter: 'blur(6px)' }}
-            onClick={onCancel}
+        <BottomSheet
+            open={visible}
+            onClose={onCancel}
+            maxHeight="85%"
+            overlayClassName="z-50 bg-[#7a5a72]/40 backdrop-blur-[6px]"
+            panelClassName="relative rounded-t-3xl bg-[#fff8fb] shadow-[0_-8px_28px_rgba(122,90,114,0.25)]"
         >
-            <div
-                className="w-full max-h-[85%] overflow-y-auto rounded-t-3xl relative animate-slide-up"
-                style={{
-                    background: PAPER_TONES.paper,
-                    boxShadow: '0 -8px 28px rgba(122,90,114,0.25)',
-                }}
-                onClick={e => e.stopPropagation()}
-            >
-                {/* 顶部把手 */}
-                <div className="flex justify-center pt-3 pb-1">
-                    <div style={{ width: 40, height: 4, borderRadius: 2, background: PAPER_TONES.accentRose, opacity: 0.5 }} />
-                </div>
-
                 {/* 角落贴纸 */}
                 <div className="absolute top-6 left-5 pointer-events-none" style={{ transform: 'rotate(-15deg)' }}>
                     <HeartSticker size={20} />
@@ -248,8 +236,7 @@ const HandbookCharPicker: React.FC<PickerProps> = ({
                         {generating ? '正在落笔…' : '开 始 落 笔 ♡'}
                     </button>
                 </div>
-            </div>
-        </div>
+        </BottomSheet>
     );
 };
 

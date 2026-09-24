@@ -48,7 +48,7 @@
 - 曲线四枚固定：standard `cubic-bezier(0.4, 0, 0.2, 1)`（`--m2-ease-standard`，屏内变化）、decel `cubic-bezier(0, 0, 0.2, 1)`（`--m2-ease-decel`，只进）、accel `cubic-bezier(0.4, 0, 1, 1)`（`--m2-ease-accel`，永久退出）、sharp `cubic-bezier(0.4, 0, 0.6, 1)`（`--m2-ease-sharp`，临时退出如弹窗关闭）。
 - 只允许 `transform` / `opacity` 参与过渡与动画；不加 `box-shadow` / `filter` / `backdrop-filter` 的过渡；keyframes 里不出现 `width/height/left/top/margin`。
 - App 容器禁 transform：`components/PhoneShell.tsx:930` 的 `appEnterFade` 永久只许纯 opacity（200ms），`key={activeApp}` 整树重挂载层挂 transform 会让重 App 首帧卡顿（已实证）。
-- Motion 试点范围仅三处（`utils/motion.ts` 唯一入口，只读 `--m2-*`，`MotionConfig reducedMotion="user"`）：`ConfirmDialog` 退场、`page-in-l/r` 横向切页、`Modal` 内容 fade + scrim。PhoneShell 容器与 Launcher morph 不在试点内。
+- Motion 试点范围仅四处（`utils/motion.ts` 唯一入口，只读 `--m2-*`，`MotionConfig reducedMotion="user"`）：`ConfirmDialog` 退场、`page-in-l/r` 横向切页、`Modal` 内容 fade + scrim、`BottomSheet` 底部弹层拖拽关闭。PhoneShell 容器与 Launcher morph 不在试点内。
 - 加载呼吸秒级循环：三点 dots `dot-pulse 1.2s + 0/0.2/0.4s` 错峰，`shimmer 2.5s`，`glow-pulse 3s`，`float 4s`。spinner 只用 `border-t` 圆环 + `animate-spin`，开机不用 spinner（呼吸等待，见 `BootSequence.tsx:11`）。
 - 弹窗两套固定封装：通用居中 `Modal.tsx`（遮罩淡入 + 卡片上滑），确认错误 `ConfirmDialog.tsx` / `ErrorDialog.tsx`（遮罩淡入 + 卡片弹入）。移动端上滑、桌面端弹入见 `PerCharAvatarPicker.tsx:193`。
 - 按下全仓统一 `active:scale-* + transition`：图标 `active:scale-95`，小按钮 `active:scale-90`，卡片轻压 `active:scale-[0.98]`。桌面图标 hover 上浮 `group-hover:-translate-y-0.5`。
@@ -80,7 +80,7 @@ CSS 组织方式：独立 CSS 文件只有自习室两件、伴侣主题系列�
 ## 八、新功能对照流程（稳定风格用）
 
 1. 先定归属：同类界面在哪个 App，直接复用该 App 的底色、圆角、描边、阴影、动效时长整组写法。
-2. 再定容器：居中弹窗抄 `Modal`，确认框抄 `ConfirmDialog`，底部弹层用 `slide-up`，右侧抽屉用 `slide-in-right`，不新造第 N 种弹窗。
+2. 再定容器：居中弹窗抄 `Modal`，确认框抄 `ConfirmDialog`，底部弹层用 `components/os/BottomSheet` 壳（进出走 `--m2-*`，把手拖拽关闭），右侧抽屉用 `slide-in-right`，不新造第 N 种弹窗。
 3. 动效只从中央 token 取时长，不发明新 easing；新动效默认走 CSS，只有 `utils/motion.ts` 试点三处（ConfirmDialog 退场 / page-in-l/r 横向切页 / Modal 内容 fade）允许引 Motion，扩大试点前先开 ADR；加载态优先三点 dots 或 spinner 二选一。
 4. 需要主题隔离（阅读器、皮肤、舞台）时抄自习室模式：根容器 + `data-theme` + CSS 变量域，不向全局漏样式。
 5. 完工自查：渐变、纯白底、backdrop-blur 是否出现在不该出现的地方；`acnh` / 手绘风元素是否漏进其他 App；圆角阴影是否有新发明值。

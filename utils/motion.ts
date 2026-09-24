@@ -13,7 +13,8 @@
  */
 import { domAnimation, type Variants } from 'motion/react';
 
-export { AnimatePresence, LazyMotion, MotionConfig, m } from 'motion/react';
+export { AnimatePresence, LazyMotion, MotionConfig, m, useDragControls } from 'motion/react';
+export type { PanInfo } from 'motion/react';
 
 /** Motion easing 用 bezier 数组（motion 不接受 CSS cubic-bezier() 字符串）。 */
 export type M2Bezier = [number, number, number, number];
@@ -127,4 +128,11 @@ export const confirmPanelVariants = (): Variants => ({
     initial: { scale: 0.96, opacity: 0 },
     animate: { scale: 1, opacity: 1, transition: { duration: m2Durations().enter, ease: m2Easings().decel } },
     exit: { scale: 0.98, opacity: 0, transition: { duration: m2Durations().leave, ease: m2Easings().sharp } },
+});
+
+/** BottomSheet 面板：y 48px + opacity，进入 decel 225ms、退出 sharp 195ms（2026-09-24 ADR）。 */
+export const sheetPanelVariants = (): Variants => ({
+    initial: { y: 48, opacity: 0.6 },
+    animate: { y: 0, opacity: 1, transition: { duration: m2Durations().enter, ease: m2Easings().decel } },
+    exit: { y: 48, opacity: 0, transition: { duration: m2Durations().leave, ease: m2Easings().sharp } },
 });

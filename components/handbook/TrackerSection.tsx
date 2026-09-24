@@ -175,17 +175,15 @@ const TrackerSection: React.FC<Props> = ({ tracker, onAddToast }) => {
             )}
 
             {/* 输入 sheet */}
-            {openDate && (
-                <TrackerEntrySheet
+            <TrackerEntrySheet
                     visible={!!openDate}
                     tracker={tracker}
-                    date={openDate}
-                    existingEntry={entryByDate[openDate] || null}
+                    date={openDate ?? ''}
+                    existingEntry={(openDate && entryByDate[openDate]) || null}
                     onCancel={() => setOpenDate(null)}
                     onSave={handleSave}
-                    onDelete={entryByDate[openDate] ? handleDelete : undefined}
+                    onDelete={openDate && entryByDate[openDate] ? handleDelete : undefined}
                 />
-            )}
         </div>
     );
 };

@@ -1,8 +1,10 @@
 import React from 'react';
 import { ChatCircleDots, Gear, Phone, SpeakerHigh, X } from '@phosphor-icons/react';
 import type { CallPreferences } from '../../utils/callPreferences';
+import BottomSheet from '../os/BottomSheet';
 
 interface CallPreferencesSheetProps {
+  open: boolean;
   preferences: CallPreferences;
   accentColor: string;
   lightTheme: boolean;
@@ -12,6 +14,7 @@ interface CallPreferencesSheetProps {
 }
 
 const CallPreferencesSheet: React.FC<CallPreferencesSheetProps> = ({
+  open,
   preferences,
   accentColor,
   lightTheme,
@@ -20,25 +23,13 @@ const CallPreferencesSheet: React.FC<CallPreferencesSheetProps> = ({
   onClose,
 }) => {
   return (
-    <div
-      className="absolute inset-0 z-[80] flex items-end bg-black/60 backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="call-preferences-title"
-      data-testid="call-preferences-sheet"
-      onClick={onClose}
+    <BottomSheet
+      open={open}
+      onClose={onClose}
+      titleId="call-preferences-title"
+      testId="call-preferences-sheet"
+      panelClassName={`rounded-t-[1.75rem] border-t px-5 pb-[max(1.25rem,var(--safe-bottom,0px))] pt-4 shadow-2xl ${lightTheme ? 'border-[#262239]/10 bg-[#f7f5fb]' : 'border-white/12 bg-[#120c22]'}`}
     >
-      <style>{`
-        @keyframes sully-call-settings-in { from { opacity: 0; transform: translateY(18px) } to { opacity: 1; transform: translateY(0) } }
-        .sully-call-settings-sheet { animation: sully-call-settings-in 220ms cubic-bezier(.2,.8,.2,1) both; }
-        @media (prefers-reduced-motion: reduce) { .sully-call-settings-sheet { animation-duration: .01ms; } }
-      `}</style>
-      <section
-        className={`sully-call-settings-sheet w-full rounded-t-[1.75rem] border-t px-5 pt-4 shadow-2xl ${lightTheme ? 'border-[#262239]/10 bg-[#f7f5fb]' : 'border-white/12 bg-[#120c22]'}`}
-        style={{ paddingBottom: 'max(1.25rem, var(--safe-bottom, 0px))' }}
-        onClick={event => event.stopPropagation()}
-      >
-        <div className={`mx-auto mb-4 h-1 w-10 rounded-full ${lightTheme ? 'bg-[#262239]/15' : 'bg-white/15'}`} aria-hidden />
         <header className="flex items-start justify-between gap-4">
           <div>
             <div className={`text-[9px] font-semibold tracking-[0.28em] ${lightTheme ? 'text-[#262239]/45' : 'text-white/35'}`}>CALL PREFERENCES</div>
@@ -159,8 +150,7 @@ const CallPreferencesSheet: React.FC<CallPreferencesSheetProps> = ({
         >
           <Gear size={14} weight="fill" /> 更多语音与 API 设置
         </button>
-      </section>
-    </div>
+    </BottomSheet>
   );
 };
 

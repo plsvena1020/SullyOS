@@ -1,6 +1,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { getPortalHost } from '../../utils/portalHost';
+import BottomSheet from '../os/BottomSheet';
 import { Star, X } from '@phosphor-icons/react';
 
 interface VoiceFavoriteActionSheetProps {
@@ -22,10 +23,13 @@ const VoiceFavoriteActionSheet: React.FC<VoiceFavoriteActionSheetProps> = ({
     onToggle,
     onClose,
 }) => {
-    if (!open) return null;
     return createPortal(
-        <div className="fixed inset-0 z-[1800] flex items-end justify-center bg-black/45 px-3 pb-[max(12px,env(safe-area-inset-bottom))] animate-fade-in" onClick={onClose}>
-            <div className="w-full max-w-md rounded-[26px] border border-white/60 bg-[#f8f6f1] p-3 text-slate-800 shadow-2xl animate-slide-up" onClick={event => event.stopPropagation()}>
+        <BottomSheet
+            open={open}
+            onClose={onClose}
+            overlayClassName="z-[1800] bg-black/45 px-3 pb-[max(12px,env(safe-area-inset-bottom))]"
+            panelClassName="max-w-md rounded-[26px] border border-white/60 bg-[#f8f6f1] p-3 text-slate-800 shadow-2xl"
+        >
                 <div className="flex items-start gap-3 px-2 pt-1 pb-3">
                     <div className="min-w-0 flex-1">
                         <p className="text-[11px] font-bold tracking-[.12em] text-slate-400">{title}</p>
@@ -42,8 +46,7 @@ const VoiceFavoriteActionSheet: React.FC<VoiceFavoriteActionSheetProps> = ({
                     <Star size={18} weight={favorited ? 'fill' : 'regular'} />
                     {busy ? '正在保存音频…' : favorited ? '取消收藏语音' : '收藏语音'}
                 </button>
-            </div>
-        </div>,
+        </BottomSheet>,
         getPortalHost(),
     );
 };

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { getPortalHost } from '../../utils/portalHost';
+import BottomSheet from '../os/BottomSheet';
 import {
     EyeSlash,
     FloppyDisk,
@@ -390,17 +391,6 @@ const MemoryRepairPortal: React.FC<MemoryRepairPortalProps> = ({
                     border: 1px solid rgba(255,255,255,.1); border-radius: 16px; background: rgba(23,20,34,.94);
                     box-shadow: 0 18px 54px rgba(0,0,0,.4); font: 13px/1.5 ui-sans-serif, system-ui;
                 }
-                .memory-drawer {
-                    position: fixed; z-index: 20; inset: 0; background: rgba(4,4,9,.54); backdrop-filter: blur(8px);
-                    display: flex; align-items: flex-end; animation: memoryVeilIn .25s ease both;
-                }
-                .memory-drawer-sheet {
-                    width: min(760px, 100%); max-height: min(82vh, 820px); margin: 0 auto;
-                    overflow-y: auto; border-radius: 30px 30px 0 0; padding: 20px 20px max(28px, env(safe-area-inset-bottom));
-                    border: 1px solid rgba(228,210,255,.14);
-                    background: linear-gradient(170deg, rgba(39,32,52,.98), rgba(17,16,25,.99));
-                    box-shadow: 0 -22px 80px rgba(0,0,0,.48); animation: memorySheetIn .42s cubic-bezier(.2,.8,.2,1) both;
-                }
                 .memory-editor {
                     padding: 16px 0 20px; border-bottom: 1px solid rgba(255,255,255,.08);
                 }
@@ -443,8 +433,6 @@ const MemoryRepairPortal: React.FC<MemoryRepairPortalProps> = ({
                 @keyframes memoryFloat { 0%,100% { transform: translateY(3px); } 50% { transform: translateY(-7px); } }
                 @keyframes memoryBreathe { 0%,100% { transform: scale(.88); opacity: .72; } 50% { transform: scale(1.08); opacity: 1; } }
                 @keyframes memoryOrbit { to { transform: rotate(360deg); } }
-                @keyframes memoryVeilIn { from { opacity: 0; } to { opacity: 1; } }
-                @keyframes memorySheetIn { from { transform: translateY(100%); } to { transform: translateY(0); } }
                 @keyframes memoryDissolve { to { opacity: 0; filter: blur(12px); transform: scale(1.015); } }
                 @keyframes memoryFarewell { 0% { opacity: 0; letter-spacing: .02em; } 35%,75% { opacity: 1; } 100% { opacity: 0; letter-spacing: .14em; } }
                 @keyframes memoryFarewellLine { to { opacity: 1; transform: translateY(0); } }
@@ -627,11 +615,14 @@ const MemoryRepairPortal: React.FC<MemoryRepairPortalProps> = ({
                 </button>
             </div>
 
-            {editorTarget && (
-                <div className="memory-drawer" onMouseDown={event => {
-                    if (event.target === event.currentTarget) setEditorTarget(null);
-                }}>
-                    <div className="memory-drawer-sheet">
+            <BottomSheet
+                open={!!editorTarget}
+                onClose={() => setEditorTarget(null)}
+                maxHeight="min(82vh, 820px)"
+                overlayClassName="z-20 bg-[rgba(4,4,9,0.54)] backdrop-blur-[8px]"
+                panelClassName="mx-auto w-full max-w-[760px] rounded-t-[30px] border border-[rgba(228,210,255,0.14)] bg-[linear-gradient(170deg,rgba(39,32,52,0.98),rgba(17,16,25,0.99))] px-5 pb-[max(28px,env(safe-area-inset-bottom))] pt-5 shadow-[0_-22px_80px_rgba(0,0,0,0.48)]"
+            >
+                {editorTarget && (<>
                         <div className="flex items-start justify-between gap-4 mb-3">
                             <div>
                                 <div className="text-[11px] uppercase tracking-[.18em] text-violet-200/45 mb-2">
@@ -730,9 +721,8 @@ const MemoryRepairPortal: React.FC<MemoryRepairPortalProps> = ({
                                 ))}
                             </div>
                         ) : null}
-                    </div>
-                </div>
-            )}
+                </>)}
+            </BottomSheet>
 
             {farewell && (
                 <div className="memory-farewell">
