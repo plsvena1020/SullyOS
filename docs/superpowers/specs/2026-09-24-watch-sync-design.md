@@ -5,7 +5,8 @@
 ## 目标
 
 本地改完保存 → 静默 5 秒 → 自动构建 → 构建通过才同步到 VPS → 校验通过算上线。
-构建挂了绝不同步坏包。全程约 1-2 分钟（构建占大头），零手动步骤。
+构建挂了绝不同步坏包。分两段：`pnpm dev:sync` 只构建+校验+暂存（不上 VPS），
+你本地 `pnpm dev` 热更新看顺眼后跑 `pnpm deploy:vps` 推一把。全程手动确认点只有这一次回车。
 
 ## 非目标
 
@@ -22,6 +23,9 @@
 ```
 
 - 常驻形态：前台进程 `pnpm dev:sync`，Ctrl+C 停；单实例锁（锁文件，未释放则拒绝二开）。
+  每轮产物暂存本地 `dist/`（覆盖即暂存），通过后打印“可部署，回车 `pnpm deploy:vps`”；
+  热更新检查在 `pnpm dev` 里手动看（HMR eyeball 不进管线，管线只认机器判据：构建+单测+本地 console）。
+- 推送形态：`pnpm deploy:vps` 一次性推暂存产物（打包→scp→落盘备份→校验→资产断言），即 Task 3 已验证流程。
 - 监听范围：仓库全量，排除 `dist/`、`node_modules/`、`.git/`、`.superpowers/`、`*.log`；
   监听命中自身日志/临时包不触发（防自激）。
 - 实现只用 Node 内置（`node:fs.watch` 递归 + `child_process` 调 ssh/scp/curl），不新增依赖。
@@ -32,7 +36,7 @@
 1. `scripts/watch-sync.mjs`（唯一新增源码）：watch → debounce → build → sync → verify → log。
    纯函数抽出 `settleDecision(events)`（去抖判定）与 `compareAssetSets(local, remote)`（R12 断言），
    供单测。
-2. `package.json`：加 `dev:sync` 一行。README 加一段（用法 + SSH 前提 + 回滚）。
+2. `package.json`：加 `dev:sync` 与 `deploy:vps` 两行。README 加一段（用法 + SSH 前提 + 回滚）。
 3. 日志：`logs/watch-sync.log`（append，含每次构建/同步结果与备份名）。
 
 ## 数据流与错误处理
@@ -49,6 +53,12 @@
   `compareAssetSets` 一致/不一致两例。
 - 真机验证（人工一次）：touch 一个无关文件 → 观察上线；故意写坏一行 → 观察停轮且 VPS 不变；
   恢复后下一次保存正常同步。由执行人操作， orchestrator 用线上 console 复核。
+
+## 生产构建 debug 默认关
+
+- `vite.config.ts` 的 `RELEASE_BRANCHES` 加 `ethernet`（现只有 main/master，本分支构建全带角标）。
+  ethernet 即生产分支（用户已定），加完后 VPS 构建默认无 BuildBadge，Settings 照常显示版本。
+- 例外保留：`VITE_SHOW_BUILD_BADGE=1` 仍可强制显示（本地调试用）。
 
 ## 前置（用户手动，一次）
 
