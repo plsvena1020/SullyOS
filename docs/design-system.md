@@ -40,19 +40,22 @@
 - 情景字体各归其位：小说梦境用衬线栈，像素家园用 `ZCOOL KuaiLe`，手账用手写体栈，锁屏用 `Inter`。不跨区借用。
 - 图标只用 Phosphor（`@phosphor-icons/react`，见 `package.json` / `vite.config.ts:181`）。常态 `regular`，操作键 `bold`，通话播放状态 `fill`，`duotone` 极少用。尺寸一般 13-22。
 
-## 五、动效（零动画库）
+## 五、动效（CSS 为主 + Motion 三处试点）
 
-全仓无 framer-motion / gsap / react-spring。唯一全局定义是 `index.html:46-117` 的中央 token，各 App 自带一次性内联 `@keyframes`（CDN 版 Tailwind 自定义 `animate-*` 不可靠，见 `components/os/BootSequence.tsx:13` / `apps/Chat.tsx:4292`）。
+全仓以 CSS 动效为主，Motion 只试点三处。中央 token 在 `index.html` 的 `:root`（`--m2-*`）与 tailwind.config animation 区，各 App 自带一次性内联 `@keyframes`（CDN 版 Tailwind 自定义 `animate-*` 不可靠，见 `components/os/BootSequence.tsx:13` / `apps/Chat.tsx:4292`）。
 
-- 入场 350-400ms：`fade-in 0.35s` / `slide-up 0.35s` / `pop-in 0.35s`（带回弹）/ `app-open 0.4s` / `notif-pop 0.5s`。easing 手写处统一 `cubic-bezier(.2,.8,.2,1)`。
-- 交互三档：图标开关抽屉 `duration-200`，卡片 hover 消息 `duration-300`，主题背景切换 `duration-500`。
+- 进入 225ms（`--m2-dur-enter`）、退出 195ms（`--m2-dur-leave`），退出更快。小档 150-225ms，大档 300ms，桌面端进入取 150-200ms（`--m2-dur-desktop-enter`）。超过 400ms 的动效视为失败。
+- 曲线四枚固定：standard `cubic-bezier(0.4, 0, 0.2, 1)`（`--m2-ease-standard`，屏内变化）、decel `cubic-bezier(0, 0, 0.2, 1)`（`--m2-ease-decel`，只进）、accel `cubic-bezier(0.4, 0, 1, 1)`（`--m2-ease-accel`，永久退出）、sharp `cubic-bezier(0.4, 0, 0.6, 1)`（`--m2-ease-sharp`，临时退出如弹窗关闭）。
+- 只允许 `transform` / `opacity` 参与过渡与动画；不加 `box-shadow` / `filter` / `backdrop-filter` 的过渡；keyframes 里不出现 `width/height/left/top/margin`。
+- App 容器禁 transform：`components/PhoneShell.tsx:930` 的 `appEnterFade` 永久只许纯 opacity（200ms），`key={activeApp}` 整树重挂载层挂 transform 会让重 App 首帧卡顿（已实证）。
+- Motion 试点范围仅三处（`utils/motion.ts` 唯一入口，只读 `--m2-*`，`MotionConfig reducedMotion="user"`）：`ConfirmDialog` 退场、`page-in-l/r` 横向切页、`Modal` 内容 fade + scrim。PhoneShell 容器与 Launcher morph 不在试点内。
 - 加载呼吸秒级循环：三点 dots `dot-pulse 1.2s + 0/0.2/0.4s` 错峰，`shimmer 2.5s`，`glow-pulse 3s`，`float 4s`。spinner 只用 `border-t` 圆环 + `animate-spin`，开机不用 spinner（呼吸等待，见 `BootSequence.tsx:11`）。
 - 弹窗两套固定封装：通用居中 `Modal.tsx`（遮罩淡入 + 卡片上滑），确认错误 `ConfirmDialog.tsx` / `ErrorDialog.tsx`（遮罩淡入 + 卡片弹入）。移动端上滑、桌面端弹入见 `PerCharAvatarPicker.tsx:193`。
 - 按下全仓统一 `active:scale-* + transition`：图标 `active:scale-95`，小按钮 `active:scale-90`，卡片轻压 `active:scale-[0.98]`。桌面图标 hover 上浮 `group-hover:-translate-y-0.5`。
 - 按钮状态过渡统一（2026-09-11 起）：`index.html` 中央兜底 `button, button *` ——颜色/描边/阴影/透明度 200ms、transform/scale 150ms（已声明 `transition-*` 的按钮保留自己的，类选择器优先）；没有 `active:` 档位的按钮统一 `scale: 0.98` 轻压（用 `scale` 属性，不与定位 transform 冲突；整屏遮罩 `inset-0` 跳过）；reduced-motion 在同一块里降为 0.01ms。选中态按钮只声明了 `transition-transform` 的，一律改 `transition-all duration-200`（有显式时长则保留时长）。
 - 聊天单聊新消息一次性 `animate-fade-in`（播完从 `animatingIds` 删除，流式交接不播），群聊行无入场动画，只有 padding / 手势过渡。不要给群聊套单聊那套。
 - App 启动拟真：真 App 用 `animate-app-open`（底部弹起），普通页用 `animate-fade-in`（见 `apps/PersonaSim.tsx:563-564`）。
-- 页面/面板切换统一语言（2026-09-11 起）：有方向的翻页用 `animate-page-in-l/r`（keyed 换新页，280ms `cubic-bezier(.25,1,.5,1)`；`PerCharAvatarPicker` 旧私有 `pcaSlide*` 已并入）；整页 / tab 切换用 `animate-fade-soft`（**纯 opacity** 220ms，重树 App 禁 transform）；弹层退场用 `animate-fade-out-soft`（180ms forwards）+ `hooks/useExitPresence.ts` 保持挂载到动画结束；长按编辑态图标轻摆是拖拽样式里的 `jiggleEdit`（仅 `.launcher-edit-item`）。这些动画全部在 `index.html` 的 `prefers-reduced-motion` 降级名单里。
+- 页面/面板切换统一语言（2026-09-11 起，2026-09-23 对齐 M2）：有方向的翻页用 `animate-page-in-l/r`（keyed 换新页，进入 `--m2-dur-enter` 225ms + `--m2-ease-decel`；`PerCharAvatarPicker` 旧私有 `pcaSlide*` 已并入）；整页 / tab 切换用 `animate-fade-soft`（**纯 opacity**，进入 225ms + `--m2-ease-standard`，重树 App 禁 transform）；弹层退场用 `animate-fade-out-soft`（`--m2-dur-leave` 195ms + `--m2-ease-sharp` forwards）+ `hooks/useExitPresence.ts`（默认 195ms）保持挂载到动画结束；长按编辑态图标轻摆是拖拽样式里的 `jiggleEdit`（仅 `.launcher-edit-item`）。这些动画全部在 `index.html` 的 `prefers-reduced-motion` 降级名单里。
 
 ## 六、分 App 隔离清单（只在其 App 内延续）
 

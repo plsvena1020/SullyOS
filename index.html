@@ -57,10 +57,10 @@
               'dot-pulse': 'dotPulse 1.2s ease-in-out infinite',
               'app-open': 'appOpen 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
               'notif-pop': 'notifPop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)',
-              'page-in-l': 'pageInL 0.28s cubic-bezier(0.25, 1, 0.5, 1)',
-              'page-in-r': 'pageInR 0.28s cubic-bezier(0.25, 1, 0.5, 1)',
-              'fade-soft': 'fadeSoft 0.22s ease-out',
-              'fade-out-soft': 'fadeOutSoft 0.18s ease-in forwards',
+              'page-in-l': 'pageInL var(--m2-dur-enter) var(--m2-ease-decel)',
+              'page-in-r': 'pageInR var(--m2-dur-enter) var(--m2-ease-decel)',
+              'fade-soft': 'fadeSoft var(--m2-dur-enter) var(--m2-ease-standard)',
+              'fade-out-soft': 'fadeOutSoft var(--m2-dur-leave) var(--m2-ease-sharp) forwards',
               'jiggle-edit': 'jiggleEdit 1.2s ease-in-out infinite',
             },
             keyframes: {
@@ -158,6 +158,21 @@
         --app-height: 100lvh;
         --keyboard-inset: 0px;
         --app-font: 'Quicksand', sans-serif;
+        /* M2 motion tokens */
+        --m2-ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+        --m2-ease-decel: cubic-bezier(0, 0, 0.2, 1);
+        --m2-ease-accel: cubic-bezier(0.4, 0, 1, 1);
+        --m2-ease-sharp: cubic-bezier(0.4, 0, 0.6, 1);
+        --m2-dur-150: 150ms;
+        --m2-dur-195: 195ms;
+        --m2-dur-200: 200ms;
+        --m2-dur-225: 225ms;
+        --m2-dur-250: 250ms;
+        --m2-dur-300: 300ms;
+        --m2-dur-375: 375ms;
+        --m2-dur-enter: 225ms;
+        --m2-dur-leave: 195ms;
+        --m2-dur-desktop-enter: 150ms;
       }
       /* 动森风格皮肤：拉丁/数字用 Nunito（圆润），中文用 ZCOOL KuaiLe（可爱），保留 Noto Sans SC 兜底。
          选择 html[data-skin] 而非 :root，优先级更高，能盖过运行时注入的 --app-font。 */
@@ -264,14 +279,14 @@
          子元素一并兜底，因为不少按钮的选中样式（分类 chip 的底/圈）挂在按钮内的 span 上。 */
       button, button * {
         transition:
-          color 200ms cubic-bezier(0.4, 0, 0.2, 1),
-          background-color 200ms cubic-bezier(0.4, 0, 0.2, 1),
-          border-color 200ms cubic-bezier(0.4, 0, 0.2, 1),
-          box-shadow 200ms cubic-bezier(0.4, 0, 0.2, 1),
-          opacity 200ms cubic-bezier(0.4, 0, 0.2, 1),
-          filter 200ms cubic-bezier(0.4, 0, 0.2, 1),
-          transform 150ms cubic-bezier(0.4, 0, 0.2, 1),
-          scale 150ms cubic-bezier(0.4, 0, 0.2, 1);
+          color var(--m2-dur-200) var(--m2-ease-standard),
+          background-color var(--m2-dur-200) var(--m2-ease-standard),
+          border-color var(--m2-dur-200) var(--m2-ease-standard),
+          box-shadow var(--m2-dur-200) var(--m2-ease-standard),
+          opacity var(--m2-dur-200) var(--m2-ease-standard),
+          filter var(--m2-dur-200) var(--m2-ease-standard),
+          transform var(--m2-dur-150) var(--m2-ease-standard),
+          scale var(--m2-dur-150) var(--m2-ease-standard);
       }
       /* 没有 active: 档位的按钮补统一轻压反馈。用 scale 属性而非 transform，避免盖掉按钮
          自身用于定位的 transform（如 -translate-x-1/2）；:not([class*="inset-0"]) 跳过整屏遮罩按钮。 */
@@ -309,9 +324,10 @@
         overflow: hidden;
         pointer-events: none;
       }
-      /* 统一页面切换动效的降低动态效果降级（page-in-l/r、fade-soft、jiggle-edit）+ 按钮状态过渡 */
+      /* 统一页面切换动效的降低动态效果降级（page-in-l/r、fade-soft、jiggle-edit）+ 按钮状态过渡
+         + 弹窗（Modal/Confirm 的 scrim 与面板：fade-in/slide-up/pop-in） */
       @media (prefers-reduced-motion: reduce) {
-        .animate-page-in-l, .animate-page-in-r, .animate-fade-soft, .animate-fade-out-soft, .animate-jiggle-edit {
+        .animate-page-in-l, .animate-page-in-r, .animate-fade-soft, .animate-fade-out-soft, .animate-jiggle-edit, .animate-fade-in, .animate-slide-up, .animate-pop-in {
           animation-duration: 0.01ms !important;
           animation-iteration-count: 1 !important;
         }

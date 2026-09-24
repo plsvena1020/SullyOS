@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
  * 关闭退场动效：open 变 false 后先保持挂载 duration 毫秒播退场，再真正卸载。
  * 返回 mounted（是否渲染）与 phase（'in' | 'out'）；调用方按 phase 挂入场/退场 class。
  */
-export const useExitPresence = (open: boolean, duration = 200) => {
+export const useExitPresence = (open: boolean, duration = 195) => {
     const [mounted, setMounted] = useState(open);
     const [phase, setPhase] = useState<'in' | 'out'>(open ? 'in' : 'out');
     const mountedRef = useRef(mounted);

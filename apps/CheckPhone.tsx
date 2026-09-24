@@ -476,6 +476,53 @@ const CheckPhone: React.FC = () => {
         window.scrollTo(0, 0);
     }, [activeAppId, view]);
 
+    // 重 App 空闲预取：切进来后在空闲时预热列表前 N 张头像的解码（只预热，不改渲染结构）。
+    // blobref 令牌仍走 useBlobRefUrl 异步解析（语义不变），这里只预热 data:/http(s) 直链；
+    // 首帧不同步解码大图，分页数量与截断规则不动。
+    useEffect(() => {
+        if (!targetChar) return;
+        const schedule = (fn: () => void) => {
+            const w = window as unknown as { requestIdleCallback?: (cb: () => void) => number };
+            if (typeof w.requestIdleCallback === 'function') w.requestIdleCallback(fn);
+            else setTimeout(fn, 0);
+        };
+        schedule(() => {
+            try {
+                const seen = new Set<string>();
+                const recs = targetChar.phoneState?.records || [];
+                const cs = targetChar.phoneState?.contacts || [];
+                const avatarOf = (c: PhoneContact): string | undefined => {
+                    const linked = c.linkedCharId ? characters.find(ch => ch.id === c.linkedCharId) : undefined;
+                    return linked?.avatar || c.avatar;
+                };
+                const candidates: string[] = [];
+                for (const c of cs) {
+                    const av = avatarOf(c);
+                    if (av && !seen.has(av)) { seen.add(av); candidates.push(av); }
+                    if (candidates.length >= 12) break;
+                }
+                if (candidates.length < 12) {
+                    for (const r of recs) {
+                        if (r.type !== 'chat') continue;
+                        const c = cs.find(x => (r.contactId && x.id === r.contactId) || x.name === r.title);
+                        const av = c ? avatarOf(c) : undefined;
+                        if (av && !seen.has(av)) { seen.add(av); candidates.push(av); }
+                        if (candidates.length >= 12) break;
+                    }
+                }
+                for (const url of candidates) {
+                    if (url.startsWith('data:') || url.startsWith('http')) {
+                        const img = new Image();
+                        img.decoding = 'async';
+                        img.src = url;
+                    }
+                }
+            } catch { /* 预热失败静默，不影响渲染 */ }
+        });
+        // 刻意只依赖角色 id：切角色时预热一次，不跟随渲染深对象反复触发。
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [targetChar?.id]);
+
     // Auto scroll to bottom of chat detail
     useEffect(() => {
         if (activeAppId === 'chat_detail' && chatEndRef.current) {

@@ -7,9 +7,10 @@ import { useBlobRefUrl } from '../../utils/blobRef';
  * 令牌解析出的 objectURL 会在卸载 / value 变化时自动回收，不泄漏。
  * 非令牌值原样透传，行为与普通 <img> 一致。
  */
-const TokenImg: React.FC<{ value?: string | null } & React.ImgHTMLAttributes<HTMLImageElement>> = ({ value, ...rest }) => {
+const TokenImg: React.FC<{ value?: string | null } & React.ImgHTMLAttributes<HTMLImageElement>> = ({ value, decoding = 'async', loading = 'lazy', ...rest }) => {
     const src = useBlobRefUrl(value ?? undefined);
-    return <img src={src} {...rest} />;
+    if (src === undefined) return <img decoding={decoding} loading={loading} {...rest} />;
+    return <img src={src} decoding={decoding} loading={loading} {...rest} />;
 };
 
 export default TokenImg;
