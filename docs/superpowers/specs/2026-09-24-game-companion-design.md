@@ -66,6 +66,7 @@ XCI 只能离线解包做剧本知识库（需 `prod.keys`，`hactool`/`nxdumpto
 - PC：置顶透明穿透窗（Electron/Tauri，`alwaysOnTop` + `setIgnoreMouseEvents`），热键切换可点模式；独占全屏下不可见（已禁独占）。
 - 平板：`TYPE_APPLICATION_OVERLAY`（API 26+），`FLAG_NOT_TOUCHABLE`/`FLAG_NOT_FOCUSABLE` 切换；Android 11+ 权限到设置页开。
 - 验证期：只显示最新一条文本；后续：最新 1–3 条+未读数+节流；点输入框切可点回复。
+- 气泡视觉（Phase 2，细节由设计 lane 定）：多颜色/风格按角色与消息类型可配；语音消息弹语音+文字气泡（含播放态），纯文本弹文字气泡；新气泡底部进入、旧气泡逐个上顶，每气泡独立轻微浮动；无交互 4–5s 渐隐（常量可配，可点/悬停时暂停计时）。
 - 游戏频道独立：独立队列、独立节流，永不进 `ProactiveChat.start/resume`，`markAmsgStateDirty`/autoArchive 默认关闭，高频字幕不污染 30 分钟主动消息。
 
 ## 8. 记忆政策（精简+手动）
