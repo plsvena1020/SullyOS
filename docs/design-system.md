@@ -81,6 +81,6 @@ CSS 组织方式：独立 CSS 文件只有自习室两件、伴侣主题系列�
 
 1. 先定归属：同类界面在哪个 App，直接复用该 App 的底色、圆角、描边、阴影、动效时长整组写法。
 2. 再定容器：居中弹窗抄 `Modal`，确认框抄 `ConfirmDialog`，底部弹层用 `slide-up`，右侧抽屉用 `slide-in-right`，不新造第 N 种弹窗。
-3. 动效只从中央 token 取时长，不引入动画库，不发明新 easing；加载态优先三点 dots 或 spinner 二选一。
+3. 动效只从中央 token 取时长，不发明新 easing；新动效默认走 CSS，只有 `utils/motion.ts` 试点三处（ConfirmDialog 退场 / page-in-l/r 横向切页 / Modal 内容 fade）允许引 Motion，扩大试点前先开 ADR；加载态优先三点 dots 或 spinner 二选一。
 4. 需要主题隔离（阅读器、皮肤、舞台）时抄自习室模式：根容器 + `data-theme` + CSS 变量域，不向全局漏样式。
 5. 完工自查：渐变、纯白底、backdrop-blur 是否出现在不该出现的地方；`acnh` / 手绘风元素是否漏进其他 App；圆角阴影是否有新发明值。
