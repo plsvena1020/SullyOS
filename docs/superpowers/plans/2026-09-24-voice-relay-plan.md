@@ -101,6 +101,8 @@ Expected: FAIL（run.js 不存在）。
 ```js
 // vps-backend/src/voice-relay/run.js
 import http from 'node:http';
+import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 
 export const PORT = Number(process.env.VOICE_RELAY_PORT || 8839);
 const HOST = '127.0.0.1';
@@ -154,7 +156,14 @@ export function createServer({ port = PORT } = {}) {
   });
 }
 
-if (process.argv[1] && import.meta.url.endsWith('/run.js')) {
+const isMain = (() => {
+  try {
+    return !!process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+  } catch {
+    return false;
+  }
+})();
+if (isMain) {
   createServer().then(({ url }) => console.log('voice-relay on ' + url));
 }
 ```
