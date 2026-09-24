@@ -472,9 +472,8 @@ async function ttsProxy(request, env) {
   } catch {
     return json({ error: 'bad_request' }, 400);
   }
-  if (!payload || typeof payload.text !== 'string' || !payload.text.trim()) {
-    return json({ error: 'bad_request' }, 400);
-  }
+  // 不在这里检查 payload.text：空文本与非法请求体是两个不同的错误码，
+  // 由 /speak 统一裁决，代理不预判、不改写。
   try {
     const upstream = await fetch(speakUrl, {
       method: 'POST',
@@ -487,6 +486,8 @@ async function ttsProxy(request, env) {
     const out = new Headers();
     const ct = upstream.headers.get('content-type');
     if (ct) out.set('content-type', ct);
+    out.set('access-control-allow-origin', '*');
+    out.set('access-control-expose-headers', 'X-Genie-Resolved-Emotion');
     const resolved = upstream.headers.get('x-genie-resolved-emotion');
     if (resolved) out.set('X-Genie-Resolved-Emotion', resolved);
     return new Response(body, { status: upstream.status, headers: out });

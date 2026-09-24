@@ -341,6 +341,8 @@ describe('POST /v1/tts', () => {
         const res = await postTts({ text: '你好', emotion: 'happy' });
         expect(res.status).toBe(200);
         expect(res.headers.get('content-type')).toContain('audio/wav');
+        expect(res.headers.get('access-control-allow-origin')).toBe('*');
+        expect(res.headers.get('access-control-expose-headers')).toContain('X-Genie-Resolved-Emotion');
         expect(calls[0].url).toBe('http://127.0.0.1:9882/speak');
         expect(JSON.parse(calls[0].init.body)).toEqual({ text: '你好', emotion: 'happy' });
     });
@@ -358,12 +360,28 @@ describe('POST /v1/tts', () => {
         expect(res.headers.get('x-genie-resolved-emotion')).toBe('calm');
     });
 
-    it('503 忙 原样透传', async () => {
-        vi.stubGlobal('fetch', vi.fn(async () => new Response('{"error":"busy"}', {
-            status: 503, headers: { 'content-type': 'application/json' },
+    it.each([
+        [400, 'empty'],
+        [400, 'bad_request'],
+        [400, 'bad_emotion'],
+        [413, 'chunk_too_long'],
+        [413, 'too_many_chunks'],
+        [503, 'warming_up'],
+        [503, 'busy'],
+        [504, 'lock_timeout'],
+        [504, 'synth_timeout'],
+        [500, 'reference_missing'],
+        [500, 'synth_failed'],
+    ])('上游 %i %s 原样透传', async (status, code) => {
+        const body = JSON.stringify({ error: code });
+        vi.stubGlobal('fetch', vi.fn(async () => new Response(body, {
+            status,
+            headers: { 'content-type': 'application/json' },
         })));
+
         const res = await postTts({ text: 'x' });
-        expect(res.status).toBe(503);
+        expect(res.status).toBe(status);
+        expect(await res.text()).toBe(body);
     });
 
     it('适配层不可达时返回 502 而不是抛异常', async () => {
