@@ -8,10 +8,10 @@ import { getCachedTts, saveCachedTts } from '../utils/ttsCache';
 import { buildMiniMaxTtsCacheKey, buildMiniMaxTtsPayload, cleanTextForTts, convertHexAudioToBlob, describeMiniMaxErrorMessage, fetchRemoteAudioBlob, getMiniMaxParamVersion, prepareMiniMaxSpeechText, VALID_EMOTIONS, stripEmotionTags, VOICE_ACTING_GUIDE } from '../utils/minimaxTts';
 import { normalizeVoiceTags } from '../utils/sanitize';
 import { FISH_VOICE_ACTING_GUIDE, stripFishMarkupForDisplay } from '../utils/fishAudioTts';
-import { resolveTtsProvider, getElevenLabsModel, getTtsProvider, getVoicePromptOverride } from '../utils/ttsProvider';
+import { resolveTtsProvider, getElevenLabsModel, getTtsProvider, getVoicePromptOverride, isGenieVoiceEnabledSync } from '../utils/ttsProvider';
 import { getElevenLabsVoiceActingGuide, stripElevenLabsMarkupForDisplay } from '../utils/elevenLabsTts';
 import { canSynthesizeSpeech, stripTtsMarkupForDisplay, synthesizeSpeechDetailed as synthesizeSpeechRoutedDetailed } from '../utils/ttsRouter';
-import { isGenieVoiceEnabled } from '../utils/genieTts';
+import { cleanTextForTtsGenie, isGenieVoiceEnabled } from '../utils/genieTts';
 import { CANTONESE_VOICE_SUPPORT_NOTE, VOICE_LANGUAGE_OPTIONS, voiceLanguagePromptLabel } from '../utils/voiceLanguage';
 import { startStt, isSttSupported, type SttSession } from '../utils/speechToText';
 import { ContextBuilder } from '../utils/context';
@@ -25,7 +25,7 @@ import { processNewMessagesWithAutoArchive } from '../utils/memoryPalace/autoArc
 import { incrementDigestRound, runCognitiveDigestion } from '../utils/memoryPalace';
 import { RealtimeContextManager } from '../utils/realtimeContext';
 import { DB } from '../utils/db';
-import { ChatPrompts } from '../utils/chatPrompts';
+import { ChatPrompts, GENIE_VOICE_ACTING_GUIDE } from '../utils/chatPrompts';
 import { Message, ChatTheme, AppID, type CharacterProfile } from '../types';
 import { PRESET_THEMES } from '../components/chat/ChatConstants';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
@@ -219,8 +219,9 @@ const summarizeKeepsakeLine = (transcript: CallBubble[], charName: string) => {
 // Only a leading tag is APPLIED (conservative — avoids surprise mid-utterance tone
 // swings); any other [emotion] tags are stripped without effect by stripEmotionTags.
 const LEADING_EMOTION_RE = /^\s*[\[【]\s*(happy|sad|angry|fearful|disgusted|surprised|calm|fluent)\s*[\]】]\s*/i;
+const GENIE_LEADING_EMOTION_RE = /^\s*[\[【]\s*(happy|sad|angry|fearful|surprised|calm|fluent)\s*[\]】]\s*/i;
 const extractLeadingEmotion = (raw: string): string | undefined => {
-  const m = (raw || '').match(LEADING_EMOTION_RE);
+  const m = (raw || '').match(isGenieVoiceEnabledSync() ? GENIE_LEADING_EMOTION_RE : LEADING_EMOTION_RE);
   return m ? m[1].toLowerCase() : undefined;
 };
 const sanitizeAssistantOutput = (raw: string) => {
@@ -354,6 +355,7 @@ const SoundWaveGlyph = () => (
   </span>
 );
 const currentVoiceActingGuide = (): string => {
+  if (isGenieVoiceEnabledSync()) return GENIE_VOICE_ACTING_GUIDE;
   const provider = getTtsProvider();
   const custom = getVoicePromptOverride(provider);
   if (custom) return custom;
@@ -364,6 +366,7 @@ const currentVoiceActingGuide = (): string => {
 
 const cleanCurrentVoiceMarkupForDisplay = (text?: string | null): string => {
   if (!text) return '';
+  if (isGenieVoiceEnabledSync()) return cleanTextForTtsGenie(text);
   const provider = getTtsProvider();
   if (provider === 'fishaudio') return stripFishMarkupForDisplay(text);
   if (provider === 'elevenlabs') return stripElevenLabsMarkupForDisplay(text);
@@ -487,13 +490,16 @@ ${currentVoiceActingGuide()}
 
 只输出你在电话里会**说出口**的话。不要输出 [通话]、[聊天]、[约会] 这类系统标记，不要输出时间戳。`;
   const langLabel = voiceLang ? voiceLanguagePromptLabel(voiceLang) : '';
+  const voiceEmotionList = isGenieVoiceEnabledSync()
+    ? 'happy/sad/angry/fearful/surprised/calm/fluent'
+    : 'happy/sad/angry/fearful/disgusted/surprised/calm/fluent';
   const voiceLangPrompt = voiceLang ? `### 语音语种翻译
 
 用户开启了语音语种功能，选择的语种是：${langLabel}（${voiceLang}）。
 
 你的回复格式必须是：
 1. 先用中文自然地写出你要说的话（给对方看的文字，中文舞台指示写在这里没关系）
-2. 然后换行，在 <语音> 标签里写出这句话的${langLabel}翻译——这才是真正会被读出来的部分。可选地用 emotion 属性标整句情绪：\`<语音 emotion="happy">…</语音>\`（情绪只能取 happy/sad/angry/fearful/disgusted/surprised/calm/fluent）
+2. 然后换行，在 <语音> 标签里写出这句话的${langLabel}翻译——这才是真正会被读出来的部分。可选地用 emotion 属性标整句情绪：\`<语音 emotion="happy">…</语音>\`（情绪只能取 ${voiceEmotionList}）
 
 示例：
 啊，我知道了

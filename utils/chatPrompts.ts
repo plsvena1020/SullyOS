@@ -50,13 +50,19 @@ const voiceActingGuide = (): string => {
  * 放进 catalog 要连带改 promptPresetSeeding 的迁移表（它会删整个旧 voicePrompts，
  * 漏一处就抹掉用户数据），不值当。代价是 v1 不能在预设面板里编辑这一段。
  */
-const GENIE_VOICE_ACTING_GUIDE = `### 语音表演（Genie 自建语音）
+export const GENIE_VOICE_ACTING_GUIDE = `### 语音表演（Genie 自建语音）
 
 - 用 \`<语音 emotion="...">\` 发送语音块，情绪只能取 happy/sad/angry/fearful/surprised/calm/fluent。
 - 没标 emotion 时会回落 calm；用户在设置里选了固定情绪的，按设置来。
 - 每条消息最多一个 <语音> 标签。不是每条都要发语音——像真人一样，有时候打字有时候发语音。
 - **不要复读**：同时发文字和语音时，语音内容不能是文字的重复或复述。
 - 语音和文字的标点、语气词要自然，口语化，不要念稿腔。`;
+
+// Genie 专属：括号动作会被发送前剥掉，教模型不要写。
+const GENIE_CUE_RULE = '- <语音> 里不要写括号动作；Genie 不支持，会在发送前剥掉。';
+// legacy 两段原文不同，必须分别保留，任何情况下都不得合并或改写。
+const LEGACY_LANG_CUE_RULE = '- <语音> 里想要笑、叹气等真实语气用官方英文标签 (laughs)/(sighs)/(chuckle)/(gasps) 等，**不要写中文（轻笑）这类舞台指示**（中文括号会被直接删掉、不朗读）';
+const LEGACY_DEFAULT_CUE_RULE = '- <语音> 里只写会被朗读的文字，不要写中文舞台指示/括号动作；想要笑、叹气等真实语气，用官方英文标签 (laughs)/(sighs)/(chuckle)/(gasps) 等（中文括号会被直接删掉、不朗读）';
 
 /**
  * 语音指南完整解析（异步版，聊天主路径用）：面板行（改过）> 设置页旧覆盖 > 内置默认；
@@ -1231,9 +1237,6 @@ ${uname} 的化身正挂在《彼方》的【${roomName}】${act ? `，状态写
             const voiceEmotionList = genieVoice
                 ? 'happy/sad/angry/fearful/surprised/calm/fluent'
                 : 'happy/sad/angry/fearful/disgusted/surprised/calm/fluent';
-            const voiceCueRule = genieVoice
-                ? '- <语音> 里不要写括号动作；Genie 不支持，会在发送前剥掉。'
-                : '- 想表达笑、叹气等真实语气，使用官方英文标签 (laughs)/(sighs)/(chuckle)/(gasps) 等（中文括号会被直接删掉、不朗读）。';
             const voiceLang = char.chatVoiceLang || '';
             const langLabel = voiceLang ? voiceLanguagePromptLabel(voiceLang) : '';
             if (voiceLang) {
@@ -1260,7 +1263,7 @@ ${uname} 的化身正挂在《彼方》的【${roomName}】${act ? `，状态写
 
 要求：
 - <语音> 里的${langLabel}要自然口语化，符合你的性格，不要机翻味
-${voiceCueRule}
+${genieVoice ? GENIE_CUE_RULE : LEGACY_LANG_CUE_RULE}
 - 每条消息最多一个 <语音> + <字幕> 组合
 - 不是每条消息都要发语音！像真人一样，有时候打字，有时候发语音，自然切换
 - 比较适合发语音的场景：撒娇、吐槽、语气很重的话、懒得打字的时候
@@ -1283,7 +1286,7 @@ ${(await resolveVoiceActingGuide()) ?? ''}`;
 <语音>你快去看！就那个什么……(chuckle)啊我忘了叫什么了，反正超搞笑的</语音>
 
 要求：
-${voiceCueRule}
+${genieVoice ? GENIE_CUE_RULE : LEGACY_DEFAULT_CUE_RULE}
 - 每条消息最多一个 <语音> 标签
 - 不是每条消息都要发语音！像真人一样，有时候打字，有时候发语音，自然切换
 - 比较适合发语音的场景：撒娇、吐槽、语气很重的话、懒得打字的时候、想让对方听到你语气的时候
