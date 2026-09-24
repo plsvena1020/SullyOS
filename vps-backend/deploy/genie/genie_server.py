@@ -274,15 +274,17 @@ def _tts_completed_pcm(chunk: str, timeout: float) -> bytes:
             if time.monotonic() >= call_deadline:
                 raise SynthesisTimeout()
         except (
-            TimeoutError,
+            OSError,
             SynthesisTimeout,
             http.client.HTTPException,
-            ConnectionError,
         ):
             # 连接侧与读侧失败（IncompleteRead / RemoteDisconnected / ConnectionReset 等）
             # 都不会取消 Genie 的后台任务：必须先停掉再让上层释放锁，否则下一个请求
             # 会重置 TTSPlayer 全局队列，复现最初的挂死+垃圾音频。
             # _genie_post 会把 socket 超时转换成 SynthesisTimeout，因此也需在此接住。
+            # TimeoutError 与 ConnectionError 都是 OSError 子类，用 OSError 一并覆盖；
+            # 必须显式包含它：裸 OSError（例如 settimeout 打在已关闭的 socket 上）
+            # 若漏到上层，上层只会在 deadline 已触发时才停机，锁照样被释放。
             if _claim_stop():
                 _stop_genie_safely("tts transport failure")
             raise
@@ -516,17 +518,15 @@ def _stop_genie_safely(reason: str) -> bool:
     return False
 
 
-def _speak_with_guard(text: str, emotion: str) -> tuple[bytes, str]:
+def _speak_with_guard(text: str, emotion: str, deadline: float) -> tuple[bytes, str]:
     if _is_poisoned():
         # TTSPlayer 状态不可信，放行任何请求都会重演最初的挂死+垃圾音频。
         # 复用已锁定的 warming_up 错误码，不新增契约里的码。
         raise ServiceUnready()
     if not _acquire_slot():
         raise SpeakBusy()
-    # 绝对 deadline 从请求入口起算，必须包含等锁时间。等锁发生在 _synthesize 之前，
-    # 若 deadline 留在 _synthesize 内部创建，5 秒锁等待就会叠加在 120 秒之外，
-    # 服务端上界变成 5+120+stop，与客户端预算之间没有任何余量。
-    deadline = time.monotonic() + SYNTH_TIMEOUT
+    # deadline 由 speak_endpoint 在进入线程池之前创建并传入，因此它同时覆盖
+    # 线程池排队、等锁和合成。若在这里才创建，那两段等待就会叠加在 120 秒之外。
     try:
         left = deadline - time.monotonic()
         if left <= 0:
@@ -568,9 +568,13 @@ async def speak_endpoint(request: Request):
     if not _READY.is_set():
         return JSONResponse(status_code=503, content={"error": "warming_up"})
 
+    # deadline 必须在进入线程池之前创建：排队等待也算在请求预算内。否则请求在线程池
+    # 里等 10 秒才开始跑，客户端的 135 秒早已起算并会先到期，而服务端还以为自己
+    # 还剩 120 秒。
+    deadline = time.monotonic() + SYNTH_TIMEOUT
     try:
         # 合成是阻塞的（最长 120 秒），必须放线程池，否则会堵住整个事件循环。
-        wav, resolved = await run_in_threadpool(_speak_with_guard, text, emotion)
+        wav, resolved = await run_in_threadpool(_speak_with_guard, text, emotion, deadline)
     except SpeakBusy:
         return JSONResponse(status_code=503, content={"error": "busy"})
     except ServiceUnready:
@@ -601,8 +605,14 @@ async def speak_endpoint(request: Request):
 
 
 def _warmup() -> None:
+    global _STOP_CLAIMED
     time.sleep(5)
     for attempt in range(1, 6):
+        # 每次尝试都要重新建立停机生命周期。_STOP_CLAIMED 只在 _synthesize 里复位，
+        # 而 warmup 直接调 _tts_completed_pcm、不经过 _synthesize：若不复位，
+        # 第一次尝试认领过停机后，后续尝试的传输失败会拿到 False 而不再停机，
+        # 于是上一轮可能仍在跑的 TTSPlayer 被下一轮重入。
+        _STOP_CLAIMED = False
         try:
             genie.load_character(
                 character_name=CHARACTER, onnx_model_dir=MODEL_DIR, language=LANGUAGE

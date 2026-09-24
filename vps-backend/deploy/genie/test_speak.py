@@ -248,7 +248,7 @@ def main():
             stopped = genie_server._stop_genie_safely("test")
             poisoned = genie_server._is_poisoned()
             raised = _raises(
-                lambda: genie_server._speak_with_guard("测试", "calm"), genie_server.ServiceUnready
+                lambda: genie_server._speak_with_guard("测试", "calm", time.monotonic() + genie_server.SYNTH_TIMEOUT), genie_server.ServiceUnready
             )
             return (not stopped) and poisoned and raised
         finally:
@@ -304,7 +304,7 @@ def main():
 
         def waiter():
             try:
-                genie_server._speak_with_guard("测试", "calm")
+                genie_server._speak_with_guard("测试", "calm", time.monotonic() + genie_server.SYNTH_TIMEOUT)
                 result.append("admitted")
             except genie_server.ServiceUnready:
                 result.append("blocked")
@@ -433,7 +433,7 @@ def main():
             genie_server._SYNTH_LOCK.acquire()
             try:
                 return _raises(
-                    lambda: genie_server._speak_with_guard("x", "calm"),
+                    lambda: genie_server._speak_with_guard("x", "calm", time.monotonic() + genie_server.SYNTH_TIMEOUT),
                     genie_server.SynthesisTimeout,
                 )
             finally:
@@ -472,6 +472,77 @@ def main():
             genie_server._READY.set()
 
     ok &= check("validation_precedes_readiness", validation_precedes_readiness(), "")
+
+    # 9 deadline 之前的裸 OSError 也必须先停 Genie 再放锁。
+    #    旧实现在 _tts_completed_pcm 只捕获 (OSError 子类, SynthesisTimeout, HTTPException)，
+    #    裸 OSError 会漏到上层，而上层只在 deadline 已触发时才停机——锁照样被释放，
+    #    TTSPlayer 可能仍在跑，下个请求就会重置它的全局队列。
+    def bare_oserror_triggers_stop():
+        orig_post = genie_server._genie_post
+        orig_stop = genie_server.genie.stop
+        calls = []
+
+        def raise_oserror(*args, **kwargs):
+            raise OSError(105, "No buffer space available")
+
+        genie_server._genie_post = raise_oserror
+        genie_server.genie.stop = lambda: calls.append(1)
+        genie_server._STOP_CLAIMED = False
+        genie_server._DEADLINE_FIRED.clear()
+        try:
+            try:
+                genie_server._tts_completed_pcm("测试", 1.0)
+                return False
+            except OSError:
+                return len(calls) == 1
+        finally:
+            genie_server._genie_post = orig_post
+            genie_server.genie.stop = orig_stop
+            genie_server._STOP_CLAIMED = False
+            genie_server._DEADLINE_FIRED.clear()
+
+    ok &= check("bare_oserror_triggers_stop", bare_oserror_triggers_stop(), "")
+
+    # 10 stop 重试的耗时应与 stop 实际耗时成正比，而不是吃满 join 上限。
+    #     STOP_RETRIES=3 x STOP_CALL_TIMEOUT=10 看着像 30 秒，但抛异常的尝试会立即
+    #     退出 runner 并写入 outcome，join 随即返回——10 秒只在 hung 时被吃掉，
+    #     而 hung 不重试。这条把该性质钉住，防止有人日后改成真的睡满 10 秒。
+    def stop_retry_budget_is_proportional():
+        orig_stop = genie_server.genie.stop
+
+        def slow_raise():
+            time.sleep(0.2)
+            raise RuntimeError("slow stop unavailable")
+
+        genie_server.genie.stop = slow_raise
+        genie_server._STOP_CLAIMED = False
+        genie_server._POISONED = False
+        try:
+            started = time.monotonic()
+            genie_server._stop_genie_safely("test")
+            elapsed = time.monotonic() - started
+            return elapsed < 2.0
+        finally:
+            genie_server.genie.stop = orig_stop
+            genie_server._POISONED = False
+
+    ok &= check("stop_retry_budget_is_proportional", stop_retry_budget_is_proportional(), "")
+
+    # 11 warmup 每次尝试都要复位 stop 认领。
+    #     warmup 直接调 _tts_completed_pcm、不经 _synthesize，而 _STOP_CLAIMED 只在
+    #     _synthesize 里复位：若 warmup 不复位，第一次尝试认领后，后续尝试的传输失败
+    #     会拿到 False 而不再停机，上一轮可能仍在跑的 TTSPlayer 就被下一轮重入。
+    #     _warmup 本身要 sleep 5 秒并打真实 Genie，无法在冒烟里跑，因此这里做源码断言。
+    def warmup_resets_stop_claim():
+        import inspect
+
+        genie_server._STOP_CLAIMED = True
+        try:
+            return "_STOP_CLAIMED = False" in inspect.getsource(genie_server._warmup)
+        finally:
+            genie_server._STOP_CLAIMED = False
+
+    ok &= check("warmup_resets_stop_claim", warmup_resets_stop_claim(), "")
 
     print("ALL_PASS" if ok else "HAS_FAILURE", flush=True)
     return 0 if ok else 1
