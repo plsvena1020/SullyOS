@@ -3996,7 +3996,7 @@ ${olderText}
     // ============================================================
     if (view === 'select') {
         return (
-            <div className="absolute inset-0 flex flex-col overflow-hidden text-white animate-fade-soft"
+            <div className="absolute inset-0 flex flex-col overflow-hidden text-white"
                 style={{ background: 'radial-gradient(120% 80% at 50% 0%, #161826 0%, #0a0b10 60%)' }}>
                 <StatusStrip />
                 <div className="h-14 flex items-center justify-between px-4 shrink-0">
