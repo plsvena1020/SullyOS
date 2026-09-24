@@ -384,3 +384,10 @@ Instant Push（发完消息就能锁屏走人、角色回复好了自己以推�
 **[ 连接建立 // 等待输入 // 数据库停止咕咕叫 ]**
 
 </div>
+
+## 一键部署到 VPS（需 SSH 免密一次）
+
+1. 本机 `ssh-keygen -t ed25519`，公钥追加到 VPS `~/.ssh/authorized_keys`，`ssh <host> true` 无密码通过。
+2. 设环境变量 `SULLYOS_VPS_SSH=user@host`（如 `root@156.238.248.237`）。
+3. 本地 `pnpm dev` 看顺眼后跑 `pnpm deploy:vps`；常驻监听用 `pnpm dev:sync`（只暂存不推送）。
+回滚：用输出里的 backup 目录 `mv` 回去即可，DNS/Caddy 不动。
