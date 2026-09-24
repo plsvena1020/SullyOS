@@ -62,6 +62,14 @@ def sane(body, low=1.0, high=3.0):
     return low <= dur <= high
 
 
+def parse_error(body):
+    """从错误响应体里取 {"error": "<code>"}。取不到就返回 None。"""
+    try:
+        return json.loads(body.decode("utf-8", "replace")).get("error")
+    except Exception:
+        return None
+
+
 def _raises(fn, expected_type) -> bool:
     try:
         fn()
@@ -80,7 +88,12 @@ def run_threaded(payloads):
     def worker(payload, out):
         try:
             barrier.wait(timeout=20)
-            out.status, out.body, out.emotion = post(payload, timeout=180)
+            status, body, emotion = post(payload, timeout=180)
+            out.status, out.body, out.emotion = status, body, emotion
+            if status is not None and status != 200:
+                # HTTPError 不会走 except，错误码在响应体里，必须单独取出来，
+                # 否则没法区分 busy / lock_timeout / synth_timeout。
+                out.error = parse_error(body)
         except Exception as e:
             out.error = repr(e)
 
@@ -178,12 +191,48 @@ def main():
         ok &= check(f"concurrent_{i}_sane", sane(o.body),
                     f"dur={len(o.body)/BYTES_PER_SEC:.2f}s")
 
-    # 6 三条并发：第 3 条 503（队列上限 2）
+    # 6 三条并发：第 3 条必须 503 busy（队列上限 2）。另两条要么 200，要么在
+    #    等锁超过 LOCK_WAIT_TIMEOUT=5.0s 时按设计返回 504 lock_timeout——合成耗时
+    #    3.4s 时余量只有 1.5s，内存压力下偶尔越线，属规格内行为。
+    #    绝不允许 synth_timeout：那意味着 120s 上限被突破，是真 bug。
     outs3 = run_threaded([{"text": SENTENCE, "emotion": "calm"},
                           {"text": SENTENCE, "emotion": "happy"},
                           {"text": SENTENCE, "emotion": "sad"}])
     codes = sorted(o.status for o in outs3)
-    ok &= check("triple_statuses", codes == [200, 200, 503], f"codes={codes}")
+    busy = [o for o in outs3 if o.status == 503]
+    admitted = [o for o in outs3 if o.status != 503]
+    ok &= check(
+        "triple_exactly_one_busy",
+        len(busy) == 1 and busy[0].error == "busy" and len(admitted) == 2,
+        f"codes={codes} busy_errors={[o.error for o in busy]}",
+    )
+    ok &= check(
+        "triple_admitted_200_or_lock_timeout",
+        all(
+            o.status == 200 or (o.status == 504 and o.error == "lock_timeout")
+            for o in admitted
+        ),
+        f"codes={codes} admitted={[(o.status, o.error) for o in admitted]}",
+    )
+    ok &= check(
+        "triple_never_synth_timeout",
+        all(o.error != "synth_timeout" for o in outs3),
+        f"codes={codes} errors={[(o.status, o.error) for o in outs3]}",
+    )
+
+    # 6b 长文本必然超过 5s 锁等待：把"第二个请求按设计 504 lock_timeout"钉成
+    #    确定断言，不再依赖短文本的运气。
+    LONG = SENTENCE * 5
+    outs_long = run_threaded([{"text": LONG, "emotion": "calm"},
+                              {"text": LONG, "emotion": "happy"},
+                              {"text": LONG, "emotion": "sad"}])
+    long_codes = sorted(o.status for o in outs_long)
+    ok &= check(
+        "long_text_lock_timeout",
+        long_codes == [200, 503, 504]
+        and any(o.error == "lock_timeout" for o in outs_long),
+        f"codes={long_codes} errors={[(o.status, o.error) for o in outs_long]}",
+    )
 
     # 7 stop 自身失败必须毒化服务：之后所有请求 503 warming_up，直到进程重启
     def poison_blocks_new_requests():
