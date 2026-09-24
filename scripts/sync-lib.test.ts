@@ -1,6 +1,9 @@
 // scripts/sync-lib.test.ts
 import { describe, expect, it, vi } from 'vitest';
-import { shouldIgnore, createDebouncer, compareAssetSets } from './sync-lib.mjs';
+import { mkdtempSync, mkdirSync, writeFileSync, statSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { shouldIgnore, createDebouncer, compareAssetSets, newestMtimeMs, isProcessAlive } from './sync-lib.mjs';
 
 describe('shouldIgnore', () => {
   it('ignores dist, node_modules, .git, logs, tmp packs', () => {
@@ -9,6 +12,12 @@ describe('shouldIgnore', () => {
     expect(shouldIgnore('D:/sullyos/.git/HEAD')).toBe(true);
     expect(shouldIgnore('D:/sullyos/app.ts')).toBe(false);
     expect(shouldIgnore('D:/sullyos/logs/watch-sync.log')).toBe(true);
+  });
+  it('matches relative paths without leading separator', () => {
+    expect(shouldIgnore('dist\\assets\\a.js')).toBe(true);
+    expect(shouldIgnore('dist/a.js')).toBe(true);
+    expect(shouldIgnore('node_modules/x/y.js')).toBe(true);
+    expect(shouldIgnore('src/distract/a.js')).toBe(false);
   });
 });
 
@@ -36,5 +45,23 @@ describe('compareAssetSets', () => {
     expect(r.ok).toBe(false);
     expect(r.onlyLocal).toEqual(['/assets/i-AAA.js']);
     expect(r.onlyRemote).toEqual(['/assets/i-BBB.js']);
+  });
+});
+
+describe('newestMtimeMs', () => {
+  it('newestMtimeMs skips ignored dirs', () => {
+    const base = mkdtempSync(join(tmpdir(), 'mt-'));
+    mkdirSync(join(base, 'dist'), { recursive: true });
+    writeFileSync(join(base, 'dist', 'new.js'), 'x');
+    writeFileSync(join(base, 'a.txt'), 'x');
+    expect(newestMtimeMs(base)).toBe(statSync(join(base, 'a.txt')).mtimeMs);
+    rmSync(base, { recursive: true, force: true });
+  });
+});
+
+describe('isProcessAlive', () => {
+  it('detects live and dead pids', () => {
+    expect(isProcessAlive(process.pid)).toBe(true);
+    expect(isProcessAlive(2147483647)).toBe(false);
   });
 });

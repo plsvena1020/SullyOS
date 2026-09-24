@@ -2,7 +2,7 @@
 import { watch, appendFileSync, writeFileSync, existsSync, rmSync, readFileSync, statSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { shouldIgnore, createDebouncer, run } from './sync-lib.mjs';
+import { shouldIgnore, createDebouncer, run, isProcessAlive } from './sync-lib.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const LOG = join(ROOT, 'logs', 'watch-sync.log');
@@ -13,15 +13,21 @@ try { mkdirSync(join(ROOT, 'logs'), { recursive: true }); } catch {}
 function log(line) {
   appendFileSync(LOG, new Date().toISOString() + ' ' + line + '\n');
   try {
-    if (statSync(LOG).size > 512000) writeFileSync(LOG, readFileSync(LOG, 'utf8').slice(-400000));
+    if (statSync(LOG).size > 512000) writeFileSync(LOG, readFileSync(LOG, 'utf8').slice(-400000).split('\n').slice(1).join('\n'));
   } catch {}
   console.log(line);
 }
 
 function acquireLock() {
   if (existsSync(LOCK)) {
-    console.error('watch-sync 已在运行（锁文件存在），退出。');
-    process.exit(1);
+    const raw = (() => { try { return readFileSync(LOCK, 'utf8').trim(); } catch { return ''; } })();
+    const pid = Number(raw);
+    if (pid > 0 && isProcessAlive(pid)) {
+      console.error('watch-sync 已在运行（锁文件存在），退出。');
+      process.exit(1);
+    }
+    console.log('stale lock (pid ' + raw + ') removed, continuing.');
+    try { rmSync(LOCK, { force: true }); } catch {}
   }
   writeFileSync(LOCK, String(process.pid));
   const release = () => {
@@ -29,6 +35,7 @@ function acquireLock() {
   };
   process.on('exit', release);
   process.on('SIGINT', () => { release(); process.exit(0); });
+  process.on('SIGTERM', () => { release(); process.exit(0); });
 }
 
 function buildOnce() {
