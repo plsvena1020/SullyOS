@@ -207,21 +207,24 @@ def main():
 
     ok &= check("stop_failure_poisons_service", poison_blocks_new_requests(), "")
 
-    # 8 看门狗必须真的在 deadline 时刻打断阻塞的读，而不是等主线程自己返回后才停
+    # 8 看门狗必须真的在 deadline 时刻把阻塞的等待唤醒，而不是等主线程自己返回
     def watchdog_interrupts_before_post_returns():
         orig_post = genie_server._genie_post
         orig_timeout = genie_server.SYNTH_TIMEOUT
         orig_stop = genie_server.genie.stop
         stop_times = []
+        gate = threading.Event()
 
-        def slow_post(path, payload, timeout):
-            time.sleep(3.0)
+        def blocking_post(path, payload, timeout):
+            # 模拟 resp.read()：只有在 stop 生效后才返回，最长等 10 秒
+            gate.wait(10.0)
             return b""
 
         def rec_stop():
             stop_times.append(time.monotonic())
+            gate.set()
 
-        genie_server._genie_post = slow_post
+        genie_server._genie_post = blocking_post
         genie_server.genie.stop = rec_stop
         genie_server.SYNTH_TIMEOUT = 1.0
         genie_server._POISONED = False
@@ -231,8 +234,7 @@ def main():
                 lambda: genie_server._synthesize("测试。", "calm"), genie_server.SynthesisTimeout
             )
             elapsed = time.monotonic() - started
-            # 主线程在 slow_post 里要睡满 3 秒；若 stop 发生在 2 秒前，
-            # 只可能是看门狗在 deadline 触发的。
+            # 没有看门狗的话这里要睡满 10 秒；stop 在 2 秒前发生只可能是看门狗干的。
             return raised and bool(stop_times) and stop_times[0] - started < 2.0
         finally:
             genie_server._genie_post = orig_post
@@ -241,6 +243,32 @@ def main():
             genie_server._POISONED = False
 
     ok &= check("watchdog_stops_at_deadline", watchdog_interrupts_before_post_returns(), "")
+
+    # 9 等锁期间被毒化的请求，拿到锁后必须被拒绝
+    def poison_during_lock_wait_blocks_admission():
+        genie_server._POISONED = False
+        result: list[str] = []
+
+        def waiter():
+            try:
+                genie_server._speak_with_guard("测试", "calm")
+                result.append("admitted")
+            except genie_server.ServiceUnready:
+                result.append("blocked")
+            except Exception as exc:  # noqa: BLE001
+                result.append(f"other:{exc!r}")
+
+        genie_server._SYNTH_LOCK.acquire()
+        worker = threading.Thread(target=waiter)
+        worker.start()
+        time.sleep(0.5)  # 让 waiter 走完前置检查并阻塞在锁上
+        genie_server._mark_poisoned("test")
+        genie_server._SYNTH_LOCK.release()
+        worker.join(20)
+        genie_server._POISONED = False
+        return result == ["blocked"]
+
+    ok &= check("poison_during_lock_wait_blocked", poison_during_lock_wait_blocks_admission(), "")
 
     print("ALL_PASS" if ok else "HAS_FAILURE", flush=True)
     return 0 if ok else 1
