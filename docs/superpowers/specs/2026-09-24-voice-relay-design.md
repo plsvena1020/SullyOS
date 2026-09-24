@@ -24,10 +24,12 @@
 ## 架构
 
 - 新原生服务 `vps-backend/src/voice-relay/run.js`，抄 `mastodon-mcp`/`xhs` 模板：
-  读 `/opt/sullyos/.env`、监听 `127.0.0.1:8839`（实施时 VPS 上确认该端口空闲为准）。
+  读 `/opt/sullyos/.env`、监听 `127.0.0.1:8839`（已验空闲，见审查注记）。
 - 直接 import 仓库 `api/*` 的 handler（复用逻辑，零漂移），外包一层极简路由：
   路径分发 + query 解析 + raw body 透传 + `api/_cors.ts` 同款 CORS（`Allow-Origin *`）。
   若 VPS 无 TS 运行时则改薄改写（plan 阶段按 vps-backend 实际 toolchain 定，以测试为准）。
+- 服务自己解析 JSON 请求体（Vercel 自动解析，plain node 需手动；multipart 上传走 raw passthrough）；
+  未知 `/api` 路径一律 404（保住 music 回退语义）；另加 `/api/health` 供探针。
 - systemd 独立 unit `voice-relay.service`（抄 `deploy/mastodon-mcp.service`），
   与 `sullyos.service` 并存；无 pm2。
 - Caddy `ethernet.bot.cd` 块：`/api/*` 的 `reverse_proxy` 目标从
