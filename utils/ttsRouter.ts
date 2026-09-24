@@ -11,6 +11,7 @@ import {
 } from './minimaxTts';
 import { synthesizeSpeechFishDetailed } from './fishAudioTts';
 import { resolveTtsProvider } from './ttsProvider';
+import { cleanTextForTtsGenie, isGenieVoiceEnabled, synthesizeSpeechGenieDetailed } from './genieTts';
 import {
   cleanTextForTtsElevenLabs,
   normalizeElevenLabsVoiceId,
@@ -25,7 +26,7 @@ import { resolveMiniMaxApiKey } from './minimaxApiKey';
 
 export type { TtsResult };
 
-type SynthOptions = { languageBoost?: string; groupId?: string; emotion?: string };
+export type SynthOptions = { languageBoost?: string; groupId?: string; emotion?: string };
 
 /** 粤语并非三家所有模型都支持；在发起计费请求前给出明确错误。 */
 export const assertTtsLanguageSupported = (
@@ -33,6 +34,9 @@ export const assertTtsLanguageSupported = (
   apiConfig: APIConfig,
   languageBoost?: string,
 ): void => {
+  if (isGenieVoiceEnabled(apiConfig) && (languageBoost || '').trim()) {
+    throw new Error('Genie 自建语音目前只支持中文（含中英混读），请先关闭其他朗读语种');
+  }
   if ((languageBoost || '').trim().toLowerCase() !== 'yue') return;
   const provider = resolveTtsProvider(apiConfig);
   if (provider === 'elevenlabs' && resolveElevenLabsModel(apiConfig) !== 'eleven_v3') {
@@ -51,6 +55,9 @@ export async function synthesizeSpeechDetailed(
   options?: SynthOptions,
 ): Promise<TtsResult> {
   assertTtsLanguageSupported(char, apiConfig, options?.languageBoost);
+  if (isGenieVoiceEnabled(apiConfig)) {
+    return synthesizeSpeechGenieDetailed(text, char, apiConfig, options);
+  }
   const provider = resolveTtsProvider(apiConfig);
   if (provider === 'fishaudio') {
     return synthesizeSpeechFishDetailed(text, char, apiConfig, options);
@@ -79,6 +86,7 @@ export async function synthesizeSpeech(
 export const characterHasVoice = (char: CharacterProfile, apiConfig: APIConfig): boolean => {
   const vp = char.voiceProfile;
   const provider = resolveTtsProvider(apiConfig);
+  if (isGenieVoiceEnabled(apiConfig)) return true;
   if (provider === 'fishaudio') {
     return !!vp?.fishReferenceId;
   }
@@ -90,6 +98,7 @@ export const characterHasVoice = (char: CharacterProfile, apiConfig: APIConfig):
 export const canSynthesizeSpeech = (char: CharacterProfile, apiConfig: APIConfig): boolean => {
   if (!characterHasVoice(char, apiConfig)) return false;
   const provider = resolveTtsProvider(apiConfig);
+  if (isGenieVoiceEnabled(apiConfig)) return true;
   if (provider === 'fishaudio') return !!resolveFishAudioApiKey(apiConfig);
   if (provider === 'elevenlabs') return !!resolveElevenLabsApiKey(apiConfig);
   return !!resolveMiniMaxApiKey(apiConfig);
@@ -98,6 +107,7 @@ export const canSynthesizeSpeech = (char: CharacterProfile, apiConfig: APIConfig
 /** 按服务商清洗待朗读文本，调用方不应再自己猜哪种标签该保留。 */
 export const cleanTextForTtsProvider = (text: string, apiConfig: APIConfig): string => {
   const provider = resolveTtsProvider(apiConfig);
+  if (isGenieVoiceEnabled(apiConfig)) return cleanTextForTtsGenie(text);
   if (provider === 'fishaudio') return cleanTextForTtsFish(text);
   if (provider === 'elevenlabs') return cleanTextForTtsElevenLabs(text, resolveElevenLabsModel(apiConfig));
   return cleanTextForTts(text);
@@ -105,11 +115,16 @@ export const cleanTextForTtsProvider = (text: string, apiConfig: APIConfig): str
 
 export const stripTtsMarkupForDisplay = (text: string, apiConfig: APIConfig): string => {
   const provider = resolveTtsProvider(apiConfig);
+  // 用 cleanTextForTtsGenie 而不是 cleanVoiceMarkupForDisplay：后者不移除 Fish 的 [whispering] 等方括号 cue。
+  if (isGenieVoiceEnabled(apiConfig)) return cleanTextForTtsGenie(text);
   if (provider === 'fishaudio') return stripFishMarkupForDisplay(text);
   if (provider === 'elevenlabs') return stripElevenLabsMarkupForDisplay(text);
   return cleanVoiceMarkupForDisplay(text);
 };
 
-/** Fish / ElevenLabs 的清洗器需要看到原始 inline cue；MiniMax 使用已消毒的 speech。 */
-export const providerUsesRawVoiceMarkup = (apiConfig: APIConfig): boolean =>
-  resolveTtsProvider(apiConfig) !== 'minimax';
+/** 只有 Fish / ElevenLabs 的清洗器需要看到原始 inline cue；MiniMax 用已消毒的 speech，Genie 不支持任何 cue。 */
+export const providerUsesRawVoiceMarkup = (apiConfig: APIConfig): boolean => {
+  if (isGenieVoiceEnabled(apiConfig)) return false;
+  const provider = resolveTtsProvider(apiConfig);
+  return provider === 'fishaudio' || provider === 'elevenlabs';
+};
