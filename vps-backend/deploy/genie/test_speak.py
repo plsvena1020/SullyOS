@@ -280,8 +280,10 @@ def main():
         genie_server._POISONED = False
         try:
             started = time.monotonic()
+            deadline = time.monotonic() + genie_server.SYNTH_TIMEOUT
             raised = _raises(
-                lambda: genie_server._synthesize("测试。", "calm"), genie_server.SynthesisTimeout
+                lambda: genie_server._synthesize("测试。", "calm", deadline),
+                genie_server.SynthesisTimeout,
             )
             elapsed = time.monotonic() - started
             # 没有看门狗的话这里要睡满 10 秒；stop 在 2 秒前发生只可能是看门狗干的。
@@ -291,6 +293,7 @@ def main():
             genie_server.genie.stop = orig_stop
             genie_server.SYNTH_TIMEOUT = orig_timeout
             genie_server._POISONED = False
+            genie_server._STOP_CLAIMED = False
 
     ok &= check("watchdog_stops_at_deadline", watchdog_interrupts_before_post_returns(), "")
 
@@ -397,9 +400,10 @@ def main():
             genie_server._POISONED = False
 
             started = time.monotonic()
+            deadline = time.monotonic() + genie_server.SYNTH_TIMEOUT
             # 不手动 abort：完全交给 watchdog 的绝对 deadline
             raised = _raises(
-                lambda: genie_server._synthesize("测试。", "calm"),
+                lambda: genie_server._synthesize("测试。", "calm", deadline),
                 genie_server.SynthesisTimeout,
             )
             elapsed = time.monotonic() - started
@@ -415,9 +419,59 @@ def main():
             genie_server._POISONED = False
             genie_server._INFLIGHT_SOCK = None
             genie_server._DEADLINE_FIRED.clear()
+            genie_server._STOP_CLAIMED = False
             srv.shutdown()
 
     ok &= check("watchdog_drives_real_socket_abort", watchdog_drives_real_socket_abort(), "")
+
+    def request_deadline_includes_lock_wait():
+        orig_timeout = genie_server.SYNTH_TIMEOUT
+        orig_poisoned = genie_server._POISONED
+        try:
+            genie_server._POISONED = False
+            genie_server.SYNTH_TIMEOUT = 0.01
+            genie_server._SYNTH_LOCK.acquire()
+            try:
+                return _raises(
+                    lambda: genie_server._speak_with_guard("x", "calm"),
+                    genie_server.SynthesisTimeout,
+                )
+            finally:
+                genie_server._SYNTH_LOCK.release()
+        finally:
+            genie_server.SYNTH_TIMEOUT = orig_timeout
+            genie_server._POISONED = orig_poisoned
+
+    ok &= check("request_deadline_includes_lock_wait", request_deadline_includes_lock_wait(), "")
+
+    def stop_claim_is_one_shot():
+        orig_claim = genie_server._STOP_CLAIMED
+        try:
+            genie_server._STOP_CLAIMED = False
+            first = genie_server._claim_stop()
+            second = genie_server._claim_stop()
+            return first and not second
+        finally:
+            genie_server._STOP_CLAIMED = orig_claim
+
+    ok &= check("stop_claim_is_one_shot", stop_claim_is_one_shot(), "")
+
+    def validation_precedes_readiness():
+        import asyncio
+
+        class JsonRequest:
+            async def json(self):
+                return {"text": "   ", "emotion": "calm"}
+
+        genie_server._READY.clear()
+        try:
+            response = asyncio.run(genie_server.speak_endpoint(JsonRequest()))
+            body = json.loads(response.body.decode("utf-8"))
+            return response.status_code == 400 and body.get("error") == "empty"
+        finally:
+            genie_server._READY.set()
+
+    ok &= check("validation_precedes_readiness", validation_precedes_readiness(), "")
 
     print("ALL_PASS" if ok else "HAS_FAILURE", flush=True)
     return 0 if ok else 1

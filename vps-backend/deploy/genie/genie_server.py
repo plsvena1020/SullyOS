@@ -58,6 +58,8 @@ _PENDING_LOCK = threading.Lock()
 _POISON_LOCK = threading.Lock()
 _POISONED = False
 _STOP_LOCK = threading.Lock()
+_STOP_OWNER_LOCK = threading.Lock()
+_STOP_CLAIMED = False
 _DEADLINE_FIRED = threading.Event()
 _INFLIGHT_LOCK = threading.Lock()
 _INFLIGHT_SOCK = None
@@ -281,7 +283,7 @@ def _tts_completed_pcm(chunk: str, timeout: float) -> bytes:
             # 都不会取消 Genie 的后台任务：必须先停掉再让上层释放锁，否则下一个请求
             # 会重置 TTSPlayer 全局队列，复现最初的挂死+垃圾音频。
             # _genie_post 会把 socket 超时转换成 SynthesisTimeout，因此也需在此接住。
-            if not _DEADLINE_FIRED.is_set():
+            if _claim_stop():
                 _stop_genie_safely("tts transport failure")
             raise
         if not os.path.isfile(path) or os.path.getsize(path) <= 44:
@@ -307,9 +309,10 @@ def _tts_completed_pcm(chunk: str, timeout: float) -> bytes:
             pass
 
 
-def _synthesize(text: str, emotion: str) -> tuple[bytes, str]:
+def _synthesize(text: str, emotion: str, deadline: float) -> tuple[bytes, str]:
+    global _STOP_CLAIMED
     _DEADLINE_FIRED.clear()
-    deadline = time.monotonic() + SYNTH_TIMEOUT
+    _STOP_CLAIMED = False
 
     finished = threading.Event()
     watchdog_done = threading.Event()
@@ -325,7 +328,8 @@ def _synthesize(text: str, emotion: str) -> tuple[bytes, str]:
             print("[genie] deadline reached; aborting socket", file=sys.stderr, flush=True)
             # 先打断读，deadline 才立得住；stop 放在后面做清理。
             _abort_inflight_response()
-            _stop_genie_safely("deadline reached")
+            if _claim_stop():
+                _stop_genie_safely("deadline reached")
         finally:
             watchdog_done.set()
 
@@ -377,17 +381,17 @@ def _synthesize(text: str, emotion: str) -> tuple[bytes, str]:
         if code == 404:
             raise ReferenceMissing() from exc
         if code in (408, 504):
-            if not _DEADLINE_FIRED.is_set():
+            if _claim_stop():
                 _stop_genie_safely(f"Genie HTTP {code}")
             raise SynthesisTimeout() from exc
         raise RuntimeError(f"Genie HTTP {code}") from exc
     except SynthesisTimeout:
         # remaining() 可能在 /tts 返回后抛出，此时 Genie 可能仍在收尾。
         # 但若看门狗已经接手停机，就不要跟它抢 _STOP_LOCK。
-        if not _DEADLINE_FIRED.is_set():
+        if _claim_stop():
             _stop_genie_safely("SynthesisTimeout")
         raise
-    except (ConnectionError, http.client.HTTPException) as exc:
+    except (OSError, http.client.HTTPException) as exc:
         # 看门狗 abort socket 后，主线程的读会抛这些传输异常。deadline 已触发时，
         # 它们就是超时的一部分，必须映射成 synth_timeout；否则会落到端点的兜底
         # 分支变成 500 synth_failed，破坏调用方依赖的错误码契约。
@@ -465,6 +469,21 @@ def _try_genie_stop(timeout: float) -> str:
     return "ok" if outcome[0] else "raised"
 
 
+def _claim_stop() -> bool:
+    """原子认领本次合成的停机责任。返回 True 表示只有调用者该执行 genie.stop()。
+
+    单看 _DEADLINE_FIRED.is_set() 再取 _STOP_LOCK 不是原子的：看门狗和请求线程
+    都可能判定「该停了」并各调一次 genie.stop()。同一时刻只有一个合成在跑
+    （_SYNTH_LOCK 保证），所以用一个模块级标志做一次性认领即可。
+    """
+    global _STOP_CLAIMED
+    with _STOP_OWNER_LOCK:
+        if _STOP_CLAIMED:
+            return False
+        _STOP_CLAIMED = True
+        return True
+
+
 def _stop_genie_safely(reason: str) -> bool:
     """停掉 Genie 后台 TTS。True = 已确认停；False = 无法确认，调用方须毒化。
 
@@ -504,15 +523,24 @@ def _speak_with_guard(text: str, emotion: str) -> tuple[bytes, str]:
         raise ServiceUnready()
     if not _acquire_slot():
         raise SpeakBusy()
+    # 绝对 deadline 从请求入口起算，必须包含等锁时间。等锁发生在 _synthesize 之前，
+    # 若 deadline 留在 _synthesize 内部创建，5 秒锁等待就会叠加在 120 秒之外，
+    # 服务端上界变成 5+120+stop，与客户端预算之间没有任何余量。
+    deadline = time.monotonic() + SYNTH_TIMEOUT
     try:
-        acquired = _SYNTH_LOCK.acquire(timeout=LOCK_WAIT_TIMEOUT)
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise SynthesisTimeout()
+        acquired = _SYNTH_LOCK.acquire(timeout=min(LOCK_WAIT_TIMEOUT, left))
         if not acquired:
+            if deadline - time.monotonic() <= 0:
+                raise SynthesisTimeout()
             raise LockTimeout()
         try:
             if _is_poisoned():
                 # 等锁期间服务可能被毒化：拿到锁必须复查，否则会重演最初的故障。
                 raise ServiceUnready()
-            return _synthesize(text, emotion)
+            return _synthesize(text, emotion, deadline)
         finally:
             _SYNTH_LOCK.release()
     finally:
@@ -530,15 +558,15 @@ async def speak_endpoint(request: Request):
     if not isinstance(payload, dict):
         return JSONResponse(status_code=400, content={"error": "bad_request"})
 
-    if not _READY.is_set():
-        return JSONResponse(status_code=503, content={"error": "warming_up"})
-
     text = payload.get("text")
     emotion = payload.get("emotion")
     if not isinstance(text, str) or not text.strip():
         return JSONResponse(status_code=400, content={"error": "empty"})
     if emotion is not None and not isinstance(emotion, str):
         return JSONResponse(status_code=400, content={"error": "bad_emotion"})
+
+    if not _READY.is_set():
+        return JSONResponse(status_code=503, content={"error": "warming_up"})
 
     try:
         # 合成是阻塞的（最长 120 秒），必须放线程池，否则会堵住整个事件循环。
