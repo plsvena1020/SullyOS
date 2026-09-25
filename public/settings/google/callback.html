@@ -85,7 +85,8 @@
         })
         .then(function (r) {
           if (!r.ok) {
-            fail('桥返回 HTTP ' + r.status, r.body && (r.body.error || JSON.stringify(r.body)));
+            var reason = (r.body && (r.body.reason || r.body.error)) || ('HTTP ' + r.status);
+            fail('桥返回：' + reason, r.body && r.body.error === 'exchange failed' ? '通常是回调地址不一致：请确认 Google 后台登记的 URI 与本机地址完全相同（含 http/https、端口、.html 后缀）' : null);
             return;
           }
           // 清掉一次性 code，避免刷新本页重复交换
