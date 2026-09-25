@@ -80,7 +80,7 @@ XCI 只能离线解包做剧本知识库（需 `prod.keys`，`hactool`/`nxdumpto
 - 人设正常聊：游戏频道复用标准组装序（先 `injectMemoryPalace` 向量召回、再 `buildSystemPromptParts` 三段式，`utils/chatRequestPayload.ts:302` 同序），entryPoint 用游戏专值（不用 `chat_app`，防召回分支误开）；实时气泡只进会话缓冲（滚动 200 行），不直写长期记忆；剧本原文不存，只存选择/反应。
 - 小总结：按字数阈值（每 3000 字剧情，可配）跑第一人称短记忆（`summarizeConversation` 同风格，`utils/relationshipChat.ts:250`），只进缓冲不入库。
 - 大总结：小结攒到 5 条合成一条（可配），经 `vectorizeAndStore`（自带 cosine 去重，`utils/memoryPalace/vectorStore.ts:29`）进宫殿向量库；召回走 `retrieveMemories`/`injectMemoryPalace` 同管线（`pipeline.ts:361`/`1154`）。
-- 退出过滤（新建钩子，现有无专用点）：退出游戏时筛三类结论——玩了什么/到哪（进度）、喜恶偏好（画像），只存结论条目、可查看可删；挂点仿 `DateSession` 式 beforeunload/visibility/onExit（`components/date/DateSession.tsx:856`、`apps/DateApp.tsx:653`）；会话开关关闭时整条链路不跑。
+- 退出过滤（新建钩子，现有无专用点）：退出游戏时后台静默记三类结论——玩了什么/到哪（进度）、喜恶偏好（画像），无弹窗确认，只存结论条目、事后可查看可删；挂点仿 `DateSession` 式 beforeunload/visibility/onExit（`components/date/DateSession.tsx:856`、`apps/DateApp.tsx:653`）；会话开关关闭时整条链路不跑。
 - 禁区：会话期间显式禁 `runCallMemoryPalacePostFlow` 类后置链路（`utils/memoryPalace/callPostFlow.ts:33`）、`markAmsgStateDirty`（`utils/amsgStateSync.ts:145`）、`processNewMessagesWithAutoArchive`（`autoArchive.ts:108`，触发点 `useChatAI.ts:2324`、`DateApp.tsx:385`、`activeMsgRuntime.ts:1192`）；开关：按会话一键记/不记，单条可“记一下”/“这段别记”。
 
 ## 9. 验证期最小闭环（按序 6 件）与验收
