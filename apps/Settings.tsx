@@ -673,6 +673,7 @@ const Settings: React.FC = () => {
       : 'minimax'
   );
   const [localFishKey, setLocalFishKey] = useState(apiConfig.fishAudioApiKey || '');
+  const [localGenieEnabled, setLocalGenieEnabled] = useState(apiConfig.genieVoiceEnabled === true);
   const [localFishModel, setLocalFishModel] = useState(apiConfig.fishAudioModel || 's2.1-pro');
   const [localElevenLabsKey, setLocalElevenLabsKey] = useState(apiConfig.elevenLabsApiKey || '');
   const [localElevenLabsModel, setLocalElevenLabsModel] = useState(apiConfig.elevenLabsModel || DEFAULT_ELEVENLABS_MODEL);
@@ -1332,6 +1333,7 @@ const Settings: React.FC = () => {
       ttsProvider: localTtsProvider,
       fishAudioApiKey: localFishKey,
       fishAudioModel: localFishModel,
+      genieVoiceEnabled: localGenieEnabled,
       elevenLabsApiKey: localElevenLabsKey,
       elevenLabsModel: localElevenLabsModel,
       elevenLabsStability: localElevenLabsStability,
@@ -3217,6 +3219,16 @@ const Settings: React.FC = () => {
                 <p className="text-[11px] text-slate-400 -mt-1 pl-1 leading-relaxed">
                     🎙️ 语音生成支持 <span className="font-semibold text-slate-500">MiniMax</span>、<span className="font-semibold text-slate-500">鱼声 Fish</span> 和 <span className="font-semibold text-slate-500">ElevenLabs</span>。三家的配置都会保留，最后在底部选择当前引擎。
                 </p>
+
+                <div className="group">
+                    <label className="flex items-center justify-between gap-3 w-full bg-white/50 border border-slate-200/60 rounded-xl px-4 py-2.5 focus:bg-white transition-all cursor-pointer">
+                        <span className="flex-1 min-w-0">
+                            <span className="block text-sm font-semibold text-slate-700">Genie 自建语音</span>
+                            <span className="block text-[11px] text-slate-400 mt-0.5">中文克隆，走 VPS 自建服务；打开后聊天和电话优先用它</span>
+                        </span>
+                        <input type="checkbox" checked={localGenieEnabled} onChange={(e) => setLocalGenieEnabled(e.target.checked)} className="w-4 h-4 accent-primary shrink-0" />
+                    </label>
+                </div>
 
                 <div className="group">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block pl-1">MiniMax 服务器</label>
