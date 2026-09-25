@@ -88,35 +88,61 @@ export function normalizeGoogleEvents(items: any[]): Array<{
   return out;
 }
 
+/** 全局统一时区：账号时区可能是 America/New_York，但用户在中国，一律按北京时间呈现。 */
+export const GOOGLE_DISPLAY_TIME_ZONE = 'Asia/Shanghai';
+
+const partsFormatter = (() => {
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: GOOGLE_DISPLAY_TIME_ZONE,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    });
+  } catch {
+    return null; // 老环境缺 Intl 时区数据时退回本地时区
+  }
+})();
+
 /**
- * 把事件时间显示成本地钟点。
+ * 把事件时间显示成北京钟点。
  *
  * Google 返回两种形态：
  *  - 全天：`'2026-10-20'`（无时刻）
  *  - 时刻：`'2026-09-30T02:39:00-04:00'`（带偏移量）或 `'...Z'`（UTC）
  *
- * 早先的实现直接 slice(11,16)，于是 `-04:00` 的美东事件原样显示成 02:39，
- * 用户在自己时区（北京）看到的却是别人的钟点。这里用 Date 按自带偏移换算成本地钟点。
+ * 早先的实现直接 slice(11,16)，于是 `-04:00` 的美东事件原样显示成 02:39。
+ * 这里按 Asia/Shanghai 换算：同一条事件无论 Google 账号时区是什么，都显示北京时间。
  */
 export function formatGoogleEventTime(startText: string, fallback = '全天'): string {
   if (!startText) return fallback;
   if (!startText.includes('T')) return fallback; // 全天事件没有时刻
   const d = new Date(startText);
   if (Number.isNaN(d.getTime())) {
-    // 兜底：解析失败时退回截取，至少别显示 Invalid Date
     const m = startText.match(/T(\d{2}):(\d{2})/);
     return m ? `${m[1]}:${m[2]}` : fallback;
+  }
+  if (partsFormatter) {
+    const p: Record<string, string> = {};
+    for (const { type, value } of partsFormatter.formatToParts(d)) p[type] = value;
+    // Intl 在午夜可能给 24，改成 00
+    const hh = p.hour === '24' ? '00' : p.hour;
+    return `${hh}:${p.minute}`;
   }
   const hh = String(d.getHours()).padStart(2, '0');
   const mm = String(d.getMinutes()).padStart(2, '0');
   return `${hh}:${mm}`;
 }
 
-/** 事件在本地时区落在哪一天（跨时区事件按本地钟点归日，而非按 UTC 日期）。 */
+/** 事件落在哪一天（按北京时间归日，而非按 UTC 日期或事件原始时区）。 */
 export function googleEventLocalDateKey(startText: string): string | null {
   if (!startText || !startText.includes('T')) return null;
   const d = new Date(startText);
   if (Number.isNaN(d.getTime())) return null;
+  if (partsFormatter) {
+    const p: Record<string, string> = {};
+    for (const { type, value } of partsFormatter.formatToParts(d)) p[type] = value;
+    return `${p.year}-${p.month}-${p.day}`;
+  }
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 

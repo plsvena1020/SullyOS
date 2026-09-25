@@ -11,6 +11,10 @@ const sanitize = (text) => String(text ?? '')
 
 const DEFAULT_CORS_HEADERS = 'Content-Type, X-Bridge-Token, X-Xhs-Platform, X-Rnote-API-Key, X-Google-Bridge-Token, X-Google-Account';
 
+// 全局统一时区：Google 账号自身可能设在 America/New_York 等，但用户在中国，
+// 所有拉取/写入都用 Asia/Shanghai，前端再按本地钟点显示，不必逐条换算。
+const DISPLAY_TIME_ZONE = 'Asia/Shanghai';
+
 export function startGoogleBridge({ port, host = '127.0.0.1', token, store, clientId, clientSecret, redirectUri }) {
     if (!token) throw new Error('GOOGLE_BRIDGE_TOKEN is required');
 
@@ -23,11 +27,16 @@ export function startGoogleBridge({ port, host = '127.0.0.1', token, store, clie
         const path = url.pathname.replace(/\/+$/, '') || '/';
         const method = (req.method || 'GET').toUpperCase();
 
+        // 浏览器跨域调用要求「预检」与「实际响应」都带 Access-Control-Allow-Origin，
+        // 只在 OPTIONS 回显会让真实请求被浏览器拦成 Failed to fetch。业务响应一律带上。
+        const corsOrigin = req.headers.origin || '*';
         const finish = (status, body, extraHeaders = {}) => {
             const payload = body === null ? '' : JSON.stringify(body);
             res.writeHead(status, {
                 'content-type': 'application/json; charset=utf-8',
                 'cache-control': 'no-store',
+                'access-control-allow-origin': corsOrigin,
+                'vary': 'Origin',
                 ...extraHeaders,
             });
             res.end(payload);
@@ -121,7 +130,10 @@ export function startGoogleBridge({ port, host = '127.0.0.1', token, store, clie
                     accessCache.delete(accountId);
                     throw new Error('REAUTH_REQUIRED');
                 }
-                throw new Error('UPSTREAM_API_ERROR');
+                // 带上 Google 的真实原因（invalid_scope / forbidden / notFound…），否则前端只看到
+                // 笼统的 bridge internal error，无法定位。日志与响应都不含 token。
+                const reason = String((data && (data.error?.message || data.error_description || data.error)) || `HTTP ${upstream.status}`).slice(0, 300);
+                throw new Error(`UPSTREAM_API_ERROR: ${reason}`);
             }
             return data;
         };
@@ -174,19 +186,33 @@ export function startGoogleBridge({ port, host = '127.0.0.1', token, store, clie
                     grant_type: 'authorization_code',
                 });
                 const { upstream, data } = await postTokenEndpoint(params);
-                if (!upstream.ok) return finish(502, { error: 'exchange failed' });
-                let userinfo;
+                if (!upstream.ok) {
+                    // Google 的错误体（invalid_grant / redirect_uri_mismatch / invalid_client…）
+                    // 原样带回，日志只记 error 字段不含 code/token，前端才能给出可读原因。
+                    const detail = (data && (data.error_description || data.error)) || `HTTP ${upstream.status}`;
+                    return finish(502, { error: 'exchange failed', reason: String(detail).slice(0, 300) });
+                }
+                // 拿邮箱只为了设置页显示"已连接 xxx@gmail.com"。userinfo 端点要额外的
+                // userinfo.email scope；拿不到不该让整个授权失败——退化成用 refresh token
+                // 的哈希前 8 位当 accountId，账号仍能正常读日历与待办。
+                let accountId = '';
+                let email = '';
                 try {
-                    userinfo = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+                    const userinfo = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
                         headers: { authorization: `Bearer ${data.access_token}` },
                     });
-                } catch {
-                    return finish(502, { error: 'userinfo unreachable' });
+                    if (userinfo.ok) {
+                        const profile = await userinfo.json();
+                        accountId = String(profile?.id || '');
+                        email = String(profile?.email || '');
+                    }
+                } catch { /* 走下面的兜底 */ }
+                if (!accountId) {
+                    const { createHash } = await import('node:crypto');
+                    accountId = createHash('sha256').update(String(data.refresh_token || '')).digest('hex').slice(0, 12);
                 }
-                if (!userinfo.ok) return finish(502, { error: 'userinfo failed' });
-                const profile = await userinfo.json();
-                await store.save({ accountId: profile.id, email: profile.email, refreshToken: data.refresh_token, scope: data.scope ?? '' });
-                return finish(200, { accountId: profile.id, email: profile.email });
+                await store.save({ accountId, email, refreshToken: data.refresh_token, scope: data.scope ?? '' });
+                return finish(200, { accountId, email });
             }
             if (path === '/api/accounts' && method === 'GET') {
                 return finish(200, await store.listAccounts());
@@ -212,6 +238,9 @@ export function startGoogleBridge({ port, host = '127.0.0.1', token, store, clie
                 const timeMax = url.searchParams.get('timeMax');
                 if (timeMin) qs.set('timeMin', timeMin);
                 if (timeMax) qs.set('timeMax', timeMax);
+                // 统一按中国时区解释与呈现：Google 账号自身时区可能是 America/New_York，
+                // 但用户在中国，统一用 Asia/Shanghai 归日与显示，免得每条都要手动换算。
+                qs.set('timeZone', DISPLAY_TIME_ZONE);
                 const upstreamUrl = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events${qs.toString() ? `?${qs}` : ''}`;
                 const data = await googleGet(accountId, upstreamUrl);
                 // calendarId 调用方已知，直接加盖，不依赖 Google payload。
@@ -234,8 +263,12 @@ export function startGoogleBridge({ port, host = '127.0.0.1', token, store, clie
                 if (!calendarId) return finish(400, { error: 'missing calendarId' });
                 const upstreamUrl = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
                 try {
-                    // event 体不校验不清洗,原样透传(形状由 W1/W4 负责)。
-                    const data = await googlePost(accountId, upstreamUrl, payload.event ?? {});
+                    // 写入时钉死中国时区：char 说「明天上午 9 点」就是北京时间 9 点，
+                    // 不会因为 Google 账号时区是美东而存成别的时间。
+                    const event = { ...(payload.event ?? {}) };
+                    if (event.start?.dateTime && !event.start.timeZone) event.start = { ...event.start, timeZone: DISPLAY_TIME_ZONE };
+                    if (event.end?.dateTime && !event.end.timeZone) event.end = { ...event.end, timeZone: DISPLAY_TIME_ZONE };
+                    const data = await googlePost(accountId, upstreamUrl, event);
                     return finish(200, data);
                 } catch (e) {
                     if (e?.message === 'UPSTREAM_API_ERROR' && Number.isInteger(e?.status)) return finish(e.status, e.data ?? {});
@@ -262,8 +295,11 @@ export function startGoogleBridge({ port, host = '127.0.0.1', token, store, clie
             if (msg === 'REAUTH_REQUIRED') return finish(401, { error: 'REAUTH_REQUIRED' });
             if (msg === 'STORE_DECRYPT_FAILED') return finish(500, { error: 'store decrypt failed' });
             if (msg === 'UPSTREAM_UNREACHABLE') return finish(502, { error: 'upstream unreachable' });
-            console.error(`[google-bridge] ${method} ${path} error: ${sanitize(msg).slice(0, 120)}`);
-            return finish(502, { error: 'bridge internal error' });
+            console.error(`[google-bridge] ${method} ${path} error: ${sanitize(msg).slice(0, 200)}`);
+            const isUpstreamApi = msg.startsWith('UPSTREAM_API_ERROR:');
+            return finish(502, isUpstreamApi
+                ? { error: 'upstream api error', reason: sanitize(msg.slice('UPSTREAM_API_ERROR:'.length)).slice(0, 300) }
+                : { error: 'bridge internal error' });
         }
     });
 

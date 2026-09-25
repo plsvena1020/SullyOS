@@ -6,24 +6,25 @@ import {
 } from './googleCalendar';
 
 describe('googleCalendar pure', () => {
-  it('时刻事件按本地钟点显示，不裸截原始时区', () => {
-    // 真实数据：用户账号时区 America/New_York，但机器在 Asia/Shanghai。
-    // Google 存的串是 '-04:00'，早先 slice(11,16) 会显示 02:39（美东钟点）。
-    const [event] = normalizeGoogleEvents([
-      { id: '1', status: 'confirmed', summary: '回家', start: { dateTime: '2026-09-30T02:39:00-04:00', timeZone: 'Asia/Shanghai' } },
-    ]);
-    const shown = formatGoogleEventTime(event.startText);
-    expect(shown).toMatch(/^\d{2}:\d{2}$/);
-    // 换算到本地（Asia/Shanghai）应为 14:39；若运行环境时区不同，只锁"不等于裸值"这条底线
-    expect(shown).not.toBe('02:39');
+  it('时刻事件统一按北京时区显示，不受账号时区影响', () => {
+    // 真实数据：Google 存的串带 -04:00（账号时区 America/New_York）。
+    // 02:39 EDT = 14:39 北京（旧代码 slice(11,16) 直接显示 02:39）。
+    expect(formatGoogleEventTime('2026-09-30T02:39:00-04:00')).toBe('14:39');
+    // 同一时刻换成 UTC 写法，结果必须一致（时区换算正确而非截字符串）
+    expect(formatGoogleEventTime('2026-09-30T06:39:00Z')).toBe('14:39');
+    // 已带北京偏移的串同样得到 14:39
+    expect(formatGoogleEventTime('2026-09-30T14:39:00+08:00')).toBe('14:39');
   });
   it('全天事件显示「全天」，非法输入不崩', () => {
     expect(formatGoogleEventTime('2026-10-20')).toBe('全天');
     expect(formatGoogleEventTime('')).toBe('全天');
     expect(formatGoogleEventTime('not-a-date')).toBe('全天');
   });
-  it('本地归日：带偏移的时刻事件按本地钟点落日', () => {
-    expect(googleEventLocalDateKey('2026-09-30T02:39:00-04:00')).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  it('归日按北京时区：美东深夜的事件落北京当天', () => {
+    // 2026-09-30 02:39 EDT = 2026-09-30 14:39 北京，同一天
+    expect(googleEventLocalDateKey('2026-09-30T02:39:00-04:00')).toBe('2026-09-30');
+    // 2026-09-30 22:39 EDT = 2026-10-01 10:39 北京，跨到次日
+    expect(googleEventLocalDateKey('2026-09-30T22:39:00-04:00')).toBe('2026-10-01');
     expect(googleEventLocalDateKey('2026-10-20')).toBeNull();
   });
   it('scope 覆盖日历清单/自有事件/待办/公开假日/邮箱', () => {
