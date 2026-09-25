@@ -27,6 +27,8 @@ const VoiceFavoriteActionSheet: React.FC<VoiceFavoriteActionSheetProps> = ({
         <BottomSheet
             open={open}
             onClose={onClose}
+            /* 保存中 onClose 会被调用方 guard 拒收，此时不接受拖拽关闭。 */
+            dismissible={!busy}
             overlayClassName="z-[1800] bg-black/45 px-3 pb-[max(12px,env(safe-area-inset-bottom))]"
             panelClassName="max-w-md rounded-[26px] border border-white/60 bg-[#f8f6f1] p-3 text-slate-800 shadow-2xl"
         >

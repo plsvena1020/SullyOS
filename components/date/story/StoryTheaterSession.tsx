@@ -929,6 +929,8 @@ const StoryTheaterSession: React.FC<Props> = ({ entry, preset, masks, onBack, on
         <BottomSheet
             open={!!editingMessage}
             onClose={() => { if (!mutatingMessage) setEditingMessage(null); }}
+            /* 同步中不接受拖拽关闭：onClose 会被 guard 拒收。 */
+            dismissible={!mutatingMessage}
             maxHeight="100%"
             overlayClassName="z-[75] overflow-y-auto overscroll-contain bg-slate-900/30"
             panelClassName="story-safe-sheet story-keyboard-sheet flex w-full flex-col rounded-t-3xl bg-stone-100 px-5 pt-5 shadow-2xl"
@@ -943,6 +945,8 @@ const StoryTheaterSession: React.FC<Props> = ({ entry, preset, masks, onBack, on
         <BottomSheet
             open={!!deletingMessage}
             onClose={() => { if (!mutatingMessage) setDeletingMessage(null); }}
+            /* 同步中不接受拖拽关闭：onClose 会被 guard 拒收。 */
+            dismissible={!mutatingMessage}
             overlayClassName="z-[75] bg-slate-900/30"
             panelClassName="story-safe-sheet rounded-t-3xl bg-stone-100 px-5 pt-5 shadow-2xl"
         >

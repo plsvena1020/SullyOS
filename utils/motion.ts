@@ -8,12 +8,22 @@
  * - reduced-motion 短路：命中 `prefers-reduced-motion: reduce` 时直接返回跳切配置；
  *   顶层再包一层 `MotionConfig reducedMotion="user"` 做双保险。
  * - 包体积：调用方一律走 `LazyMotion features={motionFeatures}`（domAnimation），
- *   全量引入视为失败。
+ *   唯一例外是 BottomSheet 内层的可拖拽节点：drag 功能只在全量包里，
+ *   m + domAnimation 下拖拽静默失效，故该内层用全量 `motion`（仍只动 transform）。
  * - 不放业务逻辑。PhoneShell 容器与 Launcher morph 禁止引用本文件。
  */
 import { domAnimation, type Variants } from 'motion/react';
 
-export { AnimatePresence, LazyMotion, MotionConfig, m, useDragControls } from 'motion/react';
+export {
+    AnimatePresence,
+    LazyMotion,
+    MotionConfig,
+    m,
+    motion,
+    useAnimationControls,
+    useDragControls,
+    useIsPresent,
+} from 'motion/react';
 export type { PanInfo } from 'motion/react';
 
 /** Motion easing 用 bezier 数组（motion 不接受 CSS cubic-bezier() 字符串）。 */
@@ -130,8 +140,16 @@ export const confirmPanelVariants = (): Variants => ({
     exit: { scale: 0.98, opacity: 0, transition: { duration: m2Durations().leave, ease: m2Easings().sharp } },
 });
 
-/** BottomSheet 面板：y 48px + opacity，进入 decel 225ms、退出 sharp 195ms（2026-09-24 ADR）。 */
-export const sheetPanelVariants = (): Variants => ({
+/**
+ * BottomSheet 面板：y 48px + opacity，进入 decel 225ms、退出 sharp 195ms（2026-09-24 ADR）。
+ * 返回具体目标对象（不用 labels）：壳把 initial/exit 直接挂在全量 motion.section 上，
+ * animate 位移改由 useAnimationControls 下发，避免 y 同时被 variants 与 drag 驱动。
+ */
+export const sheetPanelVariants = (): {
+    initial: { y: number; opacity: number };
+    animate: { y: number; opacity: number; transition: { duration: number; ease: M2Bezier } };
+    exit: { y: number; opacity: number; transition: { duration: number; ease: M2Bezier } };
+} => ({
     initial: { y: 48, opacity: 0.6 },
     animate: { y: 0, opacity: 1, transition: { duration: m2Durations().enter, ease: m2Easings().decel } },
     exit: { y: 48, opacity: 0, transition: { duration: m2Durations().leave, ease: m2Easings().sharp } },

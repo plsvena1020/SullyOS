@@ -273,6 +273,8 @@ const StoryTheaterContent: React.FC<Props> = ({ onSwitchCompanion, onClose }) =>
         <BottomSheet
             open={!!deletingEntry}
             onClose={() => { if (!deletingStory) setDeletingEntry(null); }}
+            /* 删除中不接受拖拽关闭：onClose 会被 guard 拒收，拖了也关不掉，只是白拖一趟。 */
+            dismissible={!deletingStory}
             titleId="delete-story-title"
             overlayClassName="z-[95] overflow-y-auto overscroll-contain bg-slate-950/35"
             panelClassName="story-safe-sheet sm:max-w-sm rounded-t-[28px] bg-stone-100 px-5 pt-5 shadow-2xl"

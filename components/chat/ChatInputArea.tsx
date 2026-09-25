@@ -278,6 +278,40 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
         }
     }, [showPanel]);
 
+    // 面板收起时内容跟着淡出：条件渲染会让内容在 showPanel 变 'none' 的那一帧直接卸载，
+    // 外框还在做 max-height 收缩，看上去就是「弹出来顺滑、收回去突兀」。
+    // 做法：记住最后一个非 none 的面板，卸载推迟到收缩结束（与 200ms 过渡同长），
+    // 收缩期间给内容加 fade-out；再次打开时清掉延迟卸载。
+    const [lastPanel, setLastPanel] = useState<ChatInputAreaProps['showPanel']>('none');
+    const [panelFadingOut, setPanelFadingOut] = useState(false);
+    const panelUnmountTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    React.useEffect(() => {
+        if (panelUnmountTimer.current) {
+            clearTimeout(panelUnmountTimer.current);
+            panelUnmountTimer.current = null;
+        }
+        if (showPanel === 'none') {
+            // 已经淡出过就不要再淡一次（快速开合时保持干净）。
+            if (lastPanel !== 'none' && !panelFadingOut) {
+                setPanelFadingOut(true);
+                panelUnmountTimer.current = setTimeout(() => {
+                    setLastPanel('none');
+                    setPanelFadingOut(false);
+                    panelUnmountTimer.current = null;
+                }, 200);
+            }
+            return;
+        }
+        setLastPanel(showPanel);
+        setPanelFadingOut(false);
+    }, [showPanel]);
+
+    // 卸载时清掉待执行的延迟卸载，避免对已卸载组件 setState。
+    React.useEffect(() => () => {
+        if (panelUnmountTimer.current) clearTimeout(panelUnmountTimer.current);
+    }, []);
+
     React.useEffect(() => {
         if (!emojiSelectionMode) {
             setSelectedEmojis([]);
@@ -467,9 +501,13 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                     className={`sully-chat-panel ${panelClass} overflow-hidden relative z-0 flex flex-col will-change-[max-height] transition-[max-height] duration-200 ease-out`}
                     style={{ maxHeight: showPanel !== 'none' ? '18rem' : '0px' }}
                 >
-                    
+                    {/* 收缩期间的内容层：淡出与 max-height 过渡同长（200ms），避免内容先消失、框后收缩 */}
+                    <div
+                        className={`contents ${panelFadingOut && lastPanel !== 'none' ? 'animate-fade-out-soft' : ''}`}
+                        style={panelFadingOut && lastPanel !== 'none' ? { animationDuration: '200ms' } : undefined}
+                    >
                     {/* Emojis Panel with Categories */}
-                    {showPanel === 'emojis' && (
+                    {lastPanel === 'emojis' && (
                         <>
                             {/* Categories Bar */}
                             <div className={`relative flex shrink-0 ${panelTopBarSurfaceClass}`}>
@@ -615,13 +653,13 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                     )}
 
                     {/* Actions Panel：外部提供 actionsContent 时整体替换内置双页网格 */}
-                    {showPanel === 'actions' && actionsContent && (
+                    {lastPanel === 'actions' && actionsContent && (
                         <div className="overflow-y-auto no-scrollbar">
                             {actionsContent}
                         </div>
                     )}
                     {/* Actions Panel (paginated: page 0 = 内置功能, page 1 = 外部服务, page 2 = 更多) */}
-                    {showPanel === 'actions' && !actionsContent && (
+                    {lastPanel === 'actions' && !actionsContent && (
                         <div
                             className="overflow-y-auto overflow-x-hidden no-scrollbar"
                             onTouchStart={handleActionsSwipeStart}
@@ -887,7 +925,7 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                           </div>
                         </div>
                      )}
-                     {showPanel === 'chars' && (
+                     {lastPanel === 'chars' && (
                         <div className="p-5 space-y-6 overflow-y-auto no-scrollbar">
                             <div>
                                 <button
@@ -995,6 +1033,7 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
                         </div>
                     )}
                 </div>
+                    </div>
             )}
         </div>
         </>

@@ -91,6 +91,18 @@ interface BottomSheetProps {
 
 ## 9. 落地追认（2026-09-24，合并时补记）
 
-- 壳在锁定 7 props 外加了 `overlayClassName` / `panelClassName` 两个纯视觉透传：各调用方 scrim 底色、z、面板纸色渐变不同，无此则必改视觉，违反只动 transform/opacity。允许保留，今后新调用方优先用默认视觉，确需定制才透传。
+- 壳在锁定 7 props 外加了 `overlayClassName` / `panelClassName` 两个纯视觉透传：各调用方 scrim 底色、z、面板纸色渐变不同，无此则必改视觉，违反只动 transform/opacity。另加 `closeOnScrim`（默认 true）：CallApp 的通话文字编辑旧遮罩没有 onClick，迁移后点遮罩会丢弃 editingText，该处传 false 保住旧语义。允许保留，今后新调用方优先用默认视觉。
 - header 区拖拽未做（仅把手可拖）：与 §8 的 textarea 理由一致，范围缩小，接受。
 - 空数据 sheet 关闭瞬间先空内容再滑出壳：系内层 guard 所致，195ms 内结束，可接受；若目检扎眼，后续给这类 sheet 加占位骨架而非改壳。
+
+## 10. 审查后修正（同日，oracle 复审 → 已修）
+
+复审判定「暂不能合并」，五项已全部落地并 build 通过：
+
+1. **阻塞：拖拽越线后卡在 320px。** `onClose` 被调用方 busy guard 拒收时，手写回弹分支不会执行，面板停在 `translateY(320px)`。改用 `dragSnapToOrigin`，`handleDragEnd` 只判是否请求关闭；同时给 busy 态 sheet 传 `dismissible={!busy}`（StoryTheater、StoryTheaterSession ×2、StoryVectorMemoryPanel ×2、VoiceFavoriteActionSheet）。
+2. **退场 195ms 内旧内容仍可交互。** `AnimatePresence` 保留的是打开那一刻的 children，遮罩层在 `!isPresent` 时加 `pointer-events: none`，并通知外层 `controls.cancel()` + `panelAnim.stop()`。跨 React portal 的按钮（Chat 白框救援键）不受益于遮罩的 pointer-events，需调用方自行 `useIsPresent`。
+3. **进场改 `useLayoutEffect`**：退场中重开时要在浏览器绘制前接管 `y`，避免旧指针会话写完 `y` 后被 effect 拉回造成跳变。
+4. **CallApp 编辑器遮罩语义回归**：加 `closeOnScrim` prop（见 §9）。
+5. **文档修正**：退场并非「内容先清空」，而是保留最后一次内容快照，因此必须有 presence 隔离。
+
+复审同时排除的项：`dragConstraints bottom: 320` 合理（是最大拖动距离而非 sheet 高度，不改为 ref-based）；20 处迁移的 open 条件、scrim 视觉、portal 层级、`stopPropagation` 均无回归；`tsc` 全仓既有 87 个错误与本次无关。

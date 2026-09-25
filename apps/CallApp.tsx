@@ -3992,6 +3992,9 @@ ${sentencePlan}`;
       <BottomSheet
         open={!!editingBubble}
         onClose={() => setEditingBubble(null)}
+        /* 旧遮罩没有 onClick：点外面只收起键盘，不丢 editingText。迁移后壳默认点遮罩即关，
+           这里显式关掉，保住旧语义；拖拽把手与 × 仍照常可用。 */
+        closeOnScrim={false}
         overlayClassName="z-50 bg-black/60"
         panelClassName={`border-t border-white/10 p-5 space-y-3 ${lightTheme ? 'bg-[#f6f4fc]' : 'bg-[#120c22]'}`}
       >

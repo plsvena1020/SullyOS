@@ -36,7 +36,11 @@
 4. 透明底界面禁淡入：覆盖在外壳上的全屏界面若自身背景透明，根节点不挂淡入动画。查手机目标选择界面因此去掉 `animate-fade-soft`（`apps/CheckPhone.tsx:3999`，2026-09-24 白闪修复）。同理，任何从全透明开始的淡入都不许叠在浅色外壳背景上。
 5. Motion 只许四处（`utils/motion.ts` 唯一入口）：`ConfirmDialog` 退场、横向切页 `page-in-l/r`、`Modal` 内容 fade 加 scrim、`BottomSheet` 底部弹层（含 `sheetPanelVariants` 把手拖拽关闭，2026-09-24 ADR）。PhoneShell 容器与 Launcher morph 禁止引用。扩大试点前先开 ADR。
 6. 时长曲线只读 `--m2-*`：`utils/motion.ts` 运行时优先读 CSS 变量，读不到回退 JS 镜像（`M2_MIRROR`，值逐字一致）；Motion easing 用 bezier 数组（motion 不接受 CSS 字符串）。JS 里不另起一套数值。
-7. 包体积：调用方一律走 `LazyMotion features={motionFeatures}`（domAnimation，目标 5-17KB）；全量引入视为失败。
+7. 包体积：调用方一律走 `LazyMotion features={motionFeatures}`（domAnimation，目标 5-17KB）；唯一例外是 `BottomSheet` 面板节点，它用全量 `motion`，因为 drag 功能不在 `domAnimation` 里（`m` + `domAnimation` 下拖拽静默失效，不报错）。全量引入仅限这一处。
+8. 跟手拖拽不受 `prefers-reduced-motion` 禁用：拖拽是手指 1:1 驱动，不是要防的自动晃动；减少动态时只把松手回弹降为瞬归位。旧实现曾用 `canDrag = !isReducedMotion()`，导致系统动画关着的机器（Windows `MinAnimate=0`）完全拖不动。
+9. 同一元素的 `y` 只能有一个所有者：`BottomSheet` 面板把视觉（圆角/底色/描边/阴影）与 `drag` 放同一节点，拆两层会出现「文字跟手、背景不动」；进退场位移由 `useAnimationControls` 下发（`initial`/`exit` 挂具体目标对象），不与 drag 同时运行。松手归位交给 `dragSnapToOrigin`，不要手写回弹分支——`onClose` 被 busy guard 拒收时手写分支会让面板卡在约束盒边界。
+10. 退场期间必须隔离交互：`AnimatePresence` 保留的是打开那一刻的 children。壳内 `PresenceGuard` 在 `!useIsPresent()` 时给遮罩加 `pointer-events: none` 并取消拖拽；跨 React portal 的元素不受益，需调用方自行处理。
+11. 业务在途时禁用关闭手势：`onClose` 带 busy guard 的 sheet 传 `dismissible={!busy}`，否则用户拖了也关不掉。旧遮罩没有 onClick 的调用方用 `closeOnScrim={false}`，别用 `dismissible={false}` 代替（那会连把手一起禁掉）。
 
 ## 4. Motion 试点预设（`utils/motion.ts:92-130`）
 
@@ -44,7 +48,7 @@
 - `scrimVariants`：只动 opacity，进入 decel、退出 accel。
 - `pageVariants(dir)`：`translateX ±24px + opacity`，进入 decel、退出 sharp。
 - `modalPanelVariants`：`y 12px + opacity` 小位移；`confirmPanelVariants`：`scale 0.96→1 + opacity`，不做缩放之外的位移。
-- `sheetPanelVariants`（2026-09-24 BottomSheet ADR）：`y 48px + opacity`（初始 `opacity 0.6`），进入 decel 225ms、退出 sharp 195ms；拖拽关闭（`offset.y > 120 || velocity.y > 800`）只动 transform，把手限定。
+- `sheetPanelVariants`（2026-09-24 BottomSheet ADR）：返回具体目标对象（`initial` / `animate` / `exit`），不用 variant labels，因为壳把 `initial`/`exit` 直接挂在面板上、`animate` 交给 `useAnimationControls`。`y 48px + opacity`（初始 `opacity 0.6`），进入 decel 225ms、退出 sharp 195ms；拖拽关闭（`offset.y > 120 || velocity.y > 800`）只动 transform，把手限定，松手归位用 `dragSnapToOrigin`。
 
 ## 5. reduced-motion
 
@@ -61,4 +65,6 @@
 3. 透明底全屏界面不挂根淡入；背景层不加过渡。
 4. 进名单：`index.html` 的 reduced-motion 降级名单追加新 class。
 5. 超出 CSS 能力（拖拽、弹簧、布局 morph）才考虑 Motion，且只走 `utils/motion.ts`，先开 ADR。
-6. 验收：`pnpm build` 通过；localhost 走一遍切页、弹窗、按钮；reduced-motion 下复验一次。
+6. 弹层优先套 `components/os/BottomSheet.tsx`（唯一公共壳），不新造第 N 种 sheet；左右抽屉与居中弹窗除外。
+7. 拖拽类动效自查三条：视觉与 drag 同节点；`y` 只有一个所有者；`onClose` 有 busy guard 时配 `dismissible={!busy}`。
+8. 验收：`pnpm build` 通过；localhost 走一遍切页、弹窗、按钮；reduced-motion 下复验一次；拖拽要在真鼠标/真触摸下验（合成事件测不出 `setPointerCapture` 问题）。
