@@ -66,7 +66,7 @@ def test_healthz_and_event_roundtrip():
         ) as r:
             body = json.load(r)
         assert body["events"][0]["seq"] == seq
-        assert body["next"] == seq + 1
+        assert body["next"] == seq  # high-water mark: feed straight back as next `since`
         with urllib.request.urlopen(
             f"http://127.0.0.1:18799/events?since={seq + 1}"
         ) as r:
