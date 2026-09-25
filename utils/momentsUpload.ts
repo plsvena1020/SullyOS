@@ -44,14 +44,14 @@ export async function uploadThenPost(input: {
   visibility: 'public' | 'unlisted' | 'private' | 'direct';
   image?: { dataUrl: string; mimeType: string; alt: string } | null;
   onEvent?: (e: { kind: UploadPostEventKind; message?: string }) => void;
-}): Promise<{ mediaId: string | null; posted: boolean; cancelled: boolean }> {
+}): Promise<{ mediaId: string | null; posted: boolean; cancelled: boolean; postRes: { data?: any; rawText?: string } | null }> {
   const { callTool, ownerId, status, visibility, image, onEvent } = input;
   let mediaId: string | null = null;
   if (image) {
     const up = await callTool('moments_upload', buildUploadArgs({ ownerId, dataUrl: image.dataUrl, mimeType: image.mimeType, alt: image.alt }));
     if (!up.success && /拒绝/.test(up.error ?? '')) {
       onEvent?.({ kind: 'cancelled' });
-      return { mediaId: null, posted: false, cancelled: true };
+      return { mediaId: null, posted: false, cancelled: true, postRes: null };
     }
     mediaId = parseUploadResult(up);
     if (mediaId) onEvent?.({ kind: 'uploaded' });
@@ -62,8 +62,8 @@ export async function uploadThenPost(input: {
   const post = await callTool('moments_post', postArgs);
   if (!post.success && /拒绝/.test(post.error ?? '')) {
     onEvent?.({ kind: 'cancelled' });
-    return { mediaId, posted: false, cancelled: true };
+    return { mediaId, posted: false, cancelled: true, postRes: null };
   }
   onEvent?.({ kind: post.success ? 'posted' : 'post_failed', message: post.error });
-  return { mediaId, posted: post.success, cancelled: false };
+  return { mediaId, posted: post.success, cancelled: false, postRes: post.success ? { data: post.data, rawText: post.rawText } : null };
 }

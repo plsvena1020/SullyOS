@@ -54,7 +54,8 @@ describe('uploadThenPost', () => {
       callTool, ownerId: 'user', status: 'hi', visibility: 'private',
       image: { dataUrl: 'data:image/png;base64,aGk=', mimeType: 'image/png', alt: 'a' },
     });
-    expect(r).toEqual({ mediaId: 'm1', posted: true, cancelled: false });
+    expect(r).toEqual({ mediaId: 'm1', posted: true, cancelled: false, postRes: { data: { id: 's1' }, rawText: undefined } });
+    expect(r.postRes).not.toBeNull();
     expect(calls[0][0]).toBe('moments_upload');
     expect(calls[0][1]).toMatchObject({ ownerId: 'user', fileBase64: 'aGk=', confirm: true });
     expect(calls[1][0]).toBe('moments_post');
@@ -75,9 +76,10 @@ describe('uploadThenPost', () => {
   });
   test('无图：只调 post，不带 media_ids', async () => {
     const calls: Array<[string, any]> = [];
-    await uploadThenPost({ callTool: async (n, a) => { calls.push([n, a]); return okPost(); }, ownerId: 'user', status: 'hi', visibility: 'private', image: null });
+    const r = await uploadThenPost({ callTool: async (n, a) => { calls.push([n, a]); return okPost(); }, ownerId: 'user', status: 'hi', visibility: 'private', image: null });
     expect(calls).toHaveLength(1);
     expect(calls[0][0]).toBe('moments_post');
     expect(calls[0][1]).not.toHaveProperty('media_ids');
+    expect(r.postRes).not.toBeNull();
   });
 });

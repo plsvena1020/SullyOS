@@ -431,7 +431,7 @@ const MomentsApp: React.FC = () => {
             });
             if (!outcome.posted) return;
             if (!mountedRef.current) return;
-            const remote = parsePostedStatus(undefined);
+            const remote = parsePostedStatus(outcome.postRes?.data ?? outcome.postRes?.rawText);
             if (remote.id) {
                 updatePostInFeed(post.id, current => ({
                     ...current,
