@@ -385,7 +385,7 @@ const MomentsApp: React.FC = () => {
                 prependPostsToFeed(fresh);
                 addToast(kind === 'home' ? `熟人圈更新 ${fresh.length} 条` : `发现 ${fresh.length} 条中文帖`, 'success');
             } else {
-                addToast('没有新动态', 'info');
+                addToast(`取回 ${raw.length} 条，其中中文 ${normalized.length} 条，新增 0 条`, 'info');
             }
         } catch (e: any) {
             if (e?.name !== 'AbortError' && mountedRef.current) addToast('同步失败: ' + (e?.message || e), 'error');
