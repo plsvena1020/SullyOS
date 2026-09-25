@@ -5,10 +5,13 @@ import {
 } from './googleCalendar';
 
 describe('googleCalendar pure', () => {
-  it('scope 为自有日历读写+任务读写+公开假日', () => {
+  it('scope 覆盖日历清单/自有事件/待办/公开假日/邮箱', () => {
+    expect(GOOGLE_SCOPES).toContain('calendar.readonly');
     expect(GOOGLE_SCOPES).toContain('calendar.events.owned');
     expect(GOOGLE_SCOPES).toContain('https://www.googleapis.com/auth/tasks ');
     expect(GOOGLE_SCOPES).toContain('calendar.events.public.readonly');
+    expect(GOOGLE_SCOPES).toContain('userinfo.email');
+    // 旧值不得残留：完整 scope 包含只读，重复声明无意义
     expect(GOOGLE_SCOPES).not.toContain('calendar.events.readonly');
     expect(GOOGLE_SCOPES).not.toContain('tasks.readonly');
     expect(GOOGLE_SCOPES).not.toContain('gmail');

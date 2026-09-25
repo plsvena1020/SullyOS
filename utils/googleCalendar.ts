@@ -1,6 +1,11 @@
 // Google Calendar 纯函数层：无网络、无 secrets，可被前端与单测直接引用。
+// scope 清单说明：
+// - userinfo.email：只用于设置页显示"已连接 xxx@gmail.com"，不含个人数据；缺了 userinfo 端点 403
+// - calendar.readonly：calendarList（日历清单与勾选列表）需要；events.owned 只管事件不管日历元数据
+// - calendar.events.owned / tasks：读自有日历事件与待办 + char 主动创建
+// - calendar.events.public.readonly：官方节假日日历
 export const GOOGLE_SCOPES =
-  'https://www.googleapis.com/auth/calendar.events.owned https://www.googleapis.com/auth/tasks https://www.googleapis.com/auth/calendar.events.public.readonly';
+  'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events.owned https://www.googleapis.com/auth/tasks https://www.googleapis.com/auth/calendar.events.public.readonly https://www.googleapis.com/auth/userinfo.email';
 
 export const GOOGLE_HOLIDAY_CALENDAR_ID = 'zh.china#holiday@group.v.calendar.google.com';
 
