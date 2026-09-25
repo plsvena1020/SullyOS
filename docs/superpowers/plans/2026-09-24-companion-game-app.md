@@ -363,7 +363,11 @@ export class GameSession {
   }
 
   markVoiceSpoken(): void {
+    // Pacing coupling (load-bearing, asymmetric, test-pinned): a voice
+    // utterance also resets the text clock — voice suppresses text for
+    // TEXT_MIN_GAP_MS, text does not suppress voice. Do not "simplify".
     this.lastVoiceAt = this.clock();
+    this.lastTextAt = this.clock();
   }
 
   mayShowText(): boolean {
