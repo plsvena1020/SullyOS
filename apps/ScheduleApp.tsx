@@ -17,6 +17,8 @@ import {
 } from '../utils/anniversaryEngine';
 import { formatLunarShort, lunarMonthLabel, lunarDayLabel, solarToLunarOf } from '../utils/lunarTable';
 import { fetchCnHolidays, getHolidayInfo, dateKeyOf } from '../utils/cnHoliday';
+import { googleBridgeFetch } from '../utils/googleBridge';
+import { normalizeGoogleEvents, normalizeGoogleTasks, mergeHolidayOverlay, GOOGLE_HOLIDAY_CALENDAR_ID } from '../utils/googleCalendar';
 import { RealtimeContextManager, resolveCharCity } from '../utils/realtimeContext';
 import type { AnniversaryRepeat } from '../types';
 import { useLocalDateKey } from '../hooks/useLocalDateKey';
@@ -130,6 +132,82 @@ const ScheduleApp: React.FC = () => {
     const [userDayWeather, setUserDayWeather] = useState<{ city: string; description: string; temp: number } | null>(null);
     // 日历 · 当年节假日数据（角标：法定假日 / 调休补班；缺失时无角标）
     const [holidayData, setHolidayData] = useState<Awaited<ReturnType<typeof fetchCnHolidays>>>(null);
+    // Google 只读叠加：开关与勾选只读 Task 6 落地的 localStorage，不另建存储。
+    // 总开关 localStorage['aetheros.google.enabled'] === '1'；
+    // 勾选日历 localStorage['aetheros.google.selectedCalendars']（`accountId::calendarId` 数组，账号 id 取每项前缀）。
+    const [googleEvents, setGoogleEvents] = useState<ReturnType<typeof normalizeGoogleEvents>>([]);
+    const [googleTasks, setGoogleTasks] = useState<ReturnType<typeof normalizeGoogleTasks>>([]);
+    const [googleHolidayMap, setGoogleHolidayMap] = useState<Map<string, string>>(new Map());
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                let enabled = false;
+                let selected: string[] = [];
+                try {
+                    enabled = localStorage.getItem('aetheros.google.enabled') === '1';
+                    const parsed = JSON.parse(localStorage.getItem('aetheros.google.selectedCalendars') || '[]');
+                    if (Array.isArray(parsed)) selected = parsed.filter((x): x is string => typeof x === 'string');
+                } catch { /* 读不到 = 不可用，不打扰 */ }
+                if (!enabled || selected.length === 0) {
+                    if (!cancelled) { setGoogleEvents([]); setGoogleTasks([]); setGoogleHolidayMap(new Map()); }
+                    return;
+                }
+                const timeMin = new Date(calCursor.y, calCursor.m, 1, 0, 0, 0).toISOString();
+                const timeMax = new Date(calCursor.y, calCursor.m + 1, 1, 0, 0, 0).toISOString();
+                const byAccount = new Map<string, string[]>();
+                for (const key of selected) {
+                    const sep = key.indexOf('::');
+                    if (sep < 0) continue;
+                    const accountId = key.slice(0, sep);
+                    const calendarId = key.slice(sep + 2);
+                    if (!accountId || !calendarId) continue;
+                    const arr = byAccount.get(accountId) || [];
+                    if (!arr.includes(calendarId)) arr.push(calendarId);
+                    byAccount.set(accountId, arr);
+                }
+                const accountIds = [...byAccount.keys()];
+                if (accountIds.length === 0) return;
+                const fetchEvents = async (accountId: string, calendarId: string): Promise<any[]> => {
+                    try {
+                        const res = await googleBridgeFetch(`/api/events?calendarId=${encodeURIComponent(calendarId)}&timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}`, { method: 'GET', headers: { 'X-Google-Account': accountId } });
+                        if (!res.ok) return [];
+                        const body = await res.json();
+                        return Array.isArray(body?.items) ? body.items : [];
+                    } catch { return []; }
+                };
+                const eventLists = await Promise.all(accountIds.flatMap(accountId => (byAccount.get(accountId) || []).map(calendarId => fetchEvents(accountId, calendarId))));
+                // 官方假日：当月一次拉取全天事件建成 Map<dateKey, name>（用首个可用账号；失败即无合并）
+                const holidayMap = new Map<string, string>();
+                try {
+                    const res = await googleBridgeFetch(`/api/events?calendarId=${encodeURIComponent(GOOGLE_HOLIDAY_CALENDAR_ID)}&timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}`, { method: 'GET', headers: { 'X-Google-Account': accountIds[0] } });
+                    if (res.ok) {
+                        const body = await res.json();
+                        const items = Array.isArray(body?.items) ? body.items : [];
+                        for (const item of items) {
+                            const dateKey = item?.start?.date;
+                            if (typeof dateKey === 'string' && typeof item?.summary === 'string' && !holidayMap.has(dateKey)) holidayMap.set(dateKey, item.summary);
+                        }
+                    }
+                } catch { /* 假日拉不到 = 无合并，不挡事件 */ }
+                // 待办：各账号默认表（失败静默）
+                const taskLists = await Promise.all(accountIds.map(async (accountId) => {
+                    try {
+                        const res = await googleBridgeFetch(`/api/tasks?tasklist=${encodeURIComponent('@default')}`, { method: 'GET', headers: { 'X-Google-Account': accountId } });
+                        if (!res.ok) return [];
+                        const body = await res.json();
+                        return Array.isArray(body?.items) ? body.items : [];
+                    } catch { return []; }
+                }));
+                if (!cancelled) {
+                    setGoogleEvents(normalizeGoogleEvents(eventLists.flat()));
+                    setGoogleTasks(normalizeGoogleTasks(taskLists.flat()));
+                    setGoogleHolidayMap(holidayMap);
+                }
+            } catch { /* Google 不可用时静默，保留本地日历 */ }
+        })();
+        return () => { cancelled = true; };
+    }, [calCursor]);
     useEffect(() => {
         let cancelled = false;
         (async () => {
@@ -598,6 +676,8 @@ const ScheduleApp: React.FC = () => {
                     const todayKey = localDateKey;
                     const selected = calSelected || todayKey;
                     const dayAnnis = anniversaries.filter(a => isAnniversaryOn(a, selected));
+                    const selGoogleEvents = googleEvents.filter(e => e.dateKey === selected);
+                    const selGoogleTasks = googleTasks.filter(t => t.dueKey === selected);
                     const dotMap = new Map<string, string[]>();
                     for (const a of anniversaries) {
                         for (const o of expandOccurrences(a, daysGrid[0].key, daysGrid[41].key)) {
@@ -605,6 +685,11 @@ const ScheduleApp: React.FC = () => {
                             if (!arr.includes(a.charId)) arr.push(a.charId);
                             dotMap.set(o.dateKey, arr);
                         }
+                    }
+                    // Google dots：同 range 当月事件归一化后按 dateKey 计数（渲染处与纪念日 dots 并排）
+                    const googleDotMap = new Map<string, number>();
+                    for (const e of googleEvents) {
+                        googleDotMap.set(e.dateKey, (googleDotMap.get(e.dateKey) || 0) + 1);
                     }
                     const dotColors = ['bg-pink-400', 'bg-purple-400', 'bg-rose-400', 'bg-fuchsia-400', 'bg-red-300'];
                     return (
@@ -627,9 +712,10 @@ const ScheduleApp: React.FC = () => {
                                 const isToday = key === todayKey;
                                 const isSel = key === selected;
                                 const dots = dotMap.get(key) || [];
+                                const googleCount = googleDotMap.get(key) || 0;
                                 const lunar = formatLunarShort(date);
-                                // 节假日角标：休 / 班（无数据不打扰）
-                                const hInfo = getHolidayInfo(holidayData, key);
+                                // 节假日角标：休 / 班（Google 官方假日名优先，无数据不打扰）
+                                const hInfo = mergeHolidayOverlay(googleHolidayMap.get(key) ?? null, getHolidayInfo(holidayData, key));
                                 return (
                                     <button
                                         key={key}
@@ -642,11 +728,18 @@ const ScheduleApp: React.FC = () => {
                                     >
                                         <span className={`text-xs font-bold ${isToday ? theme.accent : theme.text}`}>{date.getDate()}</span>
                                         <span className={`text-[8px] leading-none mt-0.5 ${inMonth ? theme.textSub : 'opacity-50'}`}>{lunar}</span>
-                                        {dots.length > 0 && (
-                                            <span className="absolute bottom-0.5 flex gap-0.5">
-                                                {dots.slice(0, 3).map((cid, i) => (
-                                                    <span key={cid} className={`w-1 h-1 rounded-full ${dotColors[i % dotColors.length]}`} />
-                                                ))}
+                                        {(dots.length > 0 || googleCount > 0) && (
+                                            <span className="absolute bottom-0.5 flex flex-col items-center gap-0.5">
+                                                {dots.length > 0 && (
+                                                    <span className="flex gap-0.5">
+                                                        {dots.slice(0, 3).map((cid, i) => (
+                                                            <span key={cid} className={`w-1 h-1 rounded-full ${dotColors[i % dotColors.length]}`} />
+                                                        ))}
+                                                    </span>
+                                                )}
+                                                {googleCount > 0 && (
+                                                    <span className="w-1 h-1 rounded-full bg-sky-400" />
+                                                )}
                                             </span>
                                         )}
                                         {hInfo && (
@@ -679,6 +772,26 @@ const ScheduleApp: React.FC = () => {
                                     </div>
                                 </div>
                             ))}
+                            {/* Google 日程（只读叠加；空时不渲染整段，不打扰） */}
+                            {(selGoogleEvents.length > 0 || selGoogleTasks.length > 0) && (
+                                <div className="space-y-2">
+                                    <div className={`text-[10px] font-bold uppercase tracking-widest ${theme.textSub} pt-1`}>Google 日程</div>
+                                    {selGoogleEvents.map((e, i) => (
+                                        <div key={`${e.calendarId}-${e.dateKey}-${i}`} className={`${theme.card} p-3`}>
+                                            <div className={`text-sm font-bold ${theme.text}`}>{e.title}</div>
+                                            <div className={`text-[10px] ${theme.textSub} font-mono mt-1`}>
+                                                {e.startText.includes('T') ? e.startText.slice(11, 16) : '全天'}{e.location ? ` · ${e.location}` : ''}
+                                            </div>
+                                        </div>
+                                    ))}
+                                    {selGoogleTasks.map((t, i) => (
+                                        <div key={`task-${i}`} className={`${theme.card} p-3`}>
+                                            <div className={`text-sm font-bold ${theme.text}`}>☑ {t.title}</div>
+                                            {t.notes && <div className={`text-[11px] mt-1 leading-relaxed whitespace-pre-wrap ${theme.textSub}`}>{t.notes.slice(0, 120)}{t.notes.length > 120 ? '…' : ''}</div>}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                     </div>
                     );

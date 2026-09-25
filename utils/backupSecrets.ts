@@ -108,6 +108,8 @@ export function stripBackupSecrets(data: any): boolean {
   stripOpaqueMap(hit, data.mcdLocal);
   stripOpaqueMap(hit, data.mcpLocal);
   stripOpaqueMap(hit, data.worldHomeLocal);
+  // Google 桥 token（localStorage aetheros.google.*）：随包带出即失守，键名命中 token 启发式即清空。
+  stripOpaqueMap(hit, data.googleLocal);
 
   return hit.hit;
 }

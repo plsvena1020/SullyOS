@@ -9,7 +9,7 @@ import { formatTransferRecord } from './transferFormat';
 import { computeCurrentListening, getCurrentSlot } from './charMusicSchedule';
 import { getCharLyricSnippet } from './charLyricCache';
 import { MusicCfg, loadMusicCfgStandalone } from '../context/MusicContext';
-import { RealtimeContextManager, NotionManager, FeishuManager, defaultRealtimeConfig } from './realtimeContext';
+import { RealtimeContextManager, NotionManager, FeishuManager, GoogleManager, defaultRealtimeConfig } from './realtimeContext';
 import type { WeatherData } from './realtimeWorldCore';
 import { isScheduleFeatureOn } from './scheduleFeature';
 import { VOICE_ACTING_GUIDE } from './minimaxTts';
@@ -707,7 +707,20 @@ ${groupLogStr}\n`;
                 return '';
             });
 
-        const [realtimeText, schedule, groupContextText, notionDiaryText, feishuDiaryText, notionNotesText, lifeRecordText, anniversaryText, scheduleWeather] =
+        // 8. Google 日程近期摘要（volatile：日程类易变，随轮次变）。
+        //    形状照抄上面的 anniversaryPromise（含 try/catch 回空字符串）；
+        //    forFirePack / timelyByWorker 直接回空照抄 realtimePromise 的门（:542）。
+        const googlePromise: Promise<string> = (async () => {
+            if (forFirePack || timelyByWorker) return '';
+            try {
+                return await GoogleManager.getUpcomingDigest(config, charTz, today, char.timeAwarenessEnabled !== false);
+            } catch (e) {
+                console.error('Failed to inject google calendar context:', e);
+                return '';
+            }
+        })();
+
+        const [realtimeText, schedule, groupContextText, notionDiaryText, feishuDiaryText, notionNotesText, lifeRecordText, anniversaryText, scheduleWeather, googleText] =
             await Promise.all([
                 timed('realtime', realtimePromise),
                 timed('schedule', schedulePromise),
@@ -718,6 +731,7 @@ ${groupLogStr}\n`;
                 timed('lifeRecord', lifeRecordPromise),
                 timed('anniversary', anniversaryPromise),
                 timed('scheduleWeather', scheduleWeatherPromise),
+                timed('google', googlePromise),
             ]);
 
         // ── 拼接：易变的进 volatileState，稳定的进 baseSystemPrompt ──
@@ -753,6 +767,9 @@ ${groupLogStr}\n`;
                 console.error('Failed to inject schedule context:', e);
             }
         }
+
+        // 2c. Google 日程近期摘要（易变，随轮次变 → volatileState；stable 不落）。
+        if (googleText) volatileState += googleText;
 
         // 2b. 音乐氛围（复用同一份 schedule）
         //     - 同步：从 schedule 里算 char 当前"正在听"哪首歌

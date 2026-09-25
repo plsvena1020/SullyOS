@@ -144,6 +144,17 @@ export const services = [
     },
     crons: [],
   },
+  {
+    name: 'sullyos-google',
+    port: 8839,
+    enabled: false, // Google 日历桥：独立 node 进程（vps-backend/src/google/run.js），暂不进 run-all
+    envKeys: [
+      'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI',
+      'GOOGLE_SESSION_KEY', 'GOOGLE_SESSION_FILE',
+      'GOOGLE_BRIDGE_TOKEN', 'GOOGLE_BRIDGE_PORT',
+    ],
+    crons: [],
+  },
 ];
 
 /** @param {string} name */

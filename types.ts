@@ -795,6 +795,9 @@ export interface RealtimeConfig {
   feishuBaseId: string;     // 多维表格 App Token
   feishuTableId: string;    // 数据表 Table ID
 
+  // Google 日历只读叠加（经本地桥接服务；缺省关闭）
+  googleEnabled?: boolean;
+
   // 小红书配置 (MCP / Skills 双模式浏览器自动化)
   xhsEnabled: boolean;
   xhsMcpConfig?: XhsMcpConfig;

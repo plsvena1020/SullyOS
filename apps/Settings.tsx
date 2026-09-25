@@ -7,6 +7,8 @@ import Modal from '../components/os/Modal';
 import { NotionManager, FeishuManager, RealtimeContextManager, fetchOwmWeather, fetchOpenMeteoWeather } from '../utils/realtimeContext';
 import { XhsMcpClient } from '../utils/xhsMcpClient';
 import { resolveXhsDeploymentMode } from '../utils/xhsMcpConfig';
+import { GoogleBridgeClient, googleBridgeFetch, readGoogleBridgeUrl } from '../utils/googleBridge';
+import { buildGoogleAuthUrl } from '../utils/googleCalendar';
 import { getMcdToken, setMcdToken as saveMcdToken, isMcdEnabled, setMcdEnabled as saveMcdEnabled, testMcdConnection, resetMcdSession } from '../utils/mcdMcpClient';
 import { getLuckinToken, setLuckinToken as saveLuckinToken, isLuckinEnabled, setLuckinEnabled as saveLuckinEnabled, testLuckinConnection, resetLuckinSession } from '../utils/luckinMcpClient';
 import { consumeProxyWorkerSettingsFocus, getProxyWorkerUrl, setProxyWorkerUrl, DEFAULT_PROXY_WORKER } from '../utils/proxyWorker';
@@ -20,7 +22,7 @@ import {
     getElevenLabsVoiceActingGuide,
 } from '../utils/elevenLabsTts';
 import { DATE_VOICE_GUIDE } from '../utils/datePrompts';
-import { Sun, Newspaper, NotePencil, Notebook, Book, ForkKnife, Coffee, PlugsConnected, Bluetooth, MapPin } from '@phosphor-icons/react';
+import { Sun, Newspaper, NotePencil, Notebook, Book, Calendar, ForkKnife, Coffee, PlugsConnected, Bluetooth, MapPin } from '@phosphor-icons/react';
 import { loadMcpServers, saveMcpServers, createMcpServer, effectiveMcpRouting, migrateMcpRoutingDefault, testMcpConnection, resetMcpSession, getMcpUseNativeTools, setMcpUseNativeTools, loadMcpSettings, saveMcpSettings, type McpServerConfig, type McpSettings } from '../utils/mcpClient';
 import { getMcpResultList, clearMcpResults } from '../utils/mcpResultMemory';
 import PushSubscriptionPanel from '../components/settings/PushSubscriptionPanel';
@@ -49,6 +51,7 @@ import { configFromPreset, findActivePresetId, type PresetSwitchPatch } from '..
 import StatusBadge from '../components/StatusBadge';
 import { probeApiConfig, probeAgent, probeBridge, probeAmsgWorker, probeVisionApi, probeCloudBackup, probeRealtime, probeMcpServers, probePerspective } from '../utils/statusPanel';
 import { classifyFetchFailure, probeOriginReachability, describeReachabilityProbe, parseTargetUrl, toSameOriginProxyUrl } from '../utils/networkFailureDiagnosis';
+import type { StatusEntry } from '../utils/statusPanel';
 import { PERCEPTION_CAPABILITIES, perceptionRenderState } from '../utils/perceptionRegistry';
 import { readAgentRoutingConfig } from '../utils/agentRouting';
 import type { APIConfig, BridgeConfig, TtsProvider } from '../types';
@@ -831,6 +834,20 @@ const Settings: React.FC = () => {
   const [rtFeishuAppSecret, setRtFeishuAppSecret] = useState(realtimeConfig.feishuAppSecret);
   const [rtFeishuBaseId, setRtFeishuBaseId] = useState(realtimeConfig.feishuBaseId);
   const [rtFeishuTableId, setRtFeishuTableId] = useState(realtimeConfig.feishuTableId);
+  // Google 日历（只读叠加）：开关与配置直存 localStorage（aetheros.google.*），不进 realtimeConfig；
+  // bridge token 只存本机且设置页无 token 输入框，refresh 永不回显。
+  const [googleEnabled, setGoogleEnabled] = useState(() => { try { return localStorage.getItem('aetheros.google.enabled') === '1'; } catch { return false; } });
+  const [googleClientId, setGoogleClientId] = useState(() => { try { return localStorage.getItem('aetheros.google.clientId') || ''; } catch { return ''; } });
+  const [googleBridgeUrl, setGoogleBridgeUrl] = useState(() => { try { return localStorage.getItem('aetheros.google.bridgeUrl') || ''; } catch { return ''; } });
+  const [googleAuthCode, setGoogleAuthCode] = useState('');
+  const [googleAccounts, setGoogleAccounts] = useState<Array<{ accountId: string; email: string }>>([]);
+  const [googleCalendars, setGoogleCalendars] = useState<Record<string, Array<{ id: string; summary: string }>>>({});
+  const [googleSelectedCalendars, setGoogleSelectedCalendars] = useState<string[]>(() => {
+      try {
+          const parsed = JSON.parse(localStorage.getItem('aetheros.google.selectedCalendars') || '[]');
+          return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
+      } catch { return []; }
+  });
   const [rtXhsEnabled, setRtXhsEnabled] = useState(realtimeConfig.xhsEnabled);
   // 透视窗配置的本地编辑态
   const [rtPerspectiveEnabled, setRtPerspectiveEnabled] = useState(realtimeConfig.perspectiveEnabled);
@@ -1908,6 +1925,140 @@ const Settings: React.FC = () => {
       try {
           const result = await NotionManager.testConnection(rtNotionKey, rtNotionDbId);
           setRtTestStatus(result.message);
+      } catch (e: any) {
+          setRtTestStatus(`网络错误: ${e.message}`);
+      }
+  };
+
+  // Google 桥探针（照抄 utils/statusPanel.ts probeBridge 形状：未启用灰、2xx 绿、4xx 黄、5xx 红、异常红）
+  const probeGoogle = async (): Promise<StatusEntry> => {
+      const entry: StatusEntry = { key: 'google', label: 'Google 日历', status: 'off', detail: '未启用' };
+      if (!googleEnabled) return entry;
+      const t0 = performance.now();
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 5000);
+      try {
+          const res = await googleBridgeFetch('/api/health', { method: 'GET', signal: ctrl.signal });
+          const cost = performance.now() - t0;
+          const detail = cost >= 1000 ? `${(cost / 1000).toFixed(1)}s` : `${Math.round(cost)}ms`;
+          if (res.ok) return { ...entry, status: 'ok', detail };
+          if (res.status < 500) return { ...entry, status: 'warn', detail: `HTTP ${res.status}` };
+          return { ...entry, status: 'err', detail: `HTTP ${res.status}` };
+      } catch (e: any) {
+          return { ...entry, status: 'err', detail: e?.name === 'AbortError' ? '超时' : '不可达' };
+      } finally {
+          clearTimeout(timer);
+      }
+  };
+
+  // 测试 Google 桥接连接（照抄 testNotionApi：先提示、try/catch 网络错误；无 token 输入框，无空值可验）
+  const testGoogleApi = async () => {
+      setRtTestStatus('正在测试 Google 桥接连接...');
+      try {
+          const result = await GoogleBridgeClient.testConnection();
+          setRtTestStatus(result.message);
+      } catch (e: any) {
+          setRtTestStatus(`网络错误: ${e.message}`);
+      }
+  };
+
+  // 读取桥上已连接账号（Task 3 锁定：GET /api/accounts 返回裸数组，按数组消费）
+  const loadGoogleAccounts = async () => {
+      setRtTestStatus('正在读取 Google 账号...');
+      try {
+          const res = await googleBridgeFetch('/api/accounts', { method: 'GET' });
+          if (!res.ok) {
+              setRtTestStatus(`读取账号失败: HTTP ${res.status}`);
+              return;
+          }
+          const list = await res.json();
+          const accounts = (Array.isArray(list) ? list : [])
+              .map((a: any) => ({ accountId: String(a?.accountId || ''), email: String(a?.email || '') }))
+              .filter(a => a.accountId);
+          setGoogleAccounts(accounts);
+          setRtTestStatus(accounts.length ? `已连接 ${accounts.length} 个账号` : '桥接正常，暂无已连接账号');
+          for (const a of accounts) void loadGoogleCalendars(a.accountId);
+      } catch (e: any) {
+          setRtTestStatus(`网络错误: ${e.message}`);
+      }
+  };
+
+  // 读某账号的日历列表（只读勾选用；拉不到不挡主流程）
+  const loadGoogleCalendars = async (accountId: string) => {
+      try {
+          const res = await googleBridgeFetch('/api/calendars', { method: 'GET', headers: { 'X-Google-Account': accountId } });
+          if (!res.ok) return;
+          const body = await res.json();
+          const items = (Array.isArray(body?.items) ? body.items : [])
+              .map((c: any) => ({ id: String(c?.id || ''), summary: String(c?.summary || c?.id || '') }))
+              .filter((c: { id: string }) => c.id);
+          setGoogleCalendars(prev => ({ ...prev, [accountId]: items }));
+      } catch { /* 日历拉不到不挡主流程 */ }
+  };
+
+  // 断开某账号（DELETE /api/accounts/:id），断开后清掉该账号的日历勾选
+  const disconnectGoogle = async (accountId: string) => {
+      try {
+          const res = await googleBridgeFetch(`/api/accounts/${encodeURIComponent(accountId)}`, { method: 'DELETE' });
+          if (!res.ok) {
+              setRtTestStatus(`断开失败: HTTP ${res.status}`);
+              return;
+          }
+          setGoogleAccounts(prev => prev.filter(a => a.accountId !== accountId));
+          setGoogleCalendars(prev => { const next = { ...prev }; delete next[accountId]; return next; });
+          setGoogleSelectedCalendars(prev => {
+              const kept = prev.filter(k => !k.startsWith(`${accountId}::`));
+              try { localStorage.setItem('aetheros.google.selectedCalendars', JSON.stringify(kept)); } catch { /* 忽略 */ }
+              return kept;
+          });
+          setRtTestStatus('已断开该 Google 账号');
+      } catch (e: any) {
+          setRtTestStatus(`网络错误: ${e.message}`);
+      }
+  };
+
+  // 日历勾选切换（key 形如 accountId::calendarId，同名 primary 跨账号不串味），即时落盘
+  const toggleGoogleCalendar = (accountId: string, calendarId: string) => {
+      const key = `${accountId}::${calendarId}`;
+      setGoogleSelectedCalendars(prev => {
+          const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key];
+          try { localStorage.setItem('aetheros.google.selectedCalendars', JSON.stringify(next)); } catch { /* 忽略 */ }
+          return next;
+      });
+  };
+
+  // 新窗口打开 Google 授权页（Task 1 buildGoogleAuthUrl）；code 由用户粘回下方授权码框
+  const connectGoogle = () => {
+      const clientId = googleClientId.trim();
+      if (!clientId) {
+          setRtTestStatus('请先填写 Google Client ID');
+          return;
+      }
+      const redirectUri = `${window.location.origin}/settings/google/callback`;
+      const state = Math.random().toString(36).slice(2) + Date.now().toString(36);
+      try { sessionStorage.setItem('aetheros.google.oauthState', state); } catch { /* 忽略 */ }
+      window.open(buildGoogleAuthUrl({ clientId, redirectUri, state }), '_blank', 'noopener');
+      setRtTestStatus('已在新窗口打开 Google 授权页：完成后把地址栏 code 参数粘到下方授权码框点完成连接');
+  };
+
+  // 授权码交桥换 token（POST /api/accounts/exchange { code }，refresh 只存桥内）
+  const exchangeGoogleCode = async () => {
+      const code = googleAuthCode.trim();
+      if (!code) {
+          setRtTestStatus('请先粘贴授权码');
+          return;
+      }
+      setRtTestStatus('正在交换授权码...');
+      try {
+          const res = await googleBridgeFetch('/api/accounts/exchange', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
+          if (!res.ok) {
+              setRtTestStatus(`连接失败: HTTP ${res.status}`);
+              return;
+          }
+          const body = await res.json();
+          setGoogleAuthCode('');
+          setRtTestStatus(body?.email ? `已连接 ${body.email}` : '已连接');
+          await loadGoogleAccounts();
       } catch (e: any) {
           setRtTestStatus(`网络错误: ${e.message}`);
       }
@@ -4528,6 +4679,73 @@ const Settings: React.FC = () => {
                                 5. 从多维表格 URL 中获取 App Token 和 Table ID<br/>
                                 App Secret 保存在本机配置中；启用后，多维表格请求会由网络 Worker 转发，项目不主动留存表格内容。
                            </p>
+                      </div>
+                  )}
+              </div>
+
+              {/* Google 日历（只读叠加；refresh 永不回显，无 token 输入框） */}
+              <div className="bg-sky-50/50 p-4 rounded-2xl space-y-3">
+                  <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                          <Calendar size={20} weight="fill" />
+                          <span className="text-sm font-bold text-sky-700">Google 日历</span>
+                          <StatusBadge badgeKey="google" probe={probeGoogle} />
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                          <input type="checkbox" checked={googleEnabled} onChange={e => { const v = e.target.checked; setGoogleEnabled(v); try { localStorage.setItem('aetheros.google.enabled', v ? '1' : '0'); } catch { /* 忽略 */ } }} className="sr-only peer" />
+                          <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sky-500"></div>
+                      </label>
+                  </div>
+                  {googleEnabled && (
+                      <div className="space-y-2">
+                          <div>
+                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Google Client ID</label>
+                              <input type="text" value={googleClientId} onChange={e => { setGoogleClientId(e.target.value); try { localStorage.setItem('aetheros.google.clientId', e.target.value.trim()); } catch { /* 忽略 */ } }} className="w-full bg-white/80 border border-sky-200 rounded-xl px-3 py-2 text-sm font-mono" placeholder="Google Cloud Console 的 OAuth 客户端 ID" />
+                          </div>
+                          <div>
+                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">桥地址（留空用默认）</label>
+                              <input type="text" value={googleBridgeUrl} onChange={e => { setGoogleBridgeUrl(e.target.value); try { localStorage.setItem('aetheros.google.bridgeUrl', e.target.value.trim()); } catch { /* 忽略 */ } }} className="w-full bg-white/80 border border-sky-200 rounded-xl px-3 py-2 text-sm font-mono" placeholder="http://127.0.0.1:8839" />
+                              <p className="text-[10px] text-sky-500/60 mt-1">当前生效：{readGoogleBridgeUrl()}</p>
+                          </div>
+                          <button onClick={connectGoogle} className="w-full py-2 bg-sky-500 text-white text-xs font-bold rounded-xl active:scale-95 transition-transform">连接 Google（新窗口授权）</button>
+                          <div>
+                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">授权码（授权后地址栏 code 参数）</label>
+                              <div className="flex gap-2">
+                                  <input type="text" value={googleAuthCode} onChange={e => setGoogleAuthCode(e.target.value)} className="flex-1 min-w-0 bg-white/80 border border-sky-200 rounded-xl px-3 py-2 text-sm font-mono" placeholder="4/0A..." />
+                                  <button onClick={exchangeGoogleCode} className="px-4 py-2 bg-sky-100 text-sky-600 text-xs font-bold rounded-xl active:scale-95 transition-transform whitespace-nowrap">完成连接</button>
+                              </div>
+                          </div>
+                          {googleAccounts.length > 0 && (
+                              <div className="space-y-2">
+                                  {googleAccounts.map(a => (
+                                      <div key={a.accountId} className="bg-white/70 border border-sky-100 rounded-xl px-3 py-2">
+                                          <div className="flex items-center justify-between gap-2">
+                                              <span className="text-xs font-mono text-slate-600 truncate">{a.email || a.accountId}</span>
+                                              <button onClick={() => disconnectGoogle(a.accountId)} className="text-[11px] font-bold text-red-500 active:scale-95 transition-transform shrink-0">断开</button>
+                                          </div>
+                                          {(googleCalendars[a.accountId] || []).map(c => {
+                                              const key = `${a.accountId}::${c.id}`;
+                                              return (
+                                                  <label key={key} className="flex items-center gap-2 mt-1.5 cursor-pointer">
+                                                      <input type="checkbox" checked={googleSelectedCalendars.includes(key)} onChange={() => toggleGoogleCalendar(a.accountId, c.id)} className="accent-sky-500" />
+                                                      <span className="text-[11px] text-slate-600 truncate">{c.summary}</span>
+                                                  </label>
+                                              );
+                                          })}
+                                      </div>
+                                  ))}
+                              </div>
+                          )}
+                          <div className="flex gap-2">
+                              <button onClick={testGoogleApi} className="flex-1 py-2 bg-sky-100 text-sky-600 text-xs font-bold rounded-xl active:scale-95 transition-transform">测试连接</button>
+                              <button onClick={loadGoogleAccounts} className="flex-1 py-2 bg-sky-100 text-sky-600 text-xs font-bold rounded-xl active:scale-95 transition-transform">刷新账号</button>
+                          </div>
+                          <p className="text-[10px] text-sky-500/70 leading-relaxed">
+                              1. 在 Google Cloud Console 建 OAuth 客户端（桌面应用），回调地址填 {`${window.location.origin}/settings/google/callback`}（需与桥 GOOGLE_REDIRECT_URI 一致）<br/>
+                              2. 上方填 Client ID，点「连接 Google」完成授权，把地址栏 code 粘回来点「完成连接」<br/>
+                              3. 桥 token 配在桥所在机器的环境变量 GOOGLE_BRIDGE_TOKEN；本机 localStorage 键 aetheros.google.bridgeToken 与之一致即可直连。refresh token 只存桥内，永不回显。<br/>
+                              只读：设置页不做任何写入操作；账号与勾选只存本机。
+                          </p>
                       </div>
                   )}
               </div>
