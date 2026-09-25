@@ -4,11 +4,14 @@ import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
 import { SocialPost, SocialComment, SubAccount } from '../types';
 import { ContextBuilder } from '../utils/context';
-import { isBlobRef } from '../utils/blobRef';
+import { isBlobRef, resolveRefToDataUrl } from '../utils/blobRef';
+import { processImage } from '../utils/file';
 import { safeResponseJson } from '../utils/safeApi';
 import { mergeSocialComments, prependUniqueSocialPosts, updateSocialPost } from '../utils/socialFeedMerge';
 import { normalizeMastodonStatus, dedupeByRemoteId, toMastodonVisibility, isChineseStatus, visibleInMoments } from '../utils/momentsFeed';
 import { createBindSession, loadIdentities, mcpBaseUrl, type BoundIdentity } from '../utils/mastodonOAuth';
+import { ACCEPTED_IMAGE_MIMES, POST_IMAGE_MAX_BYTES, stripDataUrlPrefix, uploadThenPost } from '../utils/momentsUpload';
+import { generateImageBlobOnly, suggestImageTags } from '../utils/imageGenFlow';
 import { callMcpTool, loadMcpServers } from '../utils/mcpClient';
 import type { McpServerConfig } from '../utils/mcpClient';
 import TokenImg from '../components/os/TokenImg';
@@ -132,7 +135,7 @@ const EmptyState: React.FC<{ text: string }> = ({ text }) => (
 // --- Main App ---
 
 const MomentsApp: React.FC = () => {
-    const { closeApp, characters, apiConfig, addToast, userProfile } = useOS();
+    const { closeApp, characters, updateCharacter, apiConfig, addToast, userProfile } = useOS();
     const [feed, setFeed] = useState<SocialPost[]>([]);
     // 双 tab：熟人（我 + 角色 + home 时间线）| 发现（公开流，只留中文）
     const [activeTab, setActiveTab] = useState<'known' | 'discover'>('known');
@@ -146,6 +149,9 @@ const MomentsApp: React.FC = () => {
     const [newPostTitle, setNewPostTitle] = useState('');
     const [newPostContent, setNewPostContent] = useState('');
     const [newPostEmoji, setNewPostEmoji] = useState('2728');
+    const [newPostImage, setNewPostImage] = useState<{ dataUrl: string; mimeType: string } | null>(null);
+    const [newPostImageAlt, setNewPostImageAlt] = useState('');
+    const [isGeneratingPostImage, setIsGeneratingPostImage] = useState(false);
     // 发帖身份：'user'（我）或 charId（某角色）；可见性默认私密
     const [selectedIdentity, setSelectedIdentity] = useState<string>('user');
     const [identities, setIdentities] = useState<BoundIdentity[]>([]);
@@ -405,20 +411,27 @@ const MomentsApp: React.FC = () => {
         return {};
     };
 
-    const publishToMastodon = async (post: SocialPost, charId: string | undefined, localVisibility: string) => {
+    const publishToMastodon = async (post: SocialPost, charId: string | undefined, localVisibility: string, image?: { dataUrl: string; mimeType: string } | null, altText?: string) => {
         try {
             const server = findMomentsServer();
             if (!server) return; // 没接服务器就只留本地
             const text = post.title && post.title !== '无标题' ? `${post.title}\n${post.content}` : post.content;
-            const res = await callMcpTool(server, 'moments_post', {
-                ownerId: charId || 'user',
+            const owner = charId || 'user';
+            const outcome = await uploadThenPost({
+                callTool: (name, args) => callMcpTool(server, name, args),
+                ownerId: owner,
                 status: text,
                 visibility: toMastodonVisibility(localVisibility),
-                confirm: true,
+                image: image ? { dataUrl: image.dataUrl, mimeType: image.mimeType, alt: altText || '' } : null,
+                onEvent: (e) => {
+                    if (e.kind === 'upload_failed') addToast(`图片上传失败，已只发文字：${e.message || '未知错误'}`, 'error');
+                    if (e.kind === 'post_failed') addToast(`同步到 Mastodon 失败：${e.message || '未知错误'}`, 'error');
+                    if (e.kind === 'cancelled') addToast('已取消发布（图片如已上传不会跟随删除）', 'info');
+                },
             });
+            if (!outcome.posted) return;
             if (!mountedRef.current) return;
-            if (!res.success) { addToast(`同步到 Mastodon 失败：${res.error || '未知错误'}`, 'error'); return; }
-            const remote = parsePostedStatus(res.data ?? res.rawText);
+            const remote = parsePostedStatus(undefined);
             if (remote.id) {
                 updatePostInFeed(post.id, current => ({
                     ...current,
@@ -682,20 +695,46 @@ ${identityMap}
         }
     };
 
+    const handlePickPostImage = async (file: File | undefined) => {
+        if (!file) return;
+        if (!ACCEPTED_IMAGE_MIMES.includes(file.type)) { addToast('只支持 png/jpeg/gif/webp 图片', 'error'); return; }
+        const dataUrl = await processImage(file);
+        const bytes = Math.ceil((stripDataUrlPrefix(dataUrl).length * 3) / 4);
+        if (bytes > POST_IMAGE_MAX_BYTES) { addToast('图片超过 10MB，Mastodon 发不出去，换张小图试试', 'error'); return; }
+        setNewPostImage({ dataUrl, mimeType: file.type });
+    };
+
+    const handleGeneratePostImage = async () => {
+        if (apiConfig.imageGenEnabled !== true || !apiConfig.latentImageKey) { addToast('先去「设置 → AI 生图」填 Key 并开启', 'error'); return; }
+        const char = selectedIdentity !== 'user'
+            ? characters.find(c => c.id === selectedIdentity)
+            : undefined;
+        if (!char) return;
+        setIsGeneratingPostImage(true);
+        try {
+            const { tags, resolution } = await suggestImageTags(newPostContent, char, apiConfig);
+            const result = await generateImageBlobOnly({ prompt: tags, resolution }, { apiConfig, char, characters, saveCharProfile: (id, profile) => updateCharacter(id, { imageGenProfile: profile } as any) });
+            const dataUrl = await resolveRefToDataUrl(result.token);
+            setNewPostImage({ dataUrl, mimeType: 'image/png' });
+        } catch (e: any) { addToast(`AI 配图失败：${e?.message || e}，可继续发纯文字`, 'error'); }
+        finally { setIsGeneratingPostImage(false); }
+    };
+
     const handleCreatePost = () => {
         if (!newPostContent.trim()) return;
         const char = selectedIdentity !== 'user'
             ? characters.find(c => c.id === selectedIdentity)
             : undefined;
+        const pendingImage = newPostImage;
+        const pendingAlt = newPostImageAlt || newPostTitle;
         const post: SocialPost = {
             id: `user-post-${Date.now()}`,
             authorName: char ? char.name : socialProfile.name, // Use Selected Identity
             authorAvatar: char ? char.avatar : myAvatarFor(),
             title: newPostTitle || '无标题',
             content: newPostContent,
-            // Sticker selector stores twemoji codepoints (eg "2728"); convert to the real emoji char
-            // so that the feed/detail views render an emoji instead of the raw codepoint text.
-            images: [codepointToEmoji(newPostEmoji)],
+            // 默认无图；有图则 images 留空由远端媒体承载（本地 feed 不再塞 emoji 占位）
+            images: pendingImage ? [pendingImage.dataUrl] : [],
             likes: 0,
             isCollected: false,
             isLiked: false,
@@ -708,8 +747,9 @@ ${identityMap}
             origin: 'moments',
         };
         prependPostsToFeed([post]);
-        void publishToMastodon(post, char?.id, newPostVisibility);
+        void publishToMastodon(post, char?.id, newPostVisibility, pendingImage, pendingAlt);
         setNewPostContent(''); setNewPostTitle('');
+        setNewPostImage(null); setNewPostImageAlt('');
         setIsCreateOpen(false); // Close Modal
         setActiveTab('known');
         addToast('发布成功', 'success');
@@ -1064,6 +1104,46 @@ ${identityMap}
                                     </button>
                                 ))}
                             </div>
+                        </div>
+
+                        {/* 发帖配图：用户身份走系统相册，角色身份走 AI 生图；默认无图 */}
+                        <div className="mt-4 pt-4 border-t border-slate-50">
+                            <p className="text-[10px] font-bold text-slate-400 uppercase mb-2">配图（可选）</p>
+                            {selectedIdentity === 'user' ? (
+                                <input
+                                    type="file"
+                                    accept="image/png,image/jpeg,image/gif,image/webp"
+                                    onChange={e => { void handlePickPostImage(e.target.files?.[0]); e.target.value = ''; }}
+                                    className="text-xs text-slate-500"
+                                />
+                            ) : (
+                                <button
+                                    onClick={() => { void handleGeneratePostImage(); }}
+                                    disabled={isGeneratingPostImage}
+                                    className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${isGeneratingPostImage ? 'bg-slate-100 text-slate-400' : 'bg-slate-900 text-white'}`}
+                                >
+                                    {isGeneratingPostImage ? '生成中…' : 'AI 配图'}
+                                </button>
+                            )}
+                            {newPostImage && (
+                                <div className="mt-3">
+                                    <div className="relative inline-block">
+                                        <img src={newPostImage.dataUrl} alt={newPostImageAlt || '配图预览'} className="max-h-48 rounded-xl border border-slate-100 object-cover" />
+                                        <button
+                                            onClick={() => { setNewPostImage(null); setNewPostImageAlt(''); }}
+                                            className="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/50 text-white text-xs flex items-center justify-center"
+                                        >
+                                            ×
+                                        </button>
+                                    </div>
+                                    <input
+                                        value={newPostImageAlt}
+                                        onChange={e => setNewPostImageAlt(e.target.value)}
+                                        placeholder="图片说明，无障碍必填"
+                                        className="mt-2 w-full text-xs outline-none placeholder:text-slate-300 text-slate-700 border border-slate-100 rounded-md px-2 py-1.5"
+                                    />
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>
