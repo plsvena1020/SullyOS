@@ -3,6 +3,10 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
+      "source": "/api/:path*",
+      "destination": "https://ethernet-vps.bot.cd/api/:path*"
+    },
+    {
       "source": "/agent/:path*",
       "destination": "/api/backend-proxy?ns=agent&rest=:path*"
     },
