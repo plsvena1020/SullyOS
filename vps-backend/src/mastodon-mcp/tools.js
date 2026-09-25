@@ -19,7 +19,9 @@ const MomentsPostInput = z.object({
   visibility, sensitive: z.boolean().optional(), spoiler_text: z.string().optional(),
   in_reply_to_id: z.string().optional().describe('回复目标 status id'),
   language: z.string().optional(), confirm,
-}).refine((a) => a.status || (a.media_ids && a.media_ids.length), 'status 与 media_ids 至少其一');
+});
+// 「status 与 media_ids 至少其一」放 run 里校验：.refine() 会把 schema 变成 ZodEffects，
+// 没有 .shape，MCP SDK 注册时拿不到字段表（tools/call 会把合法参数当缺失）。
 
 const MomentsUploadInput = z.object({
   ownerId, fileBase64: z.string().describe('文件 base64'),
@@ -56,7 +58,11 @@ export const TOOL_DEFS = [
       const acc = resolveAccount(c.accounts, p.ownerId);
       const s = await c.api.postStatus({ instance: acc.instance, accessToken: acc.accessToken, ...p });
       return { ownerId: acc.ownerId, status: s.content, result: { content: [{ type: 'text', text: `已发布：${textOf(s)}` }], structuredContent: s } };
-    })(ctx, MomentsPostInput.parse(a)),
+    })(ctx, (() => {
+      const p = MomentsPostInput.parse(a);
+      if (!p.status && !(p.media_ids && p.media_ids.length)) throw new Error('status 与 media_ids 至少其一');
+      return p;
+    })()),
   },
   {
     name: 'moments_upload', description: '上传图片拿 media id（v2 异步，服务端轮询转码）。写操作，需 confirm。',

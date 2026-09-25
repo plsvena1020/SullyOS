@@ -6,9 +6,13 @@ describe('tools', () => {
   it('8 个工具齐全', () => {
     expect(names()).toEqual(['moments_post','moments_upload','moments_delete','status_favourite','status_unfavourite','timeline_home','timeline_public','account_statuses']);
   });
-  it('发帖缺正文又缺图被 schema 拒绝', () => {
+  it('发帖缺正文又缺图被拒（run 层）', async () => {
     const post = TOOL_DEFS.find((t) => t.name === 'moments_post')!;
-    expect(() => post.inputSchema.parse({ confirm: true })).toThrow();
+    await expect(async () => post.run({ api: {}, accounts: [], guard: { assertAllowed: () => {}, audit: async () => {} } } as never, { confirm: true }))
+      .rejects.toThrow('status 与 media_ids 至少其一');
+  });
+  it('8 个工具 schema 都是 ZodObject（SDK 注册要 .shape）', () => {
+    for (const t of TOOL_DEFS) expect(typeof t.inputSchema.shape).toBe('object');
   });
   it('删帖标 destructive，读时间线标 readOnly+openWorld', () => {
     const del = TOOL_DEFS.find((t) => t.name === 'moments_delete')!;
