@@ -840,7 +840,9 @@ const Settings: React.FC = () => {
   const [googleClientId, setGoogleClientId] = useState(() => { try { return localStorage.getItem('aetheros.google.clientId') || ''; } catch { return ''; } });
   const [googleBridgeUrl, setGoogleBridgeUrl] = useState(() => { try { return localStorage.getItem('aetheros.google.bridgeUrl') || ''; } catch { return ''; } });
   const [googleBridgeToken, setGoogleBridgeToken] = useState(() => { try { return localStorage.getItem('aetheros.google.bridgeToken') || ''; } catch { return ''; } });
-  const [googleAuthCode, setGoogleAuthCode] = useState('');
+  // 回调页（public/settings/google/callback.html）把 code 存进 pendingCode，
+  // 设置页打开时直接取用——省掉从地址栏手贴这一步。
+  const [googleAuthCode, setGoogleAuthCode] = useState(() => { try { return localStorage.getItem('aetheros.google.pendingCode') || ''; } catch { return ''; } });
   const [googleAccounts, setGoogleAccounts] = useState<Array<{ accountId: string; email: string }>>([]);
   const [googleCalendars, setGoogleCalendars] = useState<Record<string, Array<{ id: string; summary: string }>>>({});
   const [googleSelectedCalendars, setGoogleSelectedCalendars] = useState<string[]>(() => {
@@ -2035,7 +2037,7 @@ const Settings: React.FC = () => {
           setRtTestStatus('请先填写 Google Client ID');
           return;
       }
-      const redirectUri = `${window.location.origin}/settings/google/callback`;
+      const redirectUri = `${window.location.origin}/settings/google/callback.html`;
       const state = Math.random().toString(36).slice(2) + Date.now().toString(36);
       try { sessionStorage.setItem('aetheros.google.oauthState', state); } catch { /* 忽略 */ }
       window.open(buildGoogleAuthUrl({ clientId, redirectUri, state }), '_blank', 'noopener');
@@ -2058,6 +2060,7 @@ const Settings: React.FC = () => {
           }
           const body = await res.json();
           setGoogleAuthCode('');
+          try { localStorage.removeItem('aetheros.google.pendingCode'); } catch { /* 忽略 */ }
           setRtTestStatus(body?.email ? `已连接 ${body.email}` : '已连接');
           await loadGoogleAccounts();
       } catch (e: any) {
@@ -4745,8 +4748,8 @@ const Settings: React.FC = () => {
                               <button onClick={loadGoogleAccounts} className="flex-1 py-2 bg-sky-100 text-sky-600 text-xs font-bold rounded-xl active:scale-95 transition-transform">刷新账号</button>
                           </div>
                           <p className="text-[10px] text-sky-500/70 leading-relaxed">
-                              1. 在 Google Cloud Console 建 OAuth 客户端（Web 应用），回调地址填 {readGoogleBridgeUrl()}/oauth/callback（需与桥 GOOGLE_REDIRECT_URI 一致）<br/>
-                              2. 上方填 Client ID，点「连接 Google」完成授权，把地址栏 code 粘回来点「完成连接」<br/>
+                              1. 在 Google Cloud Console 建 OAuth 客户端（Web 应用），回调地址填 {window.location.origin}/settings/google/callback.html<br/>
+                              2. 上方填 Client ID，点「连接 Google」；授权页会跳到回调页并自动收好 code，回本页点「完成连接」<br/>
                               3. 桥 Token 与 Client ID 一样填在上方即可；refresh token 只存 VPS 桥内，永不回显。<br/>
                               char 可读取你的日历与待办，也可在对话中主动帮你创建（会先给预览等你确认）。
                           </p>

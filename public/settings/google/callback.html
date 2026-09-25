@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Google 授权完成</title>
+  <style>
+    body { font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; background: #0f1115; color: #e2e8f0;
+           display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; }
+    .card { background: #1a1d24; border: 1px solid #2d323c; border-radius: 16px; padding: 28px; max-width: 420px; width: 100%; }
+    h1 { font-size: 18px; margin: 0 0 12px; }
+    p { font-size: 14px; line-height: 1.6; color: #94a3b8; margin: 0 0 16px; }
+    code { display: block; background: #0f1115; border: 1px solid #2d323c; border-radius: 8px; padding: 12px;
+           font-family: ui-monospace, monospace; font-size: 12px; color: #7dd3fc; word-break: break-all;
+           max-height: 120px; overflow: auto; margin-bottom: 16px; }
+    button { width: 100%; padding: 12px; border: none; border-radius: 10px; background: #0ea5e9; color: #fff;
+             font-size: 14px; font-weight: 600; cursor: pointer; }
+    button:disabled { background: #334155; cursor: not-allowed; }
+    .err { color: #f87171; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1 id="title">Google 授权</h1>
+    <p id="hint">正在读取授权码…</p>
+    <code id="code" style="display:none"></code>
+    <button id="copy" style="display:none">复制授权码</button>
+  </div>
+  <script>
+    (function () {
+      var params = new URLSearchParams(location.search);
+      var code = params.get('code');
+      var err = params.get('error');
+      var title = document.getElementById('title');
+      var hint = document.getElementById('hint');
+      var codeBox = document.getElementById('code');
+      var btn = document.getElementById('copy');
+
+      if (err) {
+        title.textContent = '授权失败';
+        hint.innerHTML = 'Google 返回：<span class="err">' + err + '</span><br>请回到设置页确认回调地址与 Google 后台登记的一致。';
+        return;
+      }
+      if (!code) {
+        title.textContent = '没有拿到授权码';
+        hint.textContent = '地址栏里没有 code 参数。回到设置页重新点「连接 Google」。';
+        return;
+      }
+
+      // 存进 localStorage，设置页的授权码框会自动读取（省掉手动粘贴）
+      try { localStorage.setItem('aetheros.google.pendingCode', code); } catch (e) {}
+
+      title.textContent = '授权成功';
+      hint.textContent = '授权码已存好。回到小手机的设置页，点「完成连接」即可。';
+      codeBox.textContent = code;
+      codeBox.style.display = 'block';
+      btn.style.display = 'block';
+      btn.addEventListener('click', function () {
+        navigator.clipboard.writeText(code).then(function () {
+          btn.textContent = '已复制';
+        }).catch(function () {
+          btn.textContent = '请手动选中复制';
+        });
+      });
+    })();
+  </script>
+</body>
+</html>
