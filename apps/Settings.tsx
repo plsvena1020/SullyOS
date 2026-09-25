@@ -48,7 +48,7 @@ import {
 } from '../utils/avatarModelBackup';
 import { hasChatCompletionsSuffix, normalizeApiBaseUrl, normalizeApiCredential, normalizeApiModel } from '../utils/apiConfigNormalize';
 import { configFromPreset, findActivePresetId, type PresetSwitchPatch } from '../utils/apiPresetSwitch';
-import StatusBadge from '../components/StatusBadge';
+import StatusBadge, { invalidateBadge } from '../components/StatusBadge';
 import { probeApiConfig, probeAgent, probeBridge, probeAmsgWorker, probeVisionApi, probeCloudBackup, probeRealtime, probeMcpServers, probePerspective } from '../utils/statusPanel';
 import { classifyFetchFailure, probeOriginReachability, describeReachabilityProbe, parseTargetUrl, toSameOriginProxyUrl } from '../utils/networkFailureDiagnosis';
 import type { StatusEntry } from '../utils/statusPanel';
@@ -1866,6 +1866,7 @@ const Settings: React.FC = () => {
           perspectiveSummaryThreshold: Math.max(parseInt(rtPerspectiveThreshold, 10) || 500, 10),
       };
       updateRealtimeConfig(updates);
+      invalidateBadge('realtime');
       RealtimeContextManager.clearCache();
       const nextRealtimeConfig = { ...realtimeConfig, ...updates };
       // 云端凭据 + 按配置裁剪过的提示词一起刷，否则角色到点会照着旧提示词调已关掉的工具。
@@ -2126,6 +2127,7 @@ const Settings: React.FC = () => {
                   }
               };
               updateRealtimeConfig(xhsUpdates);
+              invalidateBadge('realtime');
               const nextConfig = { ...realtimeConfig, ...xhsUpdates };
               syncAmsgToolConfigAndPrompts(nextConfig, { characters, userProfile, groups });
           } else {
