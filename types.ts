@@ -424,6 +424,12 @@ export interface APIConfig {
   minimaxRegion?: MinimaxRegion;
   // 语音服务商三选一。缺省 → 'minimax'。
   ttsProvider?: TtsProvider;
+  /** Genie 自建中文语音。阶段 A 是 opt-in：undefined 视为 false。见 spec §10.1。 */
+  genieVoiceEnabled?: boolean;
+  /** 情绪来源：'auto' 跟随 <语音 emotion>；'fixed' 固定用 genieEmotion。 */
+  genieEmotionMode?: 'auto' | 'fixed';
+  /** 固定模式下使用的情绪，7 项之一；非法值回落 calm。 */
+  genieEmotion?: string;
   // 鱼声 Fish Audio API Key（https://fish.audio/）。仅 ttsProvider === 'fishaudio' 时使用。
   fishAudioApiKey?: string;
   // 鱼声默认模型（s2.1-pro / s2-pro / s1）。缺省 → 's2.1-pro'。

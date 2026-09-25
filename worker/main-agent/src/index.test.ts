@@ -309,3 +309,85 @@ describe('上游发完终止事件但不关连接', () => {
         expect(text).toContain('data: [DONE]');
     });
 });
+
+describe('POST /v1/tts', () => {
+    // checkAuth 读 env.AMSG_CLIENT_TOKEN（index.js:61-68）
+    const ttsEnv = { AMSG_CLIENT_TOKEN: 'tok' };
+    const postTts = (
+        body: unknown,
+        headers: Record<string, string> = { 'x-client-token': 'tok' },
+    ) => worker.fetch(
+        new Request(`${AGENT}/agent/v1/tts`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...headers },
+            body: JSON.stringify(body),
+        }),
+        ttsEnv,
+        { waitUntil: () => {} },
+    );
+
+    it('鉴权失败时拒绝', async () => {
+        const res = await postTts({ text: 'hi' }, {});
+        expect(res.status).toBe(403);
+    });
+
+    it('把 body 原样转发到适配层并回传音频', async () => {
+        const wav = new Uint8Array([0x52, 0x49, 0x46, 0x46, 1, 2, 3, 4]).buffer;
+        const calls: Array<{ url: string; init: any }> = [];
+        vi.stubGlobal('fetch', vi.fn(async (url: string, init: any) => {
+            calls.push({ url: String(url), init });
+            return new Response(wav, { status: 200, headers: { 'content-type': 'audio/wav' } });
+        }));
+        const res = await postTts({ text: '你好', emotion: 'happy' });
+        expect(res.status).toBe(200);
+        expect(res.headers.get('content-type')).toContain('audio/wav');
+        expect(res.headers.get('access-control-allow-origin')).toBe('*');
+        expect(res.headers.get('access-control-expose-headers')).toContain('X-Genie-Resolved-Emotion');
+        expect(calls[0].url).toBe('http://127.0.0.1:9882/speak');
+        expect(JSON.parse(calls[0].init.body)).toEqual({ text: '你好', emotion: 'happy' });
+    });
+
+    it('X-Genie-Resolved-Emotion 响应头在成功时被转发给浏览器', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => new Response(new ArrayBuffer(64), {
+            status: 200,
+            headers: {
+                'content-type': 'audio/wav',
+                'X-Genie-Resolved-Emotion': 'calm',
+            },
+        })));
+        const res = await postTts({ text: 'x' });
+        expect(res.status).toBe(200);
+        expect(res.headers.get('x-genie-resolved-emotion')).toBe('calm');
+    });
+
+    it.each([
+        [400, 'empty'],
+        [400, 'bad_request'],
+        [400, 'bad_emotion'],
+        [413, 'chunk_too_long'],
+        [413, 'too_many_chunks'],
+        [503, 'warming_up'],
+        [503, 'busy'],
+        [504, 'lock_timeout'],
+        [504, 'synth_timeout'],
+        [500, 'reference_missing'],
+        [500, 'synth_failed'],
+    ])('上游 %i %s 原样透传', async (status, code) => {
+        const body = JSON.stringify({ error: code });
+        vi.stubGlobal('fetch', vi.fn(async () => new Response(body, {
+            status,
+            headers: { 'content-type': 'application/json' },
+        })));
+
+        const res = await postTts({ text: 'x' });
+        expect(res.status).toBe(status);
+        expect(await res.text()).toBe(body);
+    });
+
+    it('适配层不可达时返回 502 而不是抛异常', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('ECONNREFUSED'); }));
+        const res = await postTts({ text: 'x' });
+        expect(res.status).toBe(502);
+    });
+});
+

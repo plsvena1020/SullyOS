@@ -74,7 +74,7 @@ import { isAutonomyActive } from '../utils/airp/autonomySettings';
 import { loadMusicPlaybackSnapshot } from './MusicContext';
 import { setCharNameRegistry } from '../utils/charNameRegistry';
 import { setMinimaxRegion } from '../utils/minimaxEndpoint';
-import { setElevenLabsModel, setTtsProvider, setVoicePromptOverrides } from '../utils/ttsProvider';
+import { setElevenLabsModel, setGenieVoiceEnabled, setTtsProvider, setVoicePromptOverrides } from '../utils/ttsProvider';
 import { formatBytes } from '../utils/format';
 import { isEmotionEvalSkipped } from '../utils/devDebug';
 import { isBenignApplicationConsoleMessage } from '../utils/applicationConsole';
@@ -2156,7 +2156,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   // 同步 TTS 服务商选择，让拿不到 apiConfig 的地方（如 chatPrompts 语音格式指导）读到最新值。
   useEffect(() => {
     setTtsProvider(apiConfig.ttsProvider);
-  }, [apiConfig.ttsProvider]);
+    setGenieVoiceEnabled(apiConfig.genieVoiceEnabled);
+  }, [apiConfig.ttsProvider, apiConfig.genieVoiceEnabled]);
   // ElevenLabs 的 v3 与 Flash/Multilingual 使用不同的提示词标记；prompt 构建器靠单例读当前模型。
   useEffect(() => {
     setElevenLabsModel(apiConfig.elevenLabsModel);

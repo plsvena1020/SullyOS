@@ -22,6 +22,17 @@ export function getTtsProvider(): TtsProvider {
   return currentProvider;
 }
 
+let currentGenieEnabled = false;
+
+/** Genie 开关的模块级镜像，供拿不到 apiConfig 的 prompt 侧使用。与 setTtsProvider 同一套理由。 */
+export function setGenieVoiceEnabled(v: boolean | undefined | null): void {
+  currentGenieEnabled = v === true;
+}
+
+export function isGenieVoiceEnabledSync(): boolean {
+  return currentGenieEnabled;
+}
+
 const DEFAULT_ELEVENLABS_MODEL = 'eleven_flash_v2_5';
 let currentElevenLabsModel = DEFAULT_ELEVENLABS_MODEL;
 

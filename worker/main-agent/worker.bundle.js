@@ -463,6 +463,39 @@ async function runAgentLoop(env, messages, emit, llmOverride) {
   return { messages, stats };
 }
 
+// 配置走 main-agent 的 env 对象（与 getJsonEnv / providersOf 同一套读法），不是 process.env。
+async function ttsProxy(request, env) {
+  const speakUrl = (env?.GENIE_SPEAK_URL || '').trim() || 'http://127.0.0.1:9882/speak';
+  let payload;
+  try {
+    payload = await request.json();
+  } catch {
+    return json({ error: 'bad_request' }, 400);
+  }
+  // 不在这里检查 payload.text：空文本与非法请求体是两个不同的错误码，
+  // 由 /speak 统一裁决，代理不预判、不改写。
+  try {
+    const upstream = await fetch(speakUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(150000),
+    });
+    // arrayBuffer 也要在 try 内：上游回 body 时断线会抛，不能漏成宿主 500。
+    const body = await upstream.arrayBuffer();
+    const out = new Headers();
+    const ct = upstream.headers.get('content-type');
+    if (ct) out.set('content-type', ct);
+    out.set('access-control-allow-origin', '*');
+    out.set('access-control-expose-headers', 'X-Genie-Resolved-Emotion');
+    const resolved = upstream.headers.get('x-genie-resolved-emotion');
+    if (resolved) out.set('X-Genie-Resolved-Emotion', resolved);
+    return new Response(body, { status: upstream.status, headers: out });
+  } catch {
+    return json({ error: 'genie_unavailable' }, 502);
+  }
+}
+
 // ─────────────────────── WebDAV (dufs) 认证注入中转 ───────────────────────
 async function webdavProxy(req, env, pathSuffix) {
   const auth = (env.DUFS_AUTH || '').trim();
@@ -784,6 +817,13 @@ export default {
     if (plain === '/v1/llm-credentials') return llmCredentialsProxy(request, env, url);
     if (plain === '/v1/mcp-relay') return mcpRelayProxy(request, env, url);
     if (plain === '/v1/models') return llmModelsProxy(request, env, url);
+
+    // Genie-TTS（VPS 自建中文克隆）。适配层已处理情绪表、队列、分块与 WAV 包裹，
+    // 本层只做鉴权后的无状态转发——不记情绪、不缓存参考音频，避免跨进程失效。
+    if (plain === '/v1/tts') {
+      if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+      return ttsProxy(request, env);
+    }
 
     if (plain.startsWith('/webdav')) {
       const suffix = plain.replace(/^\/webdav\/?/, '');

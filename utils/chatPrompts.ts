@@ -14,7 +14,7 @@ import type { WeatherData } from './realtimeWorldCore';
 import { isScheduleFeatureOn } from './scheduleFeature';
 import { VOICE_ACTING_GUIDE } from './minimaxTts';
 import { FISH_VOICE_ACTING_GUIDE } from './fishAudioTts';
-import { getElevenLabsModel, getTtsProvider, getVoicePromptOverride } from './ttsProvider';
+import { getElevenLabsModel, getTtsProvider, getVoicePromptOverride, isGenieVoiceEnabledSync } from './ttsProvider';
 import { isElevenLabsV3Model } from './elevenLabsTts';
 import { getElevenLabsVoiceActingGuide } from './elevenLabsTts';
 import { resolveCharTimeZone, nowInTimeZone } from './timezone';
@@ -46,10 +46,30 @@ const voiceActingGuide = (): string => {
 };
 
 /**
+ * Genie 自建语音的表演规则。放在本文件而不是 promptPresetCatalog：
+ * 放进 catalog 要连带改 promptPresetSeeding 的迁移表（它会删整个旧 voicePrompts，
+ * 漏一处就抹掉用户数据），不值当。代价是 v1 不能在预设面板里编辑这一段。
+ */
+export const GENIE_VOICE_ACTING_GUIDE = `### 语音表演（Genie 自建语音）
+
+- 用 \`<语音 emotion="...">\` 发送语音块，情绪只能取 happy/sad/angry/fearful/surprised/calm/fluent。
+- 没标 emotion 时会回落 calm；用户在设置里选了固定情绪的，按设置来。
+- 每条消息最多一个 <语音> 标签。不是每条都要发语音——像真人一样，有时候打字有时候发语音。
+- **不要复读**：同时发文字和语音时，语音内容不能是文字的重复或复述。
+- 语音和文字的标点、语气词要自然，口语化，不要念稿腔。`;
+
+// Genie 专属：括号动作会被发送前剥掉，教模型不要写。
+const GENIE_CUE_RULE = '- <语音> 里不要写括号动作；Genie 不支持，会在发送前剥掉。';
+// legacy 两段原文不同，必须分别保留，任何情况下都不得合并或改写。
+const LEGACY_LANG_CUE_RULE = '- <语音> 里想要笑、叹气等真实语气用官方英文标签 (laughs)/(sighs)/(chuckle)/(gasps) 等，**不要写中文（轻笑）这类舞台指示**（中文括号会被直接删掉、不朗读）';
+const LEGACY_DEFAULT_CUE_RULE = '- <语音> 里只写会被朗读的文字，不要写中文舞台指示/括号动作；想要笑、叹气等真实语气，用官方英文标签 (laughs)/(sighs)/(chuckle)/(gasps) 等（中文括号会被直接删掉、不朗读）';
+
+/**
  * 语音指南完整解析（异步版，聊天主路径用）：面板行（改过）> 设置页旧覆盖 > 内置默认；
  * 面板行停用 -> 返回 null，由调用方整段不注入。
  */
 const resolveVoiceActingGuide = async (): Promise<string | null> => {
+  if (isGenieVoiceEnabledSync()) return GENIE_VOICE_ACTING_GUIDE;
   const provider = getTtsProvider();
   const sourceKey = provider === 'fishaudio' ? 'voice.fish'
       : provider === 'elevenlabs'
@@ -1213,6 +1233,10 @@ ${uname} 的化身正挂在《彼方》的【${roomName}】${act ? `，状态写
 
         // Voice message prompt injection
         if (char.chatVoiceEnabled) {
+            const genieVoice = isGenieVoiceEnabledSync();
+            const voiceEmotionList = genieVoice
+                ? 'happy/sad/angry/fearful/surprised/calm/fluent'
+                : 'happy/sad/angry/fearful/disgusted/surprised/calm/fluent';
             const voiceLang = char.chatVoiceLang || '';
             const langLabel = voiceLang ? voiceLanguagePromptLabel(voiceLang) : '';
             if (voiceLang) {
@@ -1225,7 +1249,7 @@ ${uname} 的化身正挂在《彼方》的【${roomName}】${act ? `，状态写
 <语音> 里是真正被朗读的${langLabel}，<字幕> 里是同一段话的中文——语音条的「转文字」面板会直接用它当对照翻译，用户对着中文听${langLabel}。
 
 规则：
-1. \`<语音>\` 里写${langLabel}——只写会被朗读的文字。可选 emotion 属性标整条情绪：\`<语音 emotion="happy">…</语音>\`，emotion 只能取 happy/sad/angry/fearful/disgusted/surprised/calm/fluent（情绪不强就别加）
+1. \`<语音>\` 里写${langLabel}——只写会被朗读的文字。可选 emotion 属性标整条情绪：\`<语音 emotion="happy">…</语音>\`，emotion 只能取 ${voiceEmotionList}（情绪不强就别加）
 2. \`<字幕>\` 里写这条语音的中文版，内容和${langLabel}一致、逐段对齐（${langLabel}分几段中文就分几段）。**<字幕> 必须紧跟在 </语音> 后面，永远成对出现，不能单独用**
 3. 标签外可以照常发普通中文短消息（正常闲聊打字），它们显示成普通气泡，和语音内容互相独立、不要复读
 
@@ -1239,7 +1263,7 @@ ${uname} 的化身正挂在《彼方》的【${roomName}】${act ? `，状态写
 
 要求：
 - <语音> 里的${langLabel}要自然口语化，符合你的性格，不要机翻味
-- <语音> 里想要笑、叹气等真实语气用官方英文标签 (laughs)/(sighs)/(chuckle)/(gasps) 等，**不要写中文（轻笑）这类舞台指示**（中文括号会被直接删掉、不朗读）
+${genieVoice ? GENIE_CUE_RULE : LEGACY_LANG_CUE_RULE}
 - 每条消息最多一个 <语音> + <字幕> 组合
 - 不是每条消息都要发语音！像真人一样，有时候打字，有时候发语音，自然切换
 - 比较适合发语音的场景：撒娇、吐槽、语气很重的话、懒得打字的时候
@@ -1253,7 +1277,7 @@ ${(await resolveVoiceActingGuide()) ?? ''}`;
 
 **你可以发送语音消息！** 就像真人用微信一样，你可以选择打字或者发语音。
 用 \`<语音>要说的话</语音>\` 标签来发送语音。标签里的内容会被转成真正的语音条显示给用户。
-可选地用 emotion 属性设定整条语音的情绪：\`<语音 emotion="happy">…</语音>\`，emotion 只能取 happy/sad/angry/fearful/disgusted/surprised/calm/fluent（情绪不强就别加）。
+可选地用 emotion 属性设定整条语音的情绪：\`<语音 emotion="happy">…</语音>\`，emotion 只能取 ${voiceEmotionList}（情绪不强就别加）。
 
 示例：
 <语音 emotion="happy">哎你今天干嘛去了啊？</语音>
@@ -1262,7 +1286,7 @@ ${(await resolveVoiceActingGuide()) ?? ''}`;
 <语音>你快去看！就那个什么……(chuckle)啊我忘了叫什么了，反正超搞笑的</语音>
 
 要求：
-- <语音> 里只写会被朗读的文字，不要写中文舞台指示/括号动作；想要笑、叹气等真实语气，用官方英文标签 (laughs)/(sighs)/(chuckle)/(gasps) 等（中文括号会被直接删掉、不朗读）
+${genieVoice ? GENIE_CUE_RULE : LEGACY_DEFAULT_CUE_RULE}
 - 每条消息最多一个 <语音> 标签
 - 不是每条消息都要发语音！像真人一样，有时候打字，有时候发语音，自然切换
 - 比较适合发语音的场景：撒娇、吐槽、语气很重的话、懒得打字的时候、想让对方听到你语气的时候
