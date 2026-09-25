@@ -624,6 +624,16 @@ def test_missing_window_reports_status():
     assert run_once(d) == "missing"
 
 
+def test_blank_ocr_output_skips_emit():
+    black = np.zeros((60, 200, 3), dtype=np.uint8)
+    white = black.copy()
+    white[10:30, 10:100] = 255
+    d = _deps([black, white], None, [[{"text": "[]", "conf": 0.6, "box": None}]])
+    run_once(d)
+    assert run_once(d) == "skipped-quiet"
+    assert d.bridge.queued == []
+
+
 def test_options_frame_emits_once():
     black = np.zeros((60, 200, 3), dtype=np.uint8)
     opt = np.full((40, 200, 3), 128, dtype=np.uint8)
@@ -684,6 +694,9 @@ def run_once(deps):
         else:
             rows = deps.ocr.recognize(dialog)
             text = "\n".join(r["text"] for r in rows)
+            if not text.strip():
+                deps.prev[0] = dialog
+                return "skipped-quiet"
             deps.seq[0] += 1
             deps.bridge.enqueue("line", {"text": text, "at": deps.seq[0], "source": "pc-window"})
             status = "emitted"
