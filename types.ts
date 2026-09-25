@@ -21,6 +21,7 @@ export enum AppID {
   Room = 'room',
   CheckPhone = 'check_phone',
   Social = 'social',
+  Moments = 'moments',
   Study = 'study',
   FAQ = 'faq',
   Game = 'game',
@@ -3650,6 +3651,8 @@ export interface UserProfile {
      *  私聊里「你」的头像取 perCharAvatars[charId] || avatar（上面的整体头像作宏观默认）；
      *  群聊/其他场合仍用整体头像。删角色留下的孤儿键无害，读取端永远按当前 charId 取。 */
     perCharAvatars?: Record<string, string>;
+    /** 朋友圈封面（blobref/dataURL，与 avatar 同一图片管线）。 */
+    momentsCover?: string;
     /**
      * 用户本人接入「彼方」的状态：捏的 chibi、此刻所在房间、在干嘛。可随时改。
      * enabled=false（登出）时，聊天里给角色的"用户在彼方"提示词随之消失。
@@ -4132,8 +4135,14 @@ export interface SocialPost {
     bgStyle?: string;
     authorType?: 'user' | 'character' | 'stranger';
     authorCharId?: string;
-    /** 帖子来源：'gen'（默认，AI 生成/用户发布）| 'douban'（豆瓣小组真实帖子） */
-    origin?: 'gen' | 'douban';
+    /** 帖子来源：'gen'（默认，AI 生成/用户发布）| 'douban'（豆瓣小组真实帖子）| 'mastodon'（读回来的 toot / 同步出去且有远端 id 的帖子）| 'moments'（朋友圈手发本地帖，不进 Spark 广场） */
+    origin?: 'gen' | 'douban' | 'mastodon' | 'moments';
+    /** Mastodon 远端 status id（双向去重键，读回/发出都要写） */
+    mastodonStatusId?: string;
+    /** 实例域名（如 mastodon.social），多实例防串 */
+    mastodonInstance?: string;
+    /** 发帖身份：'user' 或 charId（决定用 accounts[] 里哪个 token） */
+    mastodonOwnerId?: string;
     /** 豆瓣话题 id（origin=douban 时） */
     sourceId?: string;
     /** 豆瓣话题链接 */

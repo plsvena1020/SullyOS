@@ -13,6 +13,7 @@ import { safeResponseJson } from '../utils/safeApi';
 import { CharacterGroupFilterBar, filterCharactersByGroup, GROUP_FILTER_ALL } from '../components/character/CharacterGroupFilter';
 import { House, User, Package, Warning } from '@phosphor-icons/react';
 import { mergeSocialComments, prependUniqueSocialPosts, updateSocialPost } from '../utils/socialFeedMerge';
+import { visibleInSpark } from '../utils/momentsFeed';
 import { listAirpEventsByChar } from '../utils/airp/eventStore';
 import { selectMomentsMaterial } from '../utils/airp/projection';
 import {
@@ -242,7 +243,7 @@ const SocialApp: React.FC = () => {
                 // IndexedDB can be slow on mobile. If the user already created
                 // something while this read was pending, keep that live version.
                 const liveIds = new Set(feedRef.current.map(post => post.id));
-                const next = [...feedRef.current, ...sorted.filter(post => !liveIds.has(post.id))];
+                const next = [...feedRef.current, ...sorted.filter(post => !liveIds.has(post.id) && visibleInSpark(post))];
                 feedRef.current = next;
                 setFeed(next);
             }

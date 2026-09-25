@@ -5,6 +5,7 @@ import Launcher from '../apps/Launcher';
 import CompanionLockChrome from './os/CompanionLockChrome';
 import { loadCompanionFrameStyle } from './os/companionFrameStyles';
 import { createPreloadableLazy, type PreloadableLazy } from './os/preloadableLazy';
+import { exchangeCode, bindAccount, useCodeGuard, verifyBindState, saveIdentity } from '../utils/mastodonOAuth';
 
 // 按需懒加载各 App —— 切到对应 App 时才下载/解析其代码块，首屏只加载 Launcher 与外壳，
 // 大体积 App（MemoryPalace / VRWorld / Songwriting 等）不再压在主包里。
@@ -30,6 +31,7 @@ const ScheduleApp = lazyApp(() => import('../apps/ScheduleApp'));
 const RoomApp = lazyApp(() => import('../apps/RoomApp'));
 const CheckPhone = lazyApp(() => import('../apps/CheckPhone'));
 const SocialApp = lazyApp(() => import('../apps/SocialApp'));
+const MomentsApp = lazyApp(() => import('../apps/MomentsApp'));
 const StudyApp = lazyApp(() => import('../apps/StudyApp'));
 const PomodoroApp = lazyApp(() => import('../apps/PomodoroApp'));
 const TarotApp = lazyApp(() => import('../apps/TarotApp'));
@@ -81,7 +83,7 @@ const APP_BY_ID: Partial<Record<AppID, PreloadableLazy>> = {
   [AppID.GroupChat]: GroupChat, [AppID.ThemeMaker]: ThemeMaker, [AppID.Appearance]: Appearance,
   [AppID.Gallery]: Gallery, [AppID.Date]: DateApp, [AppID.User]: UserApp,
   [AppID.Journal]: JournalApp, [AppID.Schedule]: ScheduleApp, [AppID.Room]: RoomApp,
-  [AppID.CheckPhone]: CheckPhone, [AppID.Social]: SocialApp, [AppID.Study]: StudyApp,
+  [AppID.CheckPhone]: CheckPhone, [AppID.Social]: SocialApp, [AppID.Moments]: MomentsApp, [AppID.Study]: StudyApp,
   [AppID.Pomodoro]: PomodoroApp, [AppID.Tarot]: TarotApp,
   [AppID.Preset]: PresetApp,
   [AppID.FAQ]: FAQApp, [AppID.Game]: GameApp,
@@ -450,7 +452,8 @@ const AppLoadingFallback: React.FC<{ onReturn?: () => void; animationEnabled?: b
 };
 
 const PhoneShell: React.FC = () => {
-  const { theme, isLocked, unlock, activeApp, closeApp, openApp, virtualTime, isDataLoaded, toasts, unreadMessages, characters, handleBack, suspendedCall, resumeCall, activeCharacterId, errorDialog, dismissError } = useOS();
+  const { theme, isLocked, unlock, activeApp, closeApp, openApp, virtualTime, isDataLoaded, toasts, unreadMessages, characters, handleBack, suspendedCall, resumeCall, activeCharacterId, errorDialog, dismissError, addToast } = useOS();
+  const oauthGuardRef = useRef(useCodeGuard());
   const useIOSStandaloneLayout = isIOSStandaloneWebApp();
 
   // 三档顶部状态栏：安全显示 / 紧凑显示 / 隐藏。旧存档仍由 hideStatusBar 兼容解析。
@@ -460,6 +463,41 @@ const PhoneShell: React.FC = () => {
     document.documentElement.classList.toggle('sully-statusbar-hidden', statusBarMode === 'hidden');
     document.documentElement.classList.toggle('sully-statusbar-compact', statusBarMode === 'compact');
   }, [statusBarMode]);
+
+  // Mastodon OAuth 回调：一键绑定的回跳落点（无 react-router，读 location.search）。
+  // code 消费一次即从 URL 清掉；state 必验防劫持；token 只在内存停留，bind 成功即丢弃。
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const code = q.get('code');
+    const err = q.get('error');
+    if (!code && !err) return;
+    window.history.replaceState({}, '', window.location.pathname);
+    if (err) { addToast(err === 'access_denied' ? '已取消 Mastodon 授权' : `Mastodon 授权失败：${err}`, err === 'access_denied' ? 'info' : 'error'); return; }
+    if (!code || !oauthGuardRef.current.take(code)) return;
+    (async () => {
+      try {
+        const pending = JSON.parse(sessionStorage.getItem('mastodon-oauth-pending') || 'null');
+        if (!pending?.instance || !pending?.client_id || !pending?.client_secret || !pending?.ownerId) {
+          throw new Error('授权会话已过期，请回朋友圈重新点绑定');
+        }
+        if (!verifyBindState(pending, q.get('state'))) {
+          throw new Error('授权 state 不一致，可能遭到劫持，已取消');
+        }
+        const { access_token } = await exchangeCode(pending.instance, {
+          client_id: pending.client_id, client_secret: pending.client_secret,
+          redirect_uri: pending.redirectUri, code,
+        });
+        const who = await bindAccount(pending.mcpBase, pending.mcpToken, {
+          ownerId: pending.ownerId, instance: pending.instance, accessToken: access_token,
+        });
+        await saveIdentity(localStorage, { ownerId: pending.ownerId, acct: who.acct, instance: pending.instance });
+        sessionStorage.removeItem('mastodon-oauth-pending');
+        window.dispatchEvent(new Event('mastodon-identities-changed'));
+        addToast(`已绑定 @${who.acct}`, 'success');
+        openApp(AppID.Moments);
+      } catch (e: any) { addToast(String(e?.message ?? e), 'error'); }
+    })();
+  }, []);
 
   // 冷启动「世界入场」是否已结束。结束前由 BootSequence 接管整屏（同时取代旧的黑屏 spinner）。
   const [bootDone, setBootDone] = useState(false);
@@ -843,6 +881,7 @@ const PhoneShell: React.FC = () => {
       case AppID.Room: return <RoomApp />; 
       case AppID.CheckPhone: return <CheckPhone />;
       case AppID.Social: return <SocialApp />;
+      case AppID.Moments: return <MomentsApp />;
       case AppID.Study: return <StudyApp />;  
       case AppID.Pomodoro: return <PomodoroApp />;
       case AppID.Terminal: return <TerminalApp />;
