@@ -256,41 +256,19 @@ export const probeCloudBackup = async (apiConfig: APIConfig): Promise<StatusEntr
 };
 
 /**
- * 实时感知：以 PERCEPTION_CAPABILITIES 注册表为唯一口径（与宫格同源），
- * 不再硬编码子集。零网络依赖。
+ * 实时感知：只数“已配置好”的能力（与宫格 on 态同口径）。
+ * 未配置的不计数、不列缺项——宫格灰态自带提示，徽章只给数字。
  */
 export const probeRealtime = async (realtimeConfig: RealtimeConfig): Promise<StatusEntry> => {
-    const entry: StatusEntry = { key: 'realtime', label: '实时感知', status: 'off', detail: '未启用' };
-    const missing: string[] = [];
-    let enabled = 0;
-    if (realtimeConfig.weatherEnabled) {
-        enabled++;
-        // 天气免 Key 也能走（Open-Meteo），只要求城市。
-        if (!realtimeConfig.weatherCity?.trim()) missing.push('天气·城市');
-    }
-    if (realtimeConfig.newsEnabled) enabled++;
-    if (realtimeConfig.notionEnabled) {
-        enabled++;
-        if (!realtimeConfig.notionApiKey?.trim()) missing.push('Notion·Key');
-        if (!realtimeConfig.notionDatabaseId?.trim()) missing.push('Notion·库 ID');
-    }
-    if (realtimeConfig.feishuEnabled) {
-        enabled++;
-        if (!realtimeConfig.feishuAppId?.trim() || !realtimeConfig.feishuAppSecret?.trim()) missing.push('飞书·凭据');
-        if (!realtimeConfig.feishuBaseId?.trim()) missing.push('飞书·表 ID');
-    }
-    if (realtimeConfig.xhsEnabled) enabled++;
-    // 新增三项走注册表（与宫格同源；flag 语义与上面五项逐字对应，不再各写一遍）。
-    for (const cap of PERCEPTION_CAPABILITIES) {
-        if (cap.id !== 'perspective' && cap.id !== 'bluetooth' && cap.id !== 'google') continue;
-        if (cap.enabled(realtimeConfig)) {
-            enabled++;
-            if (!cap.configured(realtimeConfig)) missing.push(`${cap.label}·未配置`);
+    const done = PERCEPTION_CAPABILITIES.filter((c) => {
+        try {
+            return c.enabled(realtimeConfig) && c.configured(realtimeConfig);
+        } catch {
+            return false;
         }
-    }
-    if (enabled === 0) return entry;
-    if (missing.length > 0) return { ...entry, status: 'warn', detail: `缺 ${missing.join('、')}` };
-    return { ...entry, status: 'ok', detail: `${enabled} 项启用` };
+    });
+    if (done.length === 0) return { key: 'realtime', label: '实时感知', status: 'off', detail: '未启用' };
+    return { key: 'realtime', label: '实时感知', status: 'ok', detail: `${done.length} 项已配置` };
 };
 
 /**

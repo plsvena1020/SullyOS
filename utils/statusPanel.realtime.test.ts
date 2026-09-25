@@ -1,5 +1,5 @@
 // utils/statusPanel.realtime.test.ts
-// 感知计数徽章修复：probeRealtime 以 PERCEPTION_CAPABILITIES 注册表为口径（8 项）。
+// 徽章只数已配置项：probeRealtime 只数 enabled && configured（与宫格 on 态同口径）。
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { probeRealtime } from './statusPanel';
 import { bleEngine } from './bleEngine';
@@ -45,8 +45,8 @@ afterEach(() => {
     localStorage.clear();
 });
 
-describe('probeRealtime 注册表口径', () => {
-    it('全开全配 → 8 项启用', async () => {
+describe('probeRealtime 只数已配置', () => {
+    it('全开全配 → 8 项已配置', async () => {
         vi.spyOn(bleEngine, 'hasConnectedDevice').mockReturnValue(true);
         setGoogle(true, ['cal1']);
         const entry = await probeRealtime({
@@ -69,21 +69,37 @@ describe('probeRealtime 注册表口径', () => {
             bluetoothEnabled: true,
         });
         expect(entry.status).toBe('ok');
-        expect(entry.detail).toBe('8 项启用');
+        expect(entry.detail).toBe('8 项已配置');
     });
 
-    it('仅 Google 开且已选日历 → 1 项启用', async () => {
-        setGoogle(true, ['cal1']);
+    it('全关 → 未启用', async () => {
+        vi.spyOn(bleEngine, 'hasConnectedDevice').mockReturnValue(false);
+        setGoogle(false, []);
         const entry = await probeRealtime({ ...base, bluetoothEnabled: false });
-        expect(entry.status).toBe('ok');
-        expect(entry.detail).toBe('1 项启用');
+        expect(entry.status).toBe('off');
+        expect(entry.detail).toBe('未启用');
     });
 
-    it('蓝牙默认开但无设备 → warn 含蓝牙未配置', async () => {
+    it('天气开+有城市、新闻开、其余全关 → 2 项已配置', async () => {
+        vi.spyOn(bleEngine, 'hasConnectedDevice').mockReturnValue(false);
         setGoogle(false, []);
         const { bluetoothEnabled: _omit, ...rest } = base;
+        const entry = await probeRealtime({
+            ...rest,
+            weatherEnabled: true,
+            weatherCity: '北京',
+            newsEnabled: true,
+        });
+        expect(entry.status).toBe('ok');
+        expect(entry.detail).toBe('2 项已配置');
+    });
+
+    it('Google 开且已选日历、其余未配 → 1 项已配置', async () => {
+        vi.spyOn(bleEngine, 'hasConnectedDevice').mockReturnValue(false);
+        setGoogle(true, ['cal1']);
+        const { bluetoothEnabled: _omit, ...rest } = base;
         const entry = await probeRealtime(rest);
-        expect(entry.status).toBe('warn');
-        expect(entry.detail).toContain('蓝牙设备·未配置');
+        expect(entry.status).toBe('ok');
+        expect(entry.detail).toBe('1 项已配置');
     });
 });
