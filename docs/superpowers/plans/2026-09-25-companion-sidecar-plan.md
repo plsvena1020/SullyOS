@@ -685,16 +685,19 @@ def run_once(deps):
         return "missing"
     if deps.prev[0] is None:
         deps.prev[0] = dialog
-        deps.prev_opts[0] = deps.capture.grab("options")
+        deps.prev_opts[0] = None  # unseen: first-sighted options screen emits
         return "skipped-quiet"
     status = "skipped-quiet"
     if should_ocr(deps.prev[0], dialog):
         if deps.busy[0]:
             deps.dropped[0] += 1
+            status = "skipped-busy"
         else:
             rows = deps.ocr.recognize(dialog)
             text = "\n".join(r["text"] for r in rows)
-            if not text.strip():
+            # Blank guard: empty string AND the engine's literal blank output
+            # "[]" (Task 4 verbatim) both skip emit. prev still advances.
+            if not text.strip() or text.strip() == "[]":
                 deps.prev[0] = dialog
                 return "skipped-quiet"
             deps.seq[0] += 1
@@ -717,10 +720,12 @@ def run_once(deps):
                     status = "emitted"
     elif deps.busy[0] and opts is not None and prev_opts is not None and should_ocr(prev_opts, opts):
         deps.dropped[0] += 1
+        if status != "emitted":
+            status = "skipped-busy"
     return status
 ```
 
-Plus `main()` wiring: argparse (`--dump-frame`, `--replay <fixture>`, `--port`), config load, bridge start, 500ms loop calling `run_once` with real deps (busy flag around OCR), `--replay` enqueues fixture events verbatim with fresh seq then serves idle.
+Plus `main()` wiring: argparse (`--dump-frame`, `--replay <fixture>`, `--port`), config load, bridge start, 500ms loop calling `run_once` with real deps (busy flag around OCR), `--replay` enqueues fixture events verbatim with fresh seq then serves idle. `--replay` tolerates uncalibrated `roi.json` (falls back to port 18741 with notice); live loop and `--dump-frame` stay strict.
 
 `sidecar/fixtures/demo-events.json`:
 
