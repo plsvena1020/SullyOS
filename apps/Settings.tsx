@@ -3220,15 +3220,35 @@ const Settings: React.FC = () => {
                     🎙️ 语音生成支持 <span className="font-semibold text-slate-500">MiniMax</span>、<span className="font-semibold text-slate-500">鱼声 Fish</span> 和 <span className="font-semibold text-slate-500">ElevenLabs</span>。三家的配置都会保留，最后在底部选择当前引擎。
                 </p>
 
-                <div className="group">
-                    <label className="flex items-center justify-between gap-3 w-full bg-white/50 border border-slate-200/60 rounded-xl px-4 py-2.5 focus:bg-white transition-all cursor-pointer">
-                        <span className="flex-1 min-w-0">
-                            <span className="block text-sm font-semibold text-slate-700">Genie 自建语音</span>
-                            <span className="block text-[11px] text-slate-400 mt-0.5">中文克隆，走 VPS 自建服务；打开后聊天和电话优先用它</span>
-                        </span>
-                        <input type="checkbox" checked={localGenieEnabled} onChange={(e) => setLocalGenieEnabled(e.target.checked)} className="w-4 h-4 accent-primary shrink-0" />
-                    </label>
+                <div className="group rounded-2xl border border-slate-200/70 bg-slate-50/60 p-3">
+                    <div className="space-y-2">
+                        {([
+                            [true, 'GenieTTS 自建语音', '中文克隆，走 VPS 自建服务'],
+                            [false, '语音合成 API', 'MiniMax / 鱼声 / ElevenLabs 三家'],
+                        ] as const).map(([isGenie, name, desc]) => {
+                            const active = localGenieEnabled === isGenie;
+                            return (
+                                <button
+                                    key={name}
+                                    type="button"
+                                    onClick={() => setLocalGenieEnabled(isGenie)}
+                                    className={`w-full flex items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-all ${active ? 'border-primary bg-primary/5 shadow-sm' : 'border-slate-200 bg-white/70 active:bg-white'}`}
+                                >
+                                    <span className={`shrink-0 w-4 h-4 rounded-full border-2 flex items-center justify-center ${active ? 'border-primary' : 'border-slate-300'}`}>
+                                        {active && <span className="w-2 h-2 rounded-full bg-primary" />}
+                                    </span>
+                                    <span className="flex-1 min-w-0">
+                                        <span className={`text-sm font-semibold ${active ? 'text-primary' : 'text-slate-700'}`}>{name}</span>
+                                        <span className="block text-[11px] text-slate-400 mt-0.5">{desc}</span>
+                                    </span>
+                                    {active && <span className="text-[10px] font-bold text-primary shrink-0">使用中</span>}
+                                </button>
+                            );
+                        })}
+                    </div>
                 </div>
+
+                {!localGenieEnabled ? (<>
 
                 <div className="group">
                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block pl-1">MiniMax 服务器</label>
@@ -3387,6 +3407,9 @@ const Settings: React.FC = () => {
                         })}
                     </div>
                 </div>
+                </>) : (
+                    <p className="text-[11px] text-slate-400 pl-1 leading-relaxed">当前使用 Genie 自建语音，切回 API 可继续使用三家引擎</p>
+                )}
 
                 {/* 语音提示词（高级）—— 自定义注入角色 system prompt 的「语音表演指南」，按服务商分别保存 */}
                 <div className="group rounded-2xl border border-slate-200/70 bg-slate-50/60 p-3">
