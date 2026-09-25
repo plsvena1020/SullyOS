@@ -38,6 +38,21 @@ describe('tools', () => {
     await expect(post.run({ api: {}, accounts: [], guard } as never, { status: 'hi', confirm: true })).rejects.toThrow('只读模式');
     expect(audited).toHaveLength(1);
   });
+  it('发现页无 ownerId 时用已绑账号（不匿名）', async () => {
+    const api = { publicTimeline: vi.fn(async () => []) };
+    const guard = { assertAllowed: () => {}, audit: async () => {} };
+    const accounts = [{ ownerId: 'user', instance: 'mstdn.social', handle: '@u', accessToken: 'tok' }];
+    const pub = TOOL_DEFS.find((t) => t.name === 'timeline_public')!;
+    await pub.run({ api, accounts, guard } as never, {});
+    expect(api.publicTimeline).toHaveBeenCalledWith(expect.objectContaining({ instance: 'mstdn.social', accessToken: 'tok' }));
+  });
+  it('没有绑定账号时发现页回落默认实例匿名', async () => {
+    const api = { publicTimeline: vi.fn(async () => []) };
+    const guard = { assertAllowed: () => {}, audit: async () => {} };
+    const pub = TOOL_DEFS.find((t) => t.name === 'timeline_public')!;
+    await pub.run({ api, accounts: [], guard } as never, {});
+    expect(api.publicTimeline).toHaveBeenCalledWith(expect.objectContaining({ accessToken: undefined }));
+  });
   it('点赞失败也被审计', async () => {
     const audited: unknown[] = [];
     const api = { favouriteStatus: async () => { throw new Error('boom'); } };

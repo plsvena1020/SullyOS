@@ -125,9 +125,12 @@ export const TOOL_DEFS = [
     inputSchema: PublicTimelineInput,
     run: (ctx, a) => audited('timeline_public', async (c, p) => {
       c.guard.assertAllowed('timeline_public', p);
-      const acc = p.ownerId ? resolveAccount(c.accounts, p.ownerId) : { instance: process.env.MASTODON_DEFAULT_INSTANCE || 'mastodon.social', accessToken: '' };
+      // 发现页：已绑账号就用它的 token 读（大实例匿名公开流常被拒），没绑才回落默认实例匿名。
+      const acc = p.ownerId
+        ? resolveAccount(c.accounts, p.ownerId)
+        : (c.accounts[0] || { instance: process.env.MASTODON_DEFAULT_INSTANCE || 'mastodon.social', accessToken: '' });
       const list = await c.api.publicTimeline({ instance: acc.instance, accessToken: acc.accessToken || undefined, local: p.local, limit: p.limit });
-      return { ownerId: p.ownerId ?? '', result: { content: [{ type: 'text', text: `取回 ${list.length} 条` }], structuredContent: { statuses: list } } };
+      return { ownerId: acc.ownerId ?? '', result: { content: [{ type: 'text', text: `取回 ${list.length} 条` }], structuredContent: { statuses: list } } };
     })(ctx, PublicTimelineInput.parse(a)),
   },
   {

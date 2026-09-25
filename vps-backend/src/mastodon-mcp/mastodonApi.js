@@ -62,7 +62,11 @@ export function createMastodonClient({ fetchImpl = fetch, pollIntervalMs = 2000,
       const resp = await fetchImpl(`https://${instance}/api/v1/timelines/public?${q}`, { headers });
       let data = null;
       try { data = await resp.json(); } catch { data = { error: `HTTP ${resp.status}` }; }
-      if (!resp.ok) throw new Error(mapMastodonError(resp.status, data));
+      if (!resp.ok) {
+        // 匿名读被要求登录 = 该实例关闭了公开预览，不是 token 类型错。
+        if (!accessToken && resp.status === 422) throw new Error('该实例要求登录才能读公开流，绑定账号后即可看「发现」');
+        throw new Error(mapMastodonError(resp.status, data));
+      }
       return data.map(slim);
     },
     accountStatuses: async ({ instance, accessToken, accountId, limit }) => {

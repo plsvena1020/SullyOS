@@ -22,6 +22,16 @@ describe('mastodonApi', () => {
     const who = await api.verifyCredentials({ instance: 'mstdn.social', accessToken: 'x' });
     expect(who).toEqual({ id: '42', username: 'me', acct: 'me@mstdn.social', display_name: 'Me' });
   });
+  it('匿名读公开流被要求登录时，提示去绑定而不是 app token', async () => {
+    const fetchImpl = vi.fn(async () => jsonResp(422, { error: 'This method requires an authenticated user' }));
+    const api = createMastodonClient({ fetchImpl: fetchImpl as unknown as typeof fetch });
+    await expect(api.publicTimeline({ instance: 'mstdn.social' })).rejects.toThrow('该实例要求登录才能读公开流');
+  });
+  it('带 token 读公开流失败才走通用 422 提示', async () => {
+    const fetchImpl = vi.fn(async () => jsonResp(422, { error: 'This method requires an authenticated user' }));
+    const api = createMastodonClient({ fetchImpl: fetchImpl as unknown as typeof fetch });
+    await expect(api.publicTimeline({ instance: 'mstdn.social', accessToken: 'app-only' })).rejects.toThrow('app token');
+  });
   it('uploadMedia 202 后轮询到 200 有 url 才返回', async () => {
     const calls: string[] = [];
     const fetchImpl = vi.fn(async (url: unknown) => {
