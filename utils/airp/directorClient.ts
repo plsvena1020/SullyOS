@@ -62,6 +62,10 @@ const AIRP_WIRED_TOOLS: readonly string[] = [
   'schedule_cancel',
   'schedule_renew',
   'save_diary',
+  'google_calendar_query',
+  'google_task_query',
+  'google_create_propose',
+  'google_create_execute',
 ];
 
 const RESPONSE_FORMAT_MODEL = /gpt|deepseek/i;

@@ -401,6 +401,10 @@ describe('runAirpDirector — tool round', () => {
     'schedule_cancel',
     'schedule_renew',
     'save_diary',
+    'google_calendar_query',
+    'google_task_query',
+    'google_create_propose',
+    'google_create_execute',
   ])('executes wired catalog tool %s end to end', async (toolName) => {
     const capability = AIRP_CAPABILITIES.find((candidate) =>
       candidate.toolNames.includes(toolName),

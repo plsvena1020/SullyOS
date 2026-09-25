@@ -172,7 +172,7 @@ describe('buildAirpRuntimeSnapshot', () => {
     expect(snap.knowledge).toEqual([]);
     expect(snap.capabilities).not.toBe(AIRP_CAPABILITIES);
     expect(snap.capabilities).toEqual([...DEFAULT_CAPS]);
-    expect(snap.capabilities).toHaveLength(7);
+    expect(snap.capabilities).toHaveLength(DEFAULT_CAPS.length);
   });
 
   it('narrows capabilities to the settings whitelist when non-empty', async () => {
@@ -195,7 +195,10 @@ describe('buildAirpRuntimeSnapshot', () => {
     );
 
     expect(snap.capabilities.some((cap) => cap.risk === 'low_write')).toBe(false);
-    expect(snap.capabilities).toHaveLength(AIRP_CAPABILITIES.length - 2);
+    // 不硬编码被剔除的数量：low_write 能力随目录演进（schedule/diary/google），
+    // 硬编码 -2 只在旧目录下成立，加一个写能力就会误报。
+    const lowWriteTotal = AIRP_CAPABILITIES.filter((c) => c.risk === 'low_write').length;
+    expect(snap.capabilities).toHaveLength(AIRP_CAPABILITIES.length - lowWriteTotal);
   });
 
   it('keeps the low_write capabilities when writable is true', async () => {

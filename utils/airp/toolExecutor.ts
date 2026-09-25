@@ -41,6 +41,11 @@ const CATALOG_TO_REAL: Record<string, string> = {
     schedule_cancel: 'cancel_active_message',
     schedule_renew: 'renew_active_message',
     save_diary: SAVE_DIARY_RUNNER,
+    // Google 日历/待办：读侧主动查询 + 写侧 propose/execute 确认环（dispatchAgenticTool 真名）。
+    google_calendar_query: 'google_calendar_events',
+    google_task_query: 'google_tasks',
+    google_create_propose: 'google_create_propose',
+    google_create_execute: 'google_create_execute',
 };
 
 const TEXT_WEATHER_NEEDS_CITY = '缺少地点，无法查询天气';

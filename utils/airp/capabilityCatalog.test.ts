@@ -12,17 +12,19 @@ const EXPECTED: AirpCapability[] = [
   { id: 'amap_route',  title: '查路线耗时', environment: 'shared', risk: 'read', category: 'location', toolNames: ['amap_route'] },
   { id: 'schedule_write', title: '自管排程', environment: 'browser', risk: 'low_write', category: 'schedule', toolNames: ['schedule_now', 'schedule_cancel', 'schedule_renew'] },
   { id: 'diary_write',    title: '写日记', environment: 'browser', risk: 'low_write', category: 'memory', toolNames: ['save_diary'] },
+  { id: 'google_calendar_read', title: '查 Google 日程与待办（用户自己的日历、节假日）', environment: 'shared', risk: 'read', category: 'schedule', toolNames: ['google_calendar_query', 'google_task_query'] },
+  { id: 'google_calendar_write', title: '帮用户创建 Google 日程或待办（必须先给预览、等用户点头再落盘）', environment: 'browser', risk: 'low_write', category: 'schedule', toolNames: ['google_create_propose', 'google_create_execute'] },
   { id: 'mcp_passthrough', title: 'MCP 工具（白名单展开）', environment: 'shared', risk: 'confirm', category: 'external', toolNames: [] },
 ];
 
 describe('AIRP_CAPABILITIES — locked catalog shape', () => {
-  it('exposes exactly the 9 registered capabilities in order', () => {
-    expect(AIRP_CAPABILITIES).toHaveLength(9);
+  it('exposes exactly the 11 registered capabilities in order', () => {
+    expect(AIRP_CAPABILITIES).toHaveLength(11);
     expect(AIRP_CAPABILITIES).toEqual(EXPECTED);
   });
 
-  it('has 9 unique ids', () => {
-    expect(new Set(AIRP_CAPABILITIES.map((c) => c.id)).size).toBe(9);
+  it('has 11 unique ids', () => {
+    expect(new Set(AIRP_CAPABILITIES.map((c) => c.id)).size).toBe(11);
   });
 
   it('each entry matches its verbatim environment/risk/category/toolNames', () => {
