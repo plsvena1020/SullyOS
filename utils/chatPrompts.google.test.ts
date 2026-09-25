@@ -16,14 +16,29 @@ const EVENT_RAW = {
     start: { dateTime: '2026-09-24T15:00:00+08:00' },
 };
 
-const stubGoogleFetch = () => {
+// 「今天」是 2026-09-23，这条落在昨天——用来验证回看窗口内的事件也会注入
+const PAST_EVENT_RAW = {
+    summary: '上周的聚餐',
+    status: 'confirmed',
+    start: { date: '2026-09-20' },
+};
+
+const OVERDUE_TASK_RAW = {
+    title: '交房租',
+    status: 'needsAction',
+    due: '2026-09-20',
+};
+
+const stubGoogleFetch = (opts: { events?: any[]; tasks?: any[] } = {}) => {
+    const events = opts.events ?? [EVENT_RAW];
+    const tasks = opts.tasks ?? [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: any) => {
         const url = String(input);
         if (url.includes('/api/events')) {
-            return new Response(JSON.stringify({ items: [EVENT_RAW] }), { status: 200 });
+            return new Response(JSON.stringify({ items: events }), { status: 200 });
         }
         if (url.includes('/api/tasks')) {
-            return new Response(JSON.stringify({ items: [] }), { status: 200 });
+            return new Response(JSON.stringify({ items: tasks }), { status: 200 });
         }
         return new Response('{}', { status: 200 });
     });
@@ -68,7 +83,7 @@ describe('Google 日程被动注入（volatile）', () => {
 
     it('开启且有未来事件时注入标题与日期', async () => {
         const volatile = await buildVolatile({ googleEnabled: true });
-        expect(volatile).toContain('### 【Google 日程 · 近期】');
+        expect(volatile).toContain('### 【Google 日程】');
         expect(volatile).toContain('项目评审');
         expect(volatile).toContain('2026-09-24');
     });
@@ -77,5 +92,21 @@ describe('Google 日程被动注入（volatile）', () => {
         const volatile = await buildVolatile({ googleEnabled: true, timeAwarenessEnabled: false });
         expect(volatile).toContain('2026-09-24');
         expect(volatile).not.toContain('15:00');
+    });
+
+    it('回看窗口内已发生的事件也注入（陪伴感靠连续记忆）', async () => {
+        stubGoogleFetch({ events: [PAST_EVENT_RAW, EVENT_RAW] });
+        const volatile = await buildVolatile({ googleEnabled: true });
+        expect(volatile).toContain('上周的聚餐');
+        expect(volatile).toContain('最近发生过');
+        expect(volatile).toContain('接下来');
+    });
+
+    it('逾期待办单独成段，标出原定日期', async () => {
+        stubGoogleFetch({ events: [EVENT_RAW], tasks: [OVERDUE_TASK_RAW] });
+        const volatile = await buildVolatile({ googleEnabled: true });
+        expect(volatile).toContain('交房租');
+        expect(volatile).toContain('已过期还没做完的');
+        expect(volatile).toContain('2026-09-20');
     });
 });

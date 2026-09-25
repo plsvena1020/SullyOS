@@ -591,9 +591,15 @@ export const GoogleManager = {
             const dayMs = 86400000;
             const todayMs = Date.parse(todayKey + 'T00:00:00');
             if (Number.isNaN(todayMs)) return '';
-            const endKey = new Date(todayMs + 3 * dayMs).toISOString().slice(0, 10);
-            const timeMin = new Date(todayMs).toISOString();
-            const timeMax = new Date(todayMs + 3 * dayMs).toISOString();
+            // 分层窗口，不再只给 3 天：
+            //  - 回看 3 个月：char 该知道「你这阵子做过什么」，陪伴感靠的是有连续记忆；
+            //    更早的历史对当下对话价值低，只报数量不逐条列
+            //  - 前瞻 3 个月：够覆盖「下季度」的安排
+            const BACKFILL_DAYS = 92;
+            const LOOKAHEAD_DAYS = 92;
+            const endKey = new Date(todayMs + LOOKAHEAD_DAYS * dayMs).toISOString().slice(0, 10);
+            const timeMin = new Date(todayMs - BACKFILL_DAYS * dayMs).toISOString();
+            const timeMax = new Date(todayMs + LOOKAHEAD_DAYS * dayMs).toISOString();
             const fetchEvents = async (accountId: string, calendarId: string): Promise<any[]> => {
                 try {
                     const res = await googleBridgeFetch(`/api/events?calendarId=${encodeURIComponent(calendarId)}&timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}`, { method: 'GET', headers: { 'X-Google-Account': accountId } });
@@ -614,18 +620,23 @@ export const GoogleManager = {
                 Promise.all(accountIds.flatMap(accountId => (byAccount.get(accountId) || []).map(calendarId => fetchEvents(accountId, calendarId)))),
                 Promise.all(accountIds.map(accountId => fetchTasks(accountId))),
             ]);
-            const events = normalizeGoogleEvents(eventLists.flat())
-                .filter(e => e.title.trim().length > 0 && e.dateKey >= todayKey && e.dateKey <= endKey)
+            const allEvents = normalizeGoogleEvents(eventLists.flat())
+                .filter(e => e.title.trim().length > 0 && e.dateKey <= endKey)
                 .sort((a, b) => a.dateKey < b.dateKey ? -1 : a.dateKey > b.dateKey ? 1 : (a.startText < b.startText ? -1 : 1));
+            // 太久远的（超过回看窗口）不逐条列，只报数量——省 context 又不失「有历史」的印象
+            const RECENT_FLOOR = new Date(todayMs - BACKFILL_DAYS * dayMs).toISOString().slice(0, 10);
+            const recentEvents = allEvents.filter(e => e.dateKey >= RECENT_FLOOR);
+            const olderCount = allEvents.length - recentEvents.length;
+            // 待办只有「未完成且有到期日」的才值得提醒；无到期日的清单不塞进对话
             const tasks = normalizeGoogleTasks(taskLists.flat())
-                .filter(t => t.title.trim().length > 0 && t.status !== 'completed' && t.status !== 'deleted' && t.dueKey != null && t.dueKey <= todayKey)
+                .filter(t => t.title.trim().length > 0 && t.status !== 'completed' && t.status !== 'deleted' && t.dueKey != null)
                 .sort((a, b) => (a.dueKey! < b.dueKey! ? -1 : 1));
-            if (events.length === 0 && tasks.length === 0) return '';
+            if (recentEvents.length === 0 && olderCount === 0 && tasks.length === 0) return '';
             const clockOf = (startText: string): string => {
                 const m = /T(\d{2}:\d{2})/.exec(startText);
                 if (!m) return '';
                 try {
-                    if (charTz && /[zZ]|[+-]\d{2}:?\d{2}$/.test(startText)) {
+                    if (charTz && /[zZ]|[+-]\d{2}:?\d{2}$/.exec(startText)) {
                         const d = new Date(startText);
                         if (!Number.isNaN(d.getTime())) {
                             return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: charTz }).format(d);
@@ -634,18 +645,51 @@ export const GoogleManager = {
                 } catch { /* 回退原文切片 */ }
                 return m[1];
             };
-            const lines: string[] = [];
-            for (const e of events) {
-                let line = `- 「${e.title}」${e.dateKey}`;
+            // 封顶：3 个月窗口下日程可能上百条，逐条列会把 prompt 吃满、
+            // 挤掉人设与对话。过去侧只给最近 40 条（近的更相关），未来侧给 40 条，
+            // 超出只报「另有 N 条」，让角色知道有这回事但不必逐条念。
+            const MAX_EVENTS = 40;
+            const MAX_TASKS = 20;
+            const fmtEvent = (e: typeof recentEvents[number], prefix: string): string => {
+                let line = `${prefix}- 「${e.title}」${e.dateKey}`;
                 const clock = includeClock ? clockOf(e.startText) : '';
                 if (clock) line += ` ${clock}`;
-                lines.push(line);
+                if (e.location) line += ` · ${e.location}`;
+                return line;
+            };
+            const past = recentEvents.filter(e => e.dateKey < todayKey);
+            const upcoming = recentEvents.filter(e => e.dateKey >= todayKey);
+            const lines: string[] = [];
+            if (past.length) {
+                const shown = past.slice(-MAX_EVENTS);
+                lines.push('最近发生过：');
+                for (const e of shown) lines.push(fmtEvent(e, '  '));
+                if (past.length > shown.length) lines.push(`  ……另有 ${past.length - shown.length} 条更早的`);
             }
-            for (const t of tasks) {
-                lines.push(`- 「${t.title}」到期 ${t.dueKey}`);
+            if (upcoming.length) {
+                const shown = upcoming.slice(0, MAX_EVENTS);
+                lines.push('接下来：');
+                for (const e of shown) lines.push(fmtEvent(e, '  '));
+                if (upcoming.length > shown.length) lines.push(`  ……另有 ${upcoming.length - shown.length} 条更晚的`);
+            }
+            if (olderCount > 0) lines.push(`（更早还有 ${olderCount} 条日程）`);
+            if (tasks.length) {
+                const overdue = tasks.filter(t => t.dueKey! < todayKey);
+                const onOrAfter = tasks.filter(t => t.dueKey! >= todayKey);
+                if (overdue.length) {
+                    lines.push('已过期还没做完的：');
+                    for (const t of overdue.slice(0, MAX_TASKS)) lines.push(`  - 「${t.title}」原定 ${t.dueKey}`);
+                    if (overdue.length > MAX_TASKS) lines.push(`  ……另有 ${overdue.length - MAX_TASKS} 条逾期的`);
+                }
+                if (onOrAfter.length) {
+                    lines.push('待办：');
+                    for (const t of onOrAfter.slice(0, MAX_TASKS)) lines.push(`  - 「${t.title}」到期 ${t.dueKey}`);
+                    if (onOrAfter.length > MAX_TASKS) lines.push(`  ……另有 ${onOrAfter.length - MAX_TASKS} 条`);
+                }
             }
             return `
-### 【Google 日程 · 近期】
+### 【Google 日程】
+（这些是你与用户之间真实存在的日程与待办。聊到相关话题时自然地记得，不必刻意逐条汇报。）
 ${lines.join('\n')}
 `;
         } catch {
