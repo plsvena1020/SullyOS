@@ -16,13 +16,14 @@ describe('call registry anchors exist', () => {
         expect(cp).toContain('const resolveSteel');
         expect(cp).toContain('resolveVoiceActingGuide');
     });
-    it('every anchor line contains its pinned symbol', () => {
+    it('every anchor file still contains its pinned symbol', () => {
+        // 按符号全文搜索定位，不依赖 anchor 里的行号：任何窗口在文件上方插行都不会让本测试误报。
+        // 行号只作为「大致在哪」的可读提示保留在 registry 里。
         for (const s of CALL_REGISTRY) {
             expect(s.pin, `site ${s.site} missing pin`).toBeTruthy();
-            const [file, lineNo] = s.anchor.split(':');
+            const [file] = s.anchor.split(':');
             const src = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
-            const line = src.split('\n')[Number(lineNo) - 1] ?? '';
-            expect(line, `site ${s.site} anchor ${s.anchor}`).toContain(s.pin);
+            expect(src, `site ${s.site} pin "${s.pin}" not found in ${file}`).toContain(s.pin);
         }
     });
 });

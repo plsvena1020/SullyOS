@@ -10,7 +10,7 @@ export interface CallSite {
     sources: string[]; // sourceKey 或 'hardcoded:<模块>'
     gates: CallGate[]; visibility: CallVisibility;
     anchor: string; // "文件:行" 实现锚点
-    pin: string; // 锚点行（1-based）必须含有的符号子串：wiring 测试逐条钉死，漂移即红
+    pin: string; // 实现文件里必须存在的符号子串：wiring 测试按符号全文搜索定位，文件被任何窗口改动都不会误报
 }
 
 const G = {
