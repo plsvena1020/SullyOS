@@ -703,7 +703,7 @@ ${identityMap}
             timestamp: Date.now(),
             tags: ['朋友圈'],
             bgStyle: getRandomStyle(),
-            authorType: 'user',
+            authorType: char ? 'character' : 'user',
             ...(char ? { authorCharId: char.id } : {}),
             origin: 'moments',
         };
@@ -999,20 +999,22 @@ ${identityMap}
                         <p className="text-[10px] font-bold text-slate-400 uppercase mb-2">发帖身份</p>
                         <div className="flex gap-3 overflow-x-auto pb-3 no-scrollbar">
                             <button
-                                onClick={() => setSelectedIdentity('user')}
+                                onClick={() => { setSelectedIdentity('user'); if (!identities.some(x => x.ownerId === 'user')) addToast('该身份未绑定，发帖只存本地，可点右上绑定', 'info'); }}
                                 className={`flex flex-col items-center gap-1 shrink-0 w-14 ${selectedIdentity === 'user' ? '' : 'opacity-60'}`}
                             >
                                 <TokenImg value={myAvatarFor()} className={`w-11 h-11 rounded-md object-cover bg-slate-100 ${selectedIdentity === 'user' ? 'ring-2 ring-[#07c160]' : ''}`} />
                                 <span className={`text-[10px] truncate w-full text-center ${selectedIdentity === 'user' ? 'text-[#07c160] font-bold' : 'text-slate-500'}`}>我</span>
+                                <span className="text-xs opacity-60">{identities.some(x => x.ownerId === 'user') ? '已绑' : '未绑'}</span>
                             </button>
                             {characters.map(c => (
                                 <button
                                     key={c.id}
-                                    onClick={() => setSelectedIdentity(c.id)}
+                                    onClick={() => { setSelectedIdentity(c.id); if (!identities.some(x => x.ownerId === c.id)) addToast('该身份未绑定，发帖只存本地，可点右上绑定', 'info'); }}
                                     className={`flex flex-col items-center gap-1 shrink-0 w-14 ${selectedIdentity === c.id ? '' : 'opacity-60'}`}
                                 >
                                     <TokenImg value={c.avatar} className={`w-11 h-11 rounded-md object-cover bg-slate-100 ${selectedIdentity === c.id ? 'ring-2 ring-[#07c160]' : ''}`} />
                                     <span className={`text-[10px] truncate w-full text-center ${selectedIdentity === c.id ? 'text-[#07c160] font-bold' : 'text-slate-500'}`}>{c.name}</span>
+                                    <span className="text-xs opacity-60">{identities.some(x => x.ownerId === c.id) ? '已绑' : '未绑'}</span>
                                 </button>
                             ))}
                         </div>
@@ -1103,7 +1105,7 @@ ${identityMap}
                 <div className="h-8 shrink-0 bg-white" />
                 {identities.length > 0 && (
                     <div className="px-4 py-1.5 bg-white text-[11px] text-slate-500 shrink-0">
-                        已绑：{identities.map(i => `@${i.acct}`).join(' · ')}
+                        已绑：{identities.map(i => `${i.ownerId === 'user' ? '我' : (characters.find(c => c.id === i.ownerId)?.name ?? i.ownerId)} @${i.acct}`).join(' · ')}
                     </div>
                 )}
 
