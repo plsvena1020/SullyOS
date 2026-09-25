@@ -19,7 +19,7 @@
 ## 2. VPS 部署（照 xhs 模式）
 
 - `vps-backend/deploy/google-bridge.service`：WorkingDirectory `/opt/sullyos/sullyos-repo/vps-backend/src/google`，ExecStart `/usr/bin/node run.js`，Restart=always，独立 systemd，不进 run-all。
-- `vps-backend/deploy/caddy/SullyOS.Caddyfile` + 线上 `/etc/caddy/Caddyfile` 两处都加：`handle_path /google-api* { reverse_proxy 127.0.0.1:8839 }`（8838 已被 mastodon-mcp 占用，8839 是下一个空位）。
+- `vps-backend/deploy/caddy/SullyOS.Caddyfile` + 线上 `/etc/caddy/Caddyfile` 两处都加：`handle_path /google-api* { reverse_proxy 127.0.0.1:8841 }`（8838 mastodon-mcp、8839 voice-relay 已占，8841 起为空位）。
 - `/opt/sullyos/.env` 新增变量（全部 secret，不入库）：
 
 ```
@@ -28,7 +28,7 @@ GOOGLE_CLIENT_SECRET=
 GOOGLE_REDIRECT_URI=https://ethernet-vps.bot.cd/google-api/oauth/callback
 GOOGLE_SESSION_KEY=<64 hex>
 GOOGLE_BRIDGE_TOKEN=<配对主码，部署时生成>
-GOOGLE_BRIDGE_PORT=8839
+GOOGLE_BRIDGE_PORT=8841
 GOOGLE_SESSION_FILE=/var/lib/sullyos-google/session/session.json
 GOOGLE_PAIRED_ORIGINS=http://localhost:3000,http://localhost:5173,http://127.0.0.1:5173,<线上前端 origin>
 ```
@@ -43,7 +43,7 @@ GOOGLE_PAIRED_ORIGINS=http://localhost:3000,http://localhost:5173,http://127.0.0
 4. 「重新授权」按钮：只在 REAUTH_REQUIRED 时出现
 5. 「设备」区：显示已登记设备（浏览器/系统 UA 摘要 + 登记时间），可踢掉某台设备
 
-删掉：Client ID 输入框、桥地址输入框（默认写死 `https://ethernet-vps.bot.cd/google-api`，localhost 开发时自动探测 `http://127.0.0.1:8839`）、桥 token 输入框、授权码粘贴框。
+删掉：Client ID 输入框、桥地址输入框（默认写死 `https://ethernet-vps.bot.cd/google-api`，localhost 开发时自动探测 `http://127.0.0.1:8841`）、桥 token 输入框、授权码粘贴框。
 
 ## 4. 配对与设备登记
 
@@ -91,7 +91,7 @@ Google → https://ethernet-vps.bot.cd/google-api/oauth/callback?code&state
 | `vps-backend/deploy/caddy/SullyOS.Caddyfile` | 改 | `/google-api` 反代 |
 | `vps-backend/.env.example` | 改 | 补 `GOOGLE_PAIRED_ORIGINS` / `GOOGLE_SESSION_FILE` |
 | `docs/google-vps-bridge.md` | 新 | 部署与运维手册（含 Caddy 两处都要改的提醒） |
-| `utils/googleBridge.ts` | 改 | 设备 token 鉴权头、桥地址自动探测（localhost → 127.0.0.1:8839）、pair/devices 包装 |
+| `utils/googleBridge.ts` | 改 | 设备 token 鉴权头、桥地址自动探测（localhost → 127.0.0.1:8841）、pair/devices 包装 |
 | `apps/Settings.tsx` | 改 | Google 区块重做为上面的极简形态，删四个输入框 |
 
 ## 7. 数据流

@@ -4704,7 +4704,7 @@ const Settings: React.FC = () => {
                           </div>
                           <div>
                               <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">桥地址（留空用默认）</label>
-                              <input type="text" value={googleBridgeUrl} onChange={e => { setGoogleBridgeUrl(e.target.value); try { localStorage.setItem('aetheros.google.bridgeUrl', e.target.value.trim()); } catch { /* 忽略 */ } }} className="w-full bg-white/80 border border-sky-200 rounded-xl px-3 py-2 text-sm font-mono" placeholder="http://127.0.0.1:8839" />
+                              <input type="text" value={googleBridgeUrl} onChange={e => { setGoogleBridgeUrl(e.target.value); try { localStorage.setItem('aetheros.google.bridgeUrl', e.target.value.trim()); } catch { /* 忽略 */ } }} className="w-full bg-white/80 border border-sky-200 rounded-xl px-3 py-2 text-sm font-mono" placeholder="http://127.0.0.1:8841" />
                               <p className="text-[10px] text-sky-500/60 mt-1">当前生效：{readGoogleBridgeUrl()}</p>
                           </div>
                           <button onClick={connectGoogle} className="w-full py-2 bg-sky-500 text-white text-xs font-bold rounded-xl active:scale-95 transition-transform">连接 Google（新窗口授权）</button>

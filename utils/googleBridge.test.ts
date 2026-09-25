@@ -4,8 +4,8 @@ import { readGoogleBridgeUrl, googleBridgeFetch, createGoogleEvent, createGoogle
 afterEach(() => { vi.restoreAllMocks(); localStorage.clear(); });
 
 describe('googleBridge client', () => {
-  it('缺省指向本地 8839', () => {
-    expect(readGoogleBridgeUrl()).toBe('http://127.0.0.1:8839');
+  it('缺省指向本地 8841', () => {
+    expect(readGoogleBridgeUrl()).toBe('http://127.0.0.1:8841');
   });
   it('透传双 header', async () => {
     localStorage.setItem('aetheros.google.bridgeToken', 'T');
@@ -14,7 +14,7 @@ describe('googleBridge client', () => {
       seen.push([String(input), init?.headers]); return new Response('{}');
     });
     await googleBridgeFetch('/api/accounts', { headers: { 'X-Google-Account': 'g1' } });
-    expect(seen[0][0]).toBe('http://127.0.0.1:8839/api/accounts');
+    expect(seen[0][0]).toBe('http://127.0.0.1:8841/api/accounts');
     expect(seen[0][1]['X-Google-Bridge-Token']).toBe('T');
     expect(seen[0][1]['X-Google-Account']).toBe('g1');
   });

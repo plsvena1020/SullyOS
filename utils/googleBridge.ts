@@ -7,7 +7,7 @@
 const BRIDGE_URL_KEY = 'aetheros.google.bridgeUrl';
 const BRIDGE_TOKEN_KEY = 'aetheros.google.bridgeToken';
 
-export const DEFAULT_GOOGLE_BRIDGE_URL = 'http://127.0.0.1:8839';
+export const DEFAULT_GOOGLE_BRIDGE_URL = 'http://127.0.0.1:8841';
 
 const normalize = (url: string): string => url.trim().replace(/\/+$/, '');
 

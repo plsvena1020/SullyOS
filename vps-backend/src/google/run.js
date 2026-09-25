@@ -23,7 +23,7 @@ const store = createGoogleStore({
     filePath: process.env.GOOGLE_SESSION_FILE || '/var/lib/sullyos-google/session/session.json',
 });
 const bridge = startGoogleBridge({
-    port: Number(process.env.GOOGLE_BRIDGE_PORT || 8839),
+    port: Number(process.env.GOOGLE_BRIDGE_PORT || 8841),
     host: '127.0.0.1',
     token: process.env.GOOGLE_BRIDGE_TOKEN,
     store,
