@@ -2,9 +2,30 @@ import { describe, expect, it } from 'vitest';
 import {
   GOOGLE_SCOPES, buildEventBody, buildGoogleAuthUrl, buildTaskBody, normalizeGoogleEvents,
   normalizeGoogleTasks, mergeHolidayOverlay, isGoogleTokenExpired,
+  formatGoogleEventTime, googleEventLocalDateKey,
 } from './googleCalendar';
 
 describe('googleCalendar pure', () => {
+  it('时刻事件按本地钟点显示，不裸截原始时区', () => {
+    // 真实数据：用户账号时区 America/New_York，但机器在 Asia/Shanghai。
+    // Google 存的串是 '-04:00'，早先 slice(11,16) 会显示 02:39（美东钟点）。
+    const [event] = normalizeGoogleEvents([
+      { id: '1', status: 'confirmed', summary: '回家', start: { dateTime: '2026-09-30T02:39:00-04:00', timeZone: 'Asia/Shanghai' } },
+    ]);
+    const shown = formatGoogleEventTime(event.startText);
+    expect(shown).toMatch(/^\d{2}:\d{2}$/);
+    // 换算到本地（Asia/Shanghai）应为 14:39；若运行环境时区不同，只锁"不等于裸值"这条底线
+    expect(shown).not.toBe('02:39');
+  });
+  it('全天事件显示「全天」，非法输入不崩', () => {
+    expect(formatGoogleEventTime('2026-10-20')).toBe('全天');
+    expect(formatGoogleEventTime('')).toBe('全天');
+    expect(formatGoogleEventTime('not-a-date')).toBe('全天');
+  });
+  it('本地归日：带偏移的时刻事件按本地钟点落日', () => {
+    expect(googleEventLocalDateKey('2026-09-30T02:39:00-04:00')).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(googleEventLocalDateKey('2026-10-20')).toBeNull();
+  });
   it('scope 覆盖日历清单/自有事件/待办/公开假日/邮箱', () => {
     expect(GOOGLE_SCOPES).toContain('calendar.readonly');
     expect(GOOGLE_SCOPES).toContain('calendar.events.owned');

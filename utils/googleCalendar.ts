@@ -72,6 +72,8 @@ export function normalizeGoogleEvents(items: any[]): Array<{
     out.push({
       dateKey,
       title: typeof item?.summary === 'string' ? item.summary : '',
+      // 带偏移量的 ISO 串（'2026-09-30T02:39:00-04:00'）原样留着：显示层用 toDate
+      // 按自带偏移换算成本地钟点，dateKey 则按事件的本地日期落格（见 formatGoogleEventTime）。
       startText:
         typeof start.dateTime === 'string'
           ? start.dateTime
@@ -84,6 +86,38 @@ export function normalizeGoogleEvents(items: any[]): Array<{
     });
   }
   return out;
+}
+
+/**
+ * 把事件时间显示成本地钟点。
+ *
+ * Google 返回两种形态：
+ *  - 全天：`'2026-10-20'`（无时刻）
+ *  - 时刻：`'2026-09-30T02:39:00-04:00'`（带偏移量）或 `'...Z'`（UTC）
+ *
+ * 早先的实现直接 slice(11,16)，于是 `-04:00` 的美东事件原样显示成 02:39，
+ * 用户在自己时区（北京）看到的却是别人的钟点。这里用 Date 按自带偏移换算成本地钟点。
+ */
+export function formatGoogleEventTime(startText: string, fallback = '全天'): string {
+  if (!startText) return fallback;
+  if (!startText.includes('T')) return fallback; // 全天事件没有时刻
+  const d = new Date(startText);
+  if (Number.isNaN(d.getTime())) {
+    // 兜底：解析失败时退回截取，至少别显示 Invalid Date
+    const m = startText.match(/T(\d{2}):(\d{2})/);
+    return m ? `${m[1]}:${m[2]}` : fallback;
+  }
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+/** 事件在本地时区落在哪一天（跨时区事件按本地钟点归日，而非按 UTC 日期）。 */
+export function googleEventLocalDateKey(startText: string): string | null {
+  if (!startText || !startText.includes('T')) return null;
+  const d = new Date(startText);
+  if (Number.isNaN(d.getTime())) return null;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 export function normalizeGoogleTasks(items: any[]): Array<{

@@ -18,7 +18,7 @@ import {
 import { formatLunarShort, lunarMonthLabel, lunarDayLabel, solarToLunarOf } from '../utils/lunarTable';
 import { fetchCnHolidays, getHolidayInfo, dateKeyOf } from '../utils/cnHoliday';
 import { googleBridgeFetch } from '../utils/googleBridge';
-import { normalizeGoogleEvents, normalizeGoogleTasks, mergeHolidayOverlay, GOOGLE_HOLIDAY_CALENDAR_ID } from '../utils/googleCalendar';
+import { normalizeGoogleEvents, normalizeGoogleTasks, mergeHolidayOverlay, formatGoogleEventTime, googleEventLocalDateKey, GOOGLE_HOLIDAY_CALENDAR_ID } from '../utils/googleCalendar';
 import { RealtimeContextManager, resolveCharCity } from '../utils/realtimeContext';
 import type { AnniversaryRepeat } from '../types';
 import { useLocalDateKey } from '../hooks/useLocalDateKey';
@@ -676,7 +676,12 @@ const ScheduleApp: React.FC = () => {
                     const todayKey = localDateKey;
                     const selected = calSelected || todayKey;
                     const dayAnnis = anniversaries.filter(a => isAnniversaryOn(a, selected));
-                    const selGoogleEvents = googleEvents.filter(e => e.dateKey === selected);
+                    // 时刻事件按本地钟点归日（dateKey 是 Google 给的日期部分，可能是事件原时区的日期，
+                    // 与用户所在时区不一致）；全天事件没有时刻，只能用 dateKey。
+                    const selGoogleEvents = googleEvents.filter(e => {
+                        const localKey = googleEventLocalDateKey(e.startText);
+                        return (localKey || e.dateKey) === selected;
+                    });
                     const selGoogleTasks = googleTasks.filter(t => t.dueKey === selected);
                     const dotMap = new Map<string, string[]>();
                     for (const a of anniversaries) {
@@ -689,7 +694,7 @@ const ScheduleApp: React.FC = () => {
                     // Google dots：同 range 当月事件归一化后按 dateKey 计数（渲染处与纪念日 dots 并排）
                     const googleDotMap = new Map<string, number>();
                     for (const e of googleEvents) {
-                        googleDotMap.set(e.dateKey, (googleDotMap.get(e.dateKey) || 0) + 1);
+                        googleDotMap.set(googleEventLocalDateKey(e.startText) || e.dateKey, (googleDotMap.get(googleEventLocalDateKey(e.startText) || e.dateKey) || 0) + 1);
                     }
                     const dotColors = ['bg-pink-400', 'bg-purple-400', 'bg-rose-400', 'bg-fuchsia-400', 'bg-red-300'];
                     return (
@@ -780,7 +785,7 @@ const ScheduleApp: React.FC = () => {
                                         <div key={`${e.calendarId}-${e.dateKey}-${i}`} className={`${theme.card} p-3`}>
                                             <div className={`text-sm font-bold ${theme.text}`}>{e.title}</div>
                                             <div className={`text-[10px] ${theme.textSub} font-mono mt-1`}>
-                                                {e.startText.includes('T') ? e.startText.slice(11, 16) : '全天'}{e.location ? ` · ${e.location}` : ''}
+                                                {formatGoogleEventTime(e.startText)}{e.location ? ` · ${e.location}` : ''}
                                             </div>
                                         </div>
                                     ))}
