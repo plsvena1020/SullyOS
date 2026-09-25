@@ -361,7 +361,7 @@ const MomentsApp: React.FC = () => {
                 return;
             }
             const tool = kind === 'home' ? 'timeline_home' : 'timeline_public';
-            const res = await callMcpTool(server, tool, kind === 'home' ? { ownerId: 'user', limit: 20 } : { limit: 20 });
+            const res = await callMcpTool(server, tool, kind === 'home' ? { ownerId: selectedIdentity, limit: 20 } : { limit: 20 });
             if (controller.signal.aborted) return;
             if (!res.success) throw new Error(res.error || '同步失败');
             const raw = extractStatuses(res.data ?? res.rawText);
@@ -370,7 +370,7 @@ const MomentsApp: React.FC = () => {
             for (const s of raw) {
                 const post = statusToPost(s, server.name || 'mastodon', ownerId, kind === 'public');
                 if (!post) continue;
-                if (kind === 'public' && !isChineseStatus({ language: s.language ?? null, text: post.content })) continue;
+                if (!isChineseStatus({ language: s.language ?? null, text: post.content })) continue;
                 normalized.push(post);
             }
             if (controller.signal.aborted) return;
