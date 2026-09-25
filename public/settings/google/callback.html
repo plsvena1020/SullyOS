@@ -3,65 +3,102 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Google 授权完成</title>
+  <title>Google 授权</title>
   <style>
     body { font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; background: #0f1115; color: #e2e8f0;
            display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; }
     .card { background: #1a1d24; border: 1px solid #2d323c; border-radius: 16px; padding: 28px; max-width: 420px; width: 100%; }
     h1 { font-size: 18px; margin: 0 0 12px; }
-    p { font-size: 14px; line-height: 1.6; color: #94a3b8; margin: 0 0 16px; }
-    code { display: block; background: #0f1115; border: 1px solid #2d323c; border-radius: 8px; padding: 12px;
-           font-family: ui-monospace, monospace; font-size: 12px; color: #7dd3fc; word-break: break-all;
-           max-height: 120px; overflow: auto; margin-bottom: 16px; }
-    button { width: 100%; padding: 12px; border: none; border-radius: 10px; background: #0ea5e9; color: #fff;
-             font-size: 14px; font-weight: 600; cursor: pointer; }
-    button:disabled { background: #334155; cursor: not-allowed; }
+    p { font-size: 14px; line-height: 1.6; color: #94a3b8; margin: 0; }
     .err { color: #f87171; }
+    .ok { color: #4ade80; }
+    code { display: block; background: #0f1115; border: 1px solid #2d323c; border-radius: 8px; padding: 10px;
+           font-family: ui-monospace, monospace; font-size: 11px; color: #7dd3fc; word-break: break-all;
+           margin-top: 14px; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1 id="title">Google 授权</h1>
-    <p id="hint">正在读取授权码…</p>
-    <code id="code" style="display:none"></code>
-    <button id="copy" style="display:none">复制授权码</button>
+    <p id="hint">正在完成连接…</p>
+    <code id="detail" style="display:none"></code>
   </div>
   <script>
     (function () {
+      var title = document.getElementById('title');
+      var hint = document.getElementById('hint');
+      var detail = document.getElementById('detail');
+
+      function fail(msg, raw) {
+        title.textContent = '连接失败';
+        hint.innerHTML = '<span class="err">' + msg + '</span><br>可以关掉本页，回到小手机设置页重试。';
+        if (raw) { detail.textContent = raw; detail.style.display = 'block'; }
+        notify('error', msg);
+      }
+      function notify(type, message, accountId, email) {
+        try {
+          if (window.opener && !window.opener.closed) {
+            window.opener.postMessage(
+              { source: 'google-oauth-callback', type: type, message: message, accountId: accountId, email: email },
+              window.location.origin
+            );
+          }
+        } catch (e) { /* 跨域时忽略：用户会看到本页结果 */ }
+      }
+
       var params = new URLSearchParams(location.search);
       var code = params.get('code');
       var err = params.get('error');
-      var title = document.getElementById('title');
-      var hint = document.getElementById('hint');
-      var codeBox = document.getElementById('code');
-      var btn = document.getElementById('copy');
 
       if (err) {
-        title.textContent = '授权失败';
-        hint.innerHTML = 'Google 返回：<span class="err">' + err + '</span><br>请回到设置页确认回调地址与 Google 后台登记的一致。';
+        fail('Google 返回：' + err);
         return;
       }
       if (!code) {
-        title.textContent = '没有拿到授权码';
-        hint.textContent = '地址栏里没有 code 参数。回到设置页重新点「连接 Google」。';
+        fail('地址栏里没有授权码（code 为空）');
         return;
       }
 
-      // 存进 localStorage，设置页的授权码框会自动读取（省掉手动粘贴）
-      try { localStorage.setItem('aetheros.google.pendingCode', code); } catch (e) {}
+      // 桥地址与 token 从 localStorage 读（同源，localhost:5173 与设置页一致）
+      var bridgeUrl = '';
+      var bridgeToken = '';
+      try {
+        bridgeUrl = (localStorage.getItem('aetheros.google.bridgeUrl') || '').replace(/\/+$/, '');
+        bridgeToken = localStorage.getItem('aetheros.google.bridgeToken') || '';
+      } catch (e) { /* ignore */ }
 
-      title.textContent = '授权成功';
-      hint.textContent = '授权码已存好。回到小手机的设置页，点「完成连接」即可。';
-      codeBox.textContent = code;
-      codeBox.style.display = 'block';
-      btn.style.display = 'block';
-      btn.addEventListener('click', function () {
-        navigator.clipboard.writeText(code).then(function () {
-          btn.textContent = '已复制';
-        }).catch(function () {
-          btn.textContent = '请手动选中复制';
+      if (!bridgeUrl || !bridgeToken) {
+        fail('还没填桥地址或桥 Token', '请回到小手机设置页的「连接 Google」区块填好后重试');
+        return;
+      }
+
+      hint.textContent = '正在用授权码换 token…';
+      fetch(bridgeUrl + '/api/accounts/exchange', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Google-Bridge-Token': bridgeToken },
+        body: JSON.stringify({ code: code }),
+      })
+        .then(function (res) {
+          return res.json().catch(function () { return {}; }).then(function (body) {
+            return { ok: res.ok, status: res.status, body: body };
+          });
+        })
+        .then(function (r) {
+          if (!r.ok) {
+            fail('桥返回 HTTP ' + r.status, r.body && (r.body.error || JSON.stringify(r.body)));
+            return;
+          }
+          // 清掉一次性 code，避免刷新本页重复交换
+          try { localStorage.removeItem('aetheros.google.pendingCode'); } catch (e) {}
+          var email = r.body && r.body.email;
+          title.textContent = '连接成功';
+          hint.innerHTML = '<span class="ok">已连接 ' + (email || '') + '</span><br>这个窗口可以关掉了，小手机那边已经自动更新。';
+          notify('success', '已连接 ' + (email || ''), r.body && r.body.accountId, email);
+          setTimeout(function () { window.close(); }, 1200);
+        })
+        .catch(function (e) {
+          fail('网络错误：' + (e && e.message ? e.message : e));
         });
-      });
     })();
   </script>
 </body>

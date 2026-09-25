@@ -792,6 +792,24 @@ const Settings: React.FC = () => {
       return () => window.cancelAnimationFrame(frame);
   }, [focusProxyConfigOnMount, showProxyConfig]);
 
+  // 授权回调页（public/settings/google/callback.html）在新窗口里换完 token 后
+  // postMessage 回来；这里接收后自动刷新账号列表，用户不用切来切去点「完成连接」。
+  useEffect(() => {
+      const onGoogleOauthMessage = (e: MessageEvent) => {
+          if (e.origin !== window.location.origin) return;
+          const d: any = e.data;
+          if (!d || d.source !== 'google-oauth-callback') return;
+          if (d.type === 'success') {
+              setRtTestStatus(d.message || '已连接');
+              void loadGoogleAccounts();
+          } else if (d.type === 'error') {
+              setRtTestStatus(`连接失败: ${d.message || '未知错误'}`);
+          }
+      };
+      window.addEventListener('message', onGoogleOauthMessage);
+      return () => window.removeEventListener('message', onGoogleOauthMessage);
+  }, []);
+
   // 每次打开实时感知面板时查余额，不消耗抓取 credit。失败不影响其他配置。
   useEffect(() => {
       if (!showRealtimeModal) return;
@@ -840,9 +858,8 @@ const Settings: React.FC = () => {
   const [googleClientId, setGoogleClientId] = useState(() => { try { return localStorage.getItem('aetheros.google.clientId') || ''; } catch { return ''; } });
   const [googleBridgeUrl, setGoogleBridgeUrl] = useState(() => { try { return localStorage.getItem('aetheros.google.bridgeUrl') || ''; } catch { return ''; } });
   const [googleBridgeToken, setGoogleBridgeToken] = useState(() => { try { return localStorage.getItem('aetheros.google.bridgeToken') || ''; } catch { return ''; } });
-  // 回调页（public/settings/google/callback.html）把 code 存进 pendingCode，
-  // 设置页打开时直接取用——省掉从地址栏手贴这一步。
-  const [googleAuthCode, setGoogleAuthCode] = useState(() => { try { return localStorage.getItem('aetheros.google.pendingCode') || ''; } catch { return ''; } });
+  // 授权流程已全自动：回调页换完 token 后 postMessage 回来，这里只接收结果。
+  // （旧的 pendingCode 手动粘贴路径已移除，残留 key 顺手清掉以免误导。）
   const [googleAccounts, setGoogleAccounts] = useState<Array<{ accountId: string; email: string }>>([]);
   const [googleCalendars, setGoogleCalendars] = useState<Record<string, Array<{ id: string; summary: string }>>>({});
   const [googleSelectedCalendars, setGoogleSelectedCalendars] = useState<string[]>(() => {
@@ -2030,7 +2047,8 @@ const Settings: React.FC = () => {
       });
   };
 
-  // 新窗口打开 Google 授权页（Task 1 buildGoogleAuthUrl）；code 由用户粘回下方授权码框
+  // 新窗口打开 Google 授权页（buildGoogleAuthUrl）。回调页（/settings/google/callback.html）
+  // 自己换 token 再 postMessage 回来，全程不经过用户手。
   const connectGoogle = () => {
       const clientId = googleClientId.trim();
       if (!clientId) {
@@ -2040,32 +2058,9 @@ const Settings: React.FC = () => {
       const redirectUri = `${window.location.origin}/settings/google/callback.html`;
       const state = Math.random().toString(36).slice(2) + Date.now().toString(36);
       try { sessionStorage.setItem('aetheros.google.oauthState', state); } catch { /* 忽略 */ }
-      window.open(buildGoogleAuthUrl({ clientId, redirectUri, state }), '_blank', 'noopener');
-      setRtTestStatus('已在新窗口打开 Google 授权页：完成后把地址栏 code 参数粘到下方授权码框点完成连接');
-  };
-
-  // 授权码交桥换 token（POST /api/accounts/exchange { code }，refresh 只存桥内）
-  const exchangeGoogleCode = async () => {
-      const code = googleAuthCode.trim();
-      if (!code) {
-          setRtTestStatus('请先粘贴授权码');
-          return;
-      }
-      setRtTestStatus('正在交换授权码...');
-      try {
-          const res = await googleBridgeFetch('/api/accounts/exchange', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
-          if (!res.ok) {
-              setRtTestStatus(`连接失败: HTTP ${res.status}`);
-              return;
-          }
-          const body = await res.json();
-          setGoogleAuthCode('');
-          try { localStorage.removeItem('aetheros.google.pendingCode'); } catch { /* 忽略 */ }
-          setRtTestStatus(body?.email ? `已连接 ${body.email}` : '已连接');
-          await loadGoogleAccounts();
-      } catch (e: any) {
-          setRtTestStatus(`网络错误: ${e.message}`);
-      }
+      // 不用 noopener：回调页要靠 window.opener.postMessage 把结果送回来。
+      window.open(buildGoogleAuthUrl({ clientId, redirectUri, state }), '_blank');
+      setRtTestStatus('已在新窗口打开 Google 授权页：在那边点同意，完成后会自动回来');
   };
 
   // 测试飞书连接
@@ -4715,13 +4710,7 @@ const Settings: React.FC = () => {
                               <input type="password" value={googleBridgeToken} onChange={e => { setGoogleBridgeToken(e.target.value); try { localStorage.setItem('aetheros.google.bridgeToken', e.target.value.trim()); } catch { /* 忽略 */ } }} className="w-full bg-white/80 border border-sky-200 rounded-xl px-3 py-2 text-sm font-mono" placeholder="VPS 上 /opt/sullyos/.env 的 GOOGLE_BRIDGE_TOKEN" />
                           </div>
                           <button onClick={connectGoogle} className="w-full py-2 bg-sky-500 text-white text-xs font-bold rounded-xl active:scale-95 transition-transform">连接 Google（新窗口授权）</button>
-                          <div>
-                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">授权码（授权后地址栏 code 参数）</label>
-                              <div className="flex gap-2">
-                                  <input type="text" value={googleAuthCode} onChange={e => setGoogleAuthCode(e.target.value)} className="flex-1 min-w-0 bg-white/80 border border-sky-200 rounded-xl px-3 py-2 text-sm font-mono" placeholder="4/0A..." />
-                                  <button onClick={exchangeGoogleCode} className="px-4 py-2 bg-sky-100 text-sky-600 text-xs font-bold rounded-xl active:scale-95 transition-transform whitespace-nowrap">完成连接</button>
-                              </div>
-                          </div>
+                          <p className="text-[10px] text-sky-500/60 leading-relaxed">在新弹窗里点同意，完成后会自动关窗并回到这里刷新账号。</p>
                           {googleAccounts.length > 0 && (
                               <div className="space-y-2">
                                   {googleAccounts.map(a => (
@@ -4749,8 +4738,8 @@ const Settings: React.FC = () => {
                           </div>
                           <p className="text-[10px] text-sky-500/70 leading-relaxed">
                               1. 在 Google Cloud Console 建 OAuth 客户端（Web 应用），回调地址填 {window.location.origin}/settings/google/callback.html<br/>
-                              2. 上方填 Client ID，点「连接 Google」；授权页会跳到回调页并自动收好 code，回本页点「完成连接」<br/>
-                              3. 桥 Token 与 Client ID 一样填在上方即可；refresh token 只存 VPS 桥内，永不回显。<br/>
+                              2. 上方填 Client ID 与桥 Token，点「连接 Google」，在新弹窗点同意即可，窗口会自动关掉并刷新这里<br/>
+                              3. refresh token 只存 VPS 桥内，永不回显。<br/>
                               char 可读取你的日历与待办，也可在对话中主动帮你创建（会先给预览等你确认）。
                           </p>
                       </div>
