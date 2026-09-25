@@ -33,6 +33,7 @@ describe('googleCalendar pure', () => {
     expect(GOOGLE_SCOPES).toContain('https://www.googleapis.com/auth/tasks ');
     expect(GOOGLE_SCOPES).toContain('calendar.events.public.readonly');
     expect(GOOGLE_SCOPES).toContain('userinfo.email');
+    expect(GOOGLE_SCOPES.split(' ')).toContain('https://www.googleapis.com/auth/calendar');
     // 旧值不得残留：完整 scope 包含只读，重复声明无意义
     expect(GOOGLE_SCOPES).not.toContain('calendar.events.readonly');
     expect(GOOGLE_SCOPES).not.toContain('tasks.readonly');

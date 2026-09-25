@@ -50,7 +50,7 @@ export function startGoogleBridge({ port, host = '127.0.0.1', token, store, clie
                 .split(',').map((s) => s.trim()).filter((h) => /^[\w-]+$/.test(h));
             return finish(204, null, {
                 'access-control-allow-origin': origin,
-                'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS',
+                'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
                 'access-control-allow-headers': requestedHeaders.length ? requestedHeaders.join(', ') : DEFAULT_CORS_HEADERS,
                 'access-control-max-age': '86400',
             });
@@ -146,6 +146,59 @@ export function startGoogleBridge({ port, host = '127.0.0.1', token, store, clie
                     method: 'POST',
                     headers: { authorization: `Bearer ${access}`, 'content-type': 'application/json' },
                     body: JSON.stringify(payload ?? {}),
+                });
+            } catch {
+                throw new Error('UPSTREAM_UNREACHABLE');
+            }
+            let data = {};
+            try { data = await upstream.json(); } catch { data = {}; }
+            if (!upstream.ok) {
+                if (upstream.status === 401) {
+                    accessCache.delete(accountId);
+                    throw new Error('REAUTH_REQUIRED');
+                }
+                const err = new Error('UPSTREAM_API_ERROR');
+                err.status = upstream.status;
+                err.data = data;
+                throw err;
+            }
+            return data;
+        };
+
+        const googlePut = async (accountId, upstreamUrl, payload) => {
+            const access = await getAccessToken(accountId);
+            let upstream;
+            try {
+                upstream = await fetch(upstreamUrl, {
+                    method: 'PUT',
+                    headers: { authorization: `Bearer ${access}`, 'content-type': 'application/json' },
+                    body: JSON.stringify(payload ?? {}),
+                });
+            } catch {
+                throw new Error('UPSTREAM_UNREACHABLE');
+            }
+            let data = {};
+            try { data = await upstream.json(); } catch { data = {}; }
+            if (!upstream.ok) {
+                if (upstream.status === 401) {
+                    accessCache.delete(accountId);
+                    throw new Error('REAUTH_REQUIRED');
+                }
+                const err = new Error('UPSTREAM_API_ERROR');
+                err.status = upstream.status;
+                err.data = data;
+                throw err;
+            }
+            return data;
+        };
+
+        const googleDelete = async (accountId, upstreamUrl) => {
+            const access = await getAccessToken(accountId);
+            let upstream;
+            try {
+                upstream = await fetch(upstreamUrl, {
+                    method: 'DELETE',
+                    headers: { authorization: `Bearer ${access}` },
                 });
             } catch {
                 throw new Error('UPSTREAM_UNREACHABLE');
@@ -284,6 +337,55 @@ export function startGoogleBridge({ port, host = '127.0.0.1', token, store, clie
                 try {
                     const data = await googlePost(accountId, upstreamUrl, payload.task ?? {});
                     return finish(200, data);
+                } catch (e) {
+                    if (e?.message === 'UPSTREAM_API_ERROR' && Number.isInteger(e?.status)) return finish(e.status, e.data ?? {});
+                    throw e;
+                }
+            }
+            if (path === '/api/calendars' && method === 'POST') {
+                const payload = await readJsonBody();
+                const accountId = String(req.headers['x-google-account'] || payload.accountId || '');
+                if (!accountId) return finish(400, { error: 'missing x-google-account' });
+                const summary = String(payload.summary || 'SullyOS');
+                try {
+                    const data = await googlePost(accountId, 'https://www.googleapis.com/calendar/v3/calendars', { summary, timeZone: DISPLAY_TIME_ZONE });
+                    return finish(200, data);
+                } catch (e) {
+                    if (e?.message === 'UPSTREAM_API_ERROR' && Number.isInteger(e?.status)) return finish(e.status, e.data ?? {});
+                    throw e;
+                }
+            }
+            const eventIdMatch = path.match(/^\/api\/events\/([^/]+)$/);
+            if (eventIdMatch && method === 'PUT') {
+                const payload = await readJsonBody();
+                const accountId = String(req.headers['x-google-account'] || payload.accountId || '');
+                if (!accountId) return finish(400, { error: 'missing x-google-account' });
+                const calendarId = String(payload.calendarId || '');
+                if (!calendarId) return finish(400, { error: 'missing calendarId' });
+                const eventId = decodeURIComponent(eventIdMatch[1]);
+                const upstreamUrl = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`;
+                try {
+                    const event = { ...(payload.event ?? {}) };
+                    if (event.start?.dateTime && !event.start.timeZone) event.start = { ...event.start, timeZone: DISPLAY_TIME_ZONE };
+                    if (event.end?.dateTime && !event.end.timeZone) event.end = { ...event.end, timeZone: DISPLAY_TIME_ZONE };
+                    const data = await googlePut(accountId, upstreamUrl, event);
+                    return finish(200, data);
+                } catch (e) {
+                    if (e?.message === 'UPSTREAM_API_ERROR' && Number.isInteger(e?.status)) return finish(e.status, e.data ?? {});
+                    throw e;
+                }
+            }
+            if (eventIdMatch && method === 'DELETE') {
+                const payload = await readJsonBody();
+                const accountId = String(req.headers['x-google-account'] || payload.accountId || '');
+                if (!accountId) return finish(400, { error: 'missing x-google-account' });
+                const calendarId = String(url.searchParams.get('calendarId') || payload.calendarId || '');
+                if (!calendarId) return finish(400, { error: 'missing calendarId' });
+                const eventId = decodeURIComponent(eventIdMatch[1]);
+                const upstreamUrl = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`;
+                try {
+                    await googleDelete(accountId, upstreamUrl);
+                    return finish(200, { ok: true });
                 } catch (e) {
                     if (e?.message === 'UPSTREAM_API_ERROR' && Number.isInteger(e?.status)) return finish(e.status, e.data ?? {});
                     throw e;

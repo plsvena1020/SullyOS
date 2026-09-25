@@ -163,4 +163,90 @@ describe('googleBridge', () => {
     expect(body.error.code).toBe(403);
     await b.close();
   });
+  it('POST /api/calendars 返回含 id', async () => {
+    const b = await start({
+      'oauth2.googleapis.com/token': { body: { access_token: 'A', refresh_token: 'REF', expires_in: 3600 } },
+      'www.googleapis.com/oauth2/v2/userinfo': { body: { id: 'g1', email: 'u@x.com' } },
+      'www.googleapis.com/calendar/v3/calendars': { body: { id: 'cal123', summary: 'SullyOS' } },
+    });
+    const ex = await fetch(`http://127.0.0.1:${b.port}/api/accounts/exchange`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-google-bridge-token': 'T' },
+      body: JSON.stringify({ code: 'CODE' }),
+    });
+    expect(ex.status).toBe(200);
+    const r = await fetch(`http://127.0.0.1:${b.port}/api/calendars`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-google-bridge-token': 'T', 'x-google-account': 'g1' },
+      body: JSON.stringify({ summary: 'SullyOS' }),
+    });
+    expect(r.status).toBe(200);
+    const body: any = await r.json();
+    expect(body.id).toBe('cal123');
+    await b.close();
+  });
+  it('PUT /api/events/:eventId 改标题成功', async () => {
+    const b = await start({
+      'oauth2.googleapis.com/token': { body: { access_token: 'A', refresh_token: 'REF', expires_in: 3600 } },
+      'www.googleapis.com/oauth2/v2/userinfo': { body: { id: 'g1', email: 'u@x.com' } },
+      'www.googleapis.com/calendar/v3/calendars/primary/events/ev1': { body: { id: 'ev1', summary: 'Renamed' } },
+    });
+    const ex = await fetch(`http://127.0.0.1:${b.port}/api/accounts/exchange`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-google-bridge-token': 'T' },
+      body: JSON.stringify({ code: 'CODE' }),
+    });
+    expect(ex.status).toBe(200);
+    const r = await fetch(`http://127.0.0.1:${b.port}/api/events/ev1`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-google-bridge-token': 'T', 'x-google-account': 'g1' },
+      body: JSON.stringify({ calendarId: 'primary', event: { summary: 'Renamed' } }),
+    });
+    expect(r.status).toBe(200);
+    const body: any = await r.json();
+    expect(body.summary).toBe('Renamed');
+    await b.close();
+  });
+  it('DELETE /api/events/:eventId 删成功返回 ok', async () => {
+    const b = await start({
+      'oauth2.googleapis.com/token': { body: { access_token: 'A', refresh_token: 'REF', expires_in: 3600 } },
+      'www.googleapis.com/oauth2/v2/userinfo': { body: { id: 'g1', email: 'u@x.com' } },
+      'www.googleapis.com/calendar/v3/calendars/primary/events/ev1': { body: {} },
+    });
+    const ex = await fetch(`http://127.0.0.1:${b.port}/api/accounts/exchange`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-google-bridge-token': 'T' },
+      body: JSON.stringify({ code: 'CODE' }),
+    });
+    expect(ex.status).toBe(200);
+    const r = await fetch(`http://127.0.0.1:${b.port}/api/events/ev1?calendarId=primary`, {
+      method: 'DELETE',
+      headers: { 'x-google-bridge-token': 'T', 'x-google-account': 'g1' },
+    });
+    expect(r.status).toBe(200);
+    const body: any = await r.json();
+    expect(body.ok).toBe(true);
+    await b.close();
+  });
+  it('写路由缺 x-google-account 返回 400', async () => {
+    const b = await start();
+    const r = await fetch(`http://127.0.0.1:${b.port}/api/calendars`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-google-bridge-token': 'T' },
+      body: JSON.stringify({ summary: 'SullyOS' }),
+    });
+    expect(r.status).toBe(400);
+    const body: any = await r.json();
+    expect(body.error).toBe('missing x-google-account');
+    await b.close();
+  });
+  it('未知账号写请求返回 401 REAUTH_REQUIRED', async () => {
+    const b = await start();
+    const r = await fetch(`http://127.0.0.1:${b.port}/api/calendars`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-google-bridge-token': 'T', 'x-google-account': 'ghost' },
+      body: JSON.stringify({ summary: 'SullyOS' }),
+    });
+    expect(r.status).toBe(401);
+    const body: any = await r.json();
+    expect(body.error).toBe('REAUTH_REQUIRED');
+    await b.close();
+  });
 });

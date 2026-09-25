@@ -81,6 +81,37 @@ export const createGoogleTask = ({ accountId, tasklist = '@default', task }: { a
     body: JSON.stringify({ accountId, tasklist, task }),
   }).then((res) => res.json());
 
+/**
+ * 经桥接服务创建日历：POST /api/calendars，.json() 透传。
+ * summary 不校验不清洗。
+ */
+export const createGoogleCalendar = ({ accountId, summary }: { accountId: string; summary: string }): Promise<any> =>
+  googleBridgeFetch('/api/calendars', {
+    method: 'POST',
+    headers: { 'X-Google-Account': accountId },
+    body: JSON.stringify({ accountId, summary }),
+  }).then((res) => res.json());
+
+/**
+ * 经桥接服务更新日历事件：PUT /api/events/{eventId}，.json() 透传。
+ * calendarId/event 不校验不清洗。
+ */
+export const updateGoogleEvent = ({ accountId, calendarId, eventId, event }: { accountId: string; calendarId: string; eventId: string; event: any }): Promise<any> =>
+  googleBridgeFetch(`/api/events/${encodeURIComponent(eventId)}`, {
+    method: 'PUT',
+    headers: { 'X-Google-Account': accountId },
+    body: JSON.stringify({ accountId, calendarId, event }),
+  }).then((res) => res.json());
+
+/**
+ * 经桥接服务删除日历事件：DELETE /api/events/{eventId}?calendarId=，.json() 透传。
+ */
+export const deleteGoogleEvent = ({ accountId, calendarId, eventId }: { accountId: string; calendarId: string; eventId: string }): Promise<any> =>
+  googleBridgeFetch(`/api/events/${encodeURIComponent(eventId)}?calendarId=${encodeURIComponent(calendarId)}`, {
+    method: 'DELETE',
+    headers: { 'X-Google-Account': accountId },
+  }).then((res) => res.json());
+
 export const GoogleBridgeClient = {
   /**
    * 测试桥接服务连接（调 /api/health，免鉴权）。

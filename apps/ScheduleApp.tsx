@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
 import { Task, Anniversary, CharacterProfile } from '../types';
@@ -17,8 +17,8 @@ import {
 } from '../utils/anniversaryEngine';
 import { formatLunarShort, lunarMonthLabel, lunarDayLabel, solarToLunarOf } from '../utils/lunarTable';
 import { fetchCnHolidays, getHolidayInfo, dateKeyOf } from '../utils/cnHoliday';
-import { googleBridgeFetch } from '../utils/googleBridge';
-import { normalizeGoogleEvents, normalizeGoogleTasks, mergeHolidayOverlay, formatGoogleEventTime, googleEventLocalDateKey, GOOGLE_HOLIDAY_CALENDAR_ID } from '../utils/googleCalendar';
+import { googleBridgeFetch, createGoogleCalendar, createGoogleEvent, updateGoogleEvent, deleteGoogleEvent } from '../utils/googleBridge';
+import { normalizeGoogleEvents, normalizeGoogleTasks, mergeHolidayOverlay, formatGoogleEventTime, googleEventLocalDateKey, buildEventBody, GOOGLE_HOLIDAY_CALENDAR_ID } from '../utils/googleCalendar';
 import { RealtimeContextManager, resolveCharCity } from '../utils/realtimeContext';
 import type { AnniversaryRepeat } from '../types';
 import { useLocalDateKey } from '../hooks/useLocalDateKey';
@@ -89,6 +89,10 @@ const THEMES: Record<ThemeMode, any> = {
     }
 };
 
+// Google 读写：SullyOS 专用日历定位（localStorage 存 `accountId::calendarId`，
+// 账号 id 取前缀；无则用首个已勾选账号调 createGoogleCalendar 建 `SullyOS`）。
+const SULLYOS_CALENDAR_KEY = 'aetheros.google.sullyosCalendar';
+
 const ScheduleApp: React.FC = () => {
     const { closeApp, characters, activeCharacterId, apiConfig, addToast, userProfile, characterGroups, realtimeConfig } = useOS();
     const localDateKey = useLocalDateKey();
@@ -106,6 +110,13 @@ const ScheduleApp: React.FC = () => {
     // Add Modal States
     const [showTaskModal, setShowTaskModal] = useState(false);
     const [showAnniModal, setShowAnniModal] = useState(false);
+    // Google 新建/编辑小 modal（calendar 分支读写专用；quest/server_events 不用）
+    const [showGoogleModal, setShowGoogleModal] = useState(false);
+    const [googleEditing, setGoogleEditing] = useState<{ accountId: string; calendarId: string; eventId: string } | null>(null);
+    const [gTitle, setGTitle] = useState('');
+    const [gDate, setGDate] = useState('');
+    const [gTime, setGTime] = useState('');
+    const [gLoc, setGLoc] = useState('');
 
     // Forms
     const [newTaskTitle, setNewTaskTitle] = useState('');
@@ -138,8 +149,11 @@ const ScheduleApp: React.FC = () => {
     const [googleEvents, setGoogleEvents] = useState<ReturnType<typeof normalizeGoogleEvents>>([]);
     const [googleTasks, setGoogleTasks] = useState<ReturnType<typeof normalizeGoogleTasks>>([]);
     const [googleHolidayMap, setGoogleHolidayMap] = useState<Map<string, string>>(new Map());
-    useEffect(() => {
-        let cancelled = false;
+    // Google 改/删定位：与 googleEvents 下标对齐的 `[{ accountId, eventId }]`（normalize 掉 id，靠它找回）。
+    const [googleEventMeta, setGoogleEventMeta] = useState<Array<{ accountId: string; eventId: string }>>([]);
+    const googleLoadCancelledRef = useRef(false);
+    // Google 拉取内核（读写共用：写成功后调它重拉当月；取消语义靠 ref 保持）。
+    const loadGoogleMonth = useCallback(async (cursor: { y: number; m: number }) => {
         (async () => {
             try {
                 let enabled = false;
@@ -150,11 +164,11 @@ const ScheduleApp: React.FC = () => {
                     if (Array.isArray(parsed)) selected = parsed.filter((x): x is string => typeof x === 'string');
                 } catch { /* 读不到 = 不可用，不打扰 */ }
                 if (!enabled || selected.length === 0) {
-                    if (!cancelled) { setGoogleEvents([]); setGoogleTasks([]); setGoogleHolidayMap(new Map()); }
+                    if (!googleLoadCancelledRef.current) { setGoogleEvents([]); setGoogleTasks([]); setGoogleHolidayMap(new Map()); setGoogleEventMeta([]); }
                     return;
                 }
-                const timeMin = new Date(calCursor.y, calCursor.m, 1, 0, 0, 0).toISOString();
-                const timeMax = new Date(calCursor.y, calCursor.m + 1, 1, 0, 0, 0).toISOString();
+                const timeMin = new Date(cursor.y, cursor.m, 1, 0, 0, 0).toISOString();
+                const timeMax = new Date(cursor.y, cursor.m + 1, 1, 0, 0, 0).toISOString();
                 const byAccount = new Map<string, string[]>();
                 for (const key of selected) {
                     const sep = key.indexOf('::');
@@ -199,15 +213,32 @@ const ScheduleApp: React.FC = () => {
                         return Array.isArray(body?.items) ? body.items : [];
                     } catch { return []; }
                 }));
-                if (!cancelled) {
-                    setGoogleEvents(normalizeGoogleEvents(eventLists.flat()));
+                if (!googleLoadCancelledRef.current) {
+                    const normalized = normalizeGoogleEvents(eventLists.flat());
+                    setGoogleEvents(normalized);
                     setGoogleTasks(normalizeGoogleTasks(taskLists.flat()));
                     setGoogleHolidayMap(holidayMap);
+                    // 与 normalized 下标对齐的身份表：逐条重跑 normalize 找幸存者（顺序与 flat 等价），失败静默不挡显示。
+                    try {
+                        const listMeta: Array<{ accountId: string }> = accountIds.flatMap(accountId => (byAccount.get(accountId) || []).map(() => ({ accountId })));
+                        const meta: Array<{ accountId: string; eventId: string }> = [];
+                        eventLists.forEach((items, idx) => {
+                            for (const raw of items) {
+                                if (normalizeGoogleEvents([raw]).length === 0) continue;
+                                meta.push({ accountId: listMeta[idx]?.accountId || '', eventId: typeof raw?.id === 'string' ? raw.id : '' });
+                            }
+                        });
+                        setGoogleEventMeta(meta);
+                    } catch { /* 身份表建不出 = 改/删按钮不显示，不挡列表 */ }
                 }
             } catch { /* Google 不可用时静默，保留本地日历 */ }
         })();
-        return () => { cancelled = true; };
-    }, [calCursor]);
+    }, []);
+    useEffect(() => {
+        googleLoadCancelledRef.current = false;
+        loadGoogleMonth(calCursor);
+        return () => { googleLoadCancelledRef.current = true; };
+    }, [calCursor, loadGoogleMonth]);
     useEffect(() => {
         let cancelled = false;
         (async () => {
@@ -496,6 +527,124 @@ const ScheduleApp: React.FC = () => {
         setAnniversaries(prev => prev.filter(a => a.id !== id));
     };
 
+    // --- Google 读写（calendar 分支专用；quest/server_events 不调用） ---
+
+    // 桥错误透传：REAUTH_REQUIRED 提示重连，其余透传 error 文案。
+    const toastGoogleWriteError = (body: any, fallback: string) => {
+        const code = typeof body?.error === 'string' ? body.error : '';
+        if (code === 'REAUTH_REQUIRED') addToast('Google 授权过期，请到设置页重连', 'error');
+        else addToast(code ? `Google 写入失败：${code}` : fallback, 'error');
+    };
+
+    // 按 calendarId 反查勾选前缀里的 accountId（meta 缺失时的兜底）。
+    const accountIdForCalendar = (calendarId: string): string => {
+        try {
+            const parsed = JSON.parse(localStorage.getItem('aetheros.google.selectedCalendars') || '[]');
+            if (Array.isArray(parsed)) {
+                for (const k of parsed) {
+                    if (typeof k !== 'string') continue;
+                    const sep = k.indexOf('::');
+                    if (sep > 0 && k.slice(sep + 2) === calendarId) return k.slice(0, sep);
+                }
+            }
+        } catch { /* 读不到 = 不可写 */ }
+        return '';
+    };
+
+    // SullyOS 专用日历定位：有 key 直接用，无则用首个已勾选账号建 `SullyOS` 再存 key。
+    const resolveSullyosCalendar = async (): Promise<{ accountId: string; calendarId: string } | null> => {
+        try {
+            const stored = localStorage.getItem(SULLYOS_CALENDAR_KEY);
+            if (stored) {
+                const sep = stored.indexOf('::');
+                const accountId = sep >= 0 ? stored.slice(0, sep) : '';
+                const calendarId = sep >= 0 ? stored.slice(sep + 2) : '';
+                if (accountId && calendarId) return { accountId, calendarId };
+            }
+        } catch { /* 读不到就走创建流程 */ }
+        let firstAccountId = '';
+        try {
+            const parsed = JSON.parse(localStorage.getItem('aetheros.google.selectedCalendars') || '[]');
+            const sel = Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
+            const first = sel[0] || '';
+            const sep = first.indexOf('::');
+            if (sep > 0) firstAccountId = first.slice(0, sep);
+        } catch { /* 无勾选 = 不可写 */ }
+        if (!firstAccountId) { addToast('先在设置页连接 Google', 'error'); return null; }
+        let created: any = null;
+        try {
+            created = await createGoogleCalendar({ accountId: firstAccountId, summary: 'SullyOS' });
+        } catch { created = null; }
+        if (!created || typeof created.id !== 'string' || !created.id) {
+            toastGoogleWriteError(created, 'Google 日历创建失败');
+            return null;
+        }
+        try { localStorage.setItem(SULLYOS_CALENDAR_KEY, `${firstAccountId}::${created.id}`); } catch { /* 存不住就下次再建 */ }
+        return { accountId: firstAccountId, calendarId: created.id };
+    };
+
+    const openGoogleCreate = () => {
+        setGoogleEditing(null);
+        setGTitle('');
+        setGDate(calSelected || localDateKey);
+        setGTime('');
+        setGLoc('');
+        setShowGoogleModal(true);
+    };
+
+    const openGoogleEdit = (e: (typeof googleEvents)[number], meta: { accountId: string; eventId: string }) => {
+        const accountId = meta.accountId || accountIdForCalendar(e.calendarId);
+        if (!accountId || !meta.eventId || !e.calendarId) { addToast('这条日程暂不支持编辑', 'error'); return; }
+        setGoogleEditing({ accountId, calendarId: e.calendarId, eventId: meta.eventId });
+        setGTitle(e.title);
+        setGDate(googleEventLocalDateKey(e.startText) || e.dateKey);
+        const t = formatGoogleEventTime(e.startText);
+        setGTime(t === '全天' ? '' : t);
+        setGLoc(e.location || '');
+        setShowGoogleModal(true);
+    };
+
+    const submitGoogleModal = async () => {
+        if (!gTitle.trim() || !gDate) return;
+        const event = buildEventBody({
+            title: gTitle.trim(),
+            dateKey: gDate,
+            ...(gTime ? { timeText: gTime } : {}),
+            ...(gLoc.trim() ? { location: gLoc.trim() } : {}),
+        });
+        try {
+            if (googleEditing) {
+                const body = await updateGoogleEvent({ accountId: googleEditing.accountId, calendarId: googleEditing.calendarId, eventId: googleEditing.eventId, event });
+                if (body?.error) { toastGoogleWriteError(body, 'Google 更新失败'); return; }
+                addToast('Google 日程已更新', 'success');
+            } else {
+                const target = await resolveSullyosCalendar();
+                if (!target) return;
+                const body = await createGoogleEvent({ accountId: target.accountId, calendarId: target.calendarId, event });
+                if (body?.error) { toastGoogleWriteError(body, 'Google 创建失败'); return; }
+                addToast('已写入 Google 日历', 'success');
+            }
+            setShowGoogleModal(false);
+            await loadGoogleMonth(calCursor);
+        } catch {
+            addToast('Google 写入失败', 'error');
+        }
+    };
+
+    const deleteGoogleRow = async (e: (typeof googleEvents)[number], meta: { accountId: string; eventId: string }) => {
+        const accountId = meta.accountId || accountIdForCalendar(e.calendarId);
+        if (!accountId || !meta.eventId || !e.calendarId) { addToast('这条日程暂不支持删除', 'error'); return; }
+        if (!window.confirm(`删除「${e.title || '无标题'}」？Google 网页端同步删除。`)) return;
+        try {
+            const body = await deleteGoogleEvent({ accountId, calendarId: e.calendarId, eventId: meta.eventId });
+            if (body?.error) { toastGoogleWriteError(body, 'Google 删除失败'); return; }
+            addToast('已删除', 'success');
+            await loadGoogleMonth(calCursor);
+        } catch {
+            addToast('Google 删除失败', 'error');
+        }
+    };
+
     // --- Render Helpers ---
 
     const getDaysUntil = (dateStr: string) => {
@@ -515,6 +664,15 @@ const ScheduleApp: React.FC = () => {
             generateAnniversaryThought(upcomingAnni);
         }
     }, [upcomingAnni]);
+
+    // Google 读写切换：总开关开 + 有勾选日历时 calendar 分支只走 Google（读法照抄拉取内核）。
+    let googleEnabled = false;
+    try {
+        const on = localStorage.getItem('aetheros.google.enabled') === '1';
+        const parsed = JSON.parse(localStorage.getItem('aetheros.google.selectedCalendars') || '[]');
+        const sel = Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
+        googleEnabled = on && sel.length > 0;
+    } catch { googleEnabled = false; }
 
     return (
         <div className={`h-full w-full flex flex-col ${theme.font} ${theme.bg} ${theme.text} relative overflow-hidden transition-colors duration-500`}>
@@ -563,7 +721,7 @@ const ScheduleApp: React.FC = () => {
                     </button>
 
                     {/* Add Button */}
-                    <button onClick={() => { activeTab === 'quest' ? setShowTaskModal(true) : setShowAnniModal(true);  }} className={`p-2 rounded-full active:scale-90 transition-all duration-200 ${theme.accent} ${currentThemeMode === 'minimal' ? 'shadow-[4px_4px_8px_#d1d9e6,-4px_-4px_8px_#ffffff]' : 'hover:bg-white/10'}`}>
+                    <button onClick={() => { if (activeTab === 'calendar' && googleEnabled) { addToast('已连 Google，日程走 Google 日历', 'info'); return; } activeTab === 'quest' ? setShowTaskModal(true) : setShowAnniModal(true);  }} className={`p-2 rounded-full active:scale-90 transition-all duration-200 ${theme.accent} ${currentThemeMode === 'minimal' ? 'shadow-[4px_4px_8px_#d1d9e6,-4px_-4px_8px_#ffffff]' : 'hover:bg-white/10'} ${activeTab === 'calendar' && googleEnabled ? 'opacity-40' : ''}`}>
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
                     </button>
                 </div>
@@ -705,6 +863,10 @@ const ScheduleApp: React.FC = () => {
                             <div className={`text-sm font-bold tracking-wide ${theme.text}`}>{calCursor.y} 年 {calCursor.m + 1} 月</div>
                             <button onClick={() => setCalCursor(c => ({ y: c.m === 11 ? c.y + 1 : c.y, m: c.m === 11 ? 0 : c.m + 1 }))} className={`p-1.5 rounded-full active:scale-90 transition-all duration-200 ${theme.accent}`}>›</button>
                         </div>
+                        {/* Google 新建日程（连上后才显示；写入 SullyOS 专用日历） */}
+                        {googleEnabled && (
+                            <button onClick={openGoogleCreate} className={`w-full py-2 text-xs font-bold transition-all ${theme.buttonPrimary}`}>+ 新建日程</button>
+                        )}
                         {/* 星期表头 */}
                         <div className="grid grid-cols-7 gap-1 text-center">
                             {CAL_WEEKDAYS.map(w => (
@@ -733,9 +895,9 @@ const ScheduleApp: React.FC = () => {
                                     >
                                         <span className={`text-xs font-bold ${isToday ? theme.accent : theme.text}`}>{date.getDate()}</span>
                                         <span className={`text-[8px] leading-none mt-0.5 ${inMonth ? theme.textSub : 'opacity-50'}`}>{lunar}</span>
-                                        {(dots.length > 0 || googleCount > 0) && (
+                                        {((!googleEnabled && dots.length > 0) || googleCount > 0) && (
                                             <span className="absolute bottom-0.5 flex flex-col items-center gap-0.5">
-                                                {dots.length > 0 && (
+                                                {!googleEnabled && dots.length > 0 && (
                                                     <span className="flex gap-0.5">
                                                         {dots.slice(0, 3).map((cid, i) => (
                                                             <span key={cid} className={`w-1 h-1 rounded-full ${dotColors[i % dotColors.length]}`} />
@@ -766,7 +928,7 @@ const ScheduleApp: React.FC = () => {
                                     {(() => { const hi = getHolidayInfo(holidayData, todayKey); return hi ? <span className={hi.isOffDay ? 'text-red-400' : 'text-amber-400'}>{hi.isOffDay ? `法定假日${hi.name ? `· ${hi.name}` : ''}` : `调休补班${hi.name ? `· ${hi.name}` : ''}`}</span> : null; })()}
                                 </div>
                             )}
-                            {dayAnnis.length === 0 ? (
+                            {!googleEnabled && (dayAnnis.length === 0 ? (
                                 <div className={`text-center text-xs py-6 ${theme.textSub}`}>这一天没有时光契约</div>
                             ) : dayAnnis.map(a => (
                                 <div key={a.id} className={`${theme.card} p-3`}>
@@ -776,7 +938,7 @@ const ScheduleApp: React.FC = () => {
                                         {normalizeRepeat(a).lunar ? '农历' : a.date}{normalizeRepeat(a).lunar ? ` (${a.date} 登记)` : ''} · {characters.find(c => c.id === a.charId)?.name}
                                     </div>
                                 </div>
-                            ))}
+                            )))}
                             {/* Google 日程（只读叠加；空时不渲染整段，不打扰） */}
                             {(selGoogleEvents.length > 0 || selGoogleTasks.length > 0) && (
                                 <div className="space-y-2">
@@ -787,6 +949,18 @@ const ScheduleApp: React.FC = () => {
                                             <div className={`text-[10px] ${theme.textSub} font-mono mt-1`}>
                                                 {formatGoogleEventTime(e.startText)}{e.location ? ` · ${e.location}` : ''}
                                             </div>
+                                            {googleEnabled && (() => {
+                                                const meta = googleEventMeta[googleEvents.indexOf(e)];
+                                                const accountId = meta?.accountId || accountIdForCalendar(e.calendarId);
+                                                if (!meta?.eventId || !accountId || !e.calendarId) return null;
+                                                const target = { accountId, eventId: meta.eventId };
+                                                return (
+                                                    <div className="flex gap-2 mt-2">
+                                                        <button onClick={() => openGoogleEdit(e, target)} className={`text-[10px] font-bold px-2 py-1 rounded ${theme.accent}`}>改</button>
+                                                        <button onClick={() => deleteGoogleRow(e, target)} className="text-[10px] font-bold px-2 py-1 rounded text-red-400">删</button>
+                                                    </div>
+                                                );
+                                            })()}
                                         </div>
                                     ))}
                                     {selGoogleTasks.map((t, i) => (
@@ -946,6 +1120,16 @@ const ScheduleApp: React.FC = () => {
                             ))}
                         </div>
                     </div>
+                </div>
+            </Modal>
+
+            {/* Google 日程新建/编辑（calendar 分支读写专用；quest/server_events 不用） */}
+            <Modal isOpen={showGoogleModal} title={googleEditing ? '编辑 Google 日程' : '新建 Google 日程'} onClose={() => setShowGoogleModal(false)} footer={<button onClick={submitGoogleModal} className={`w-full py-3 font-bold transition-all ${theme.buttonPrimary}`}>保存</button>}>
+                <div className={`space-y-4 ${currentThemeMode === 'minimal' ? 'p-2' : ''}`}>
+                    <input value={gTitle} onChange={e => setGTitle(e.target.value)} placeholder="标题" className={`w-full px-4 py-3 text-sm focus:outline-none ${theme.input}`} />
+                    <input type="date" value={gDate} onChange={e => setGDate(e.target.value)} className={`w-full px-4 py-3 text-sm focus:outline-none ${theme.input}`} />
+                    <input type="time" value={gTime} onChange={e => setGTime(e.target.value)} className={`w-full px-4 py-3 text-sm focus:outline-none ${theme.input}`} />
+                    <input value={gLoc} onChange={e => setGLoc(e.target.value)} placeholder="地点（可选）" className={`w-full px-4 py-3 text-sm focus:outline-none ${theme.input}`} />
                 </div>
             </Modal>
         </div>
