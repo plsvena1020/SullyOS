@@ -92,6 +92,24 @@ export const PERCEPTION_CAPABILITIES: PerceptionCapability[] = [
         enabled: (rc) => rc.bluetoothEnabled !== false,
         configured: () => bleEngine.hasConnectedDevice(),
     },
+    {
+        id: 'google',
+        label: 'Google 日历',
+        description: 'Google 日历事件、待办与节假日（char 可感知与主动创建）',
+        tint: 'bg-sky-50 text-sky-600',
+        tintIdle: 'bg-slate-50 text-slate-400',
+        // Google 的配置存在 localStorage（aetheros.google.*），不进 realtimeConfig：
+        // 凭据由 VPS 桥保管，前端只存开关与勾选的日历。
+        enabled: () => {
+            try { return localStorage.getItem('aetheros.google.enabled') === '1'; } catch { return false; }
+        },
+        configured: () => {
+            try {
+                const selected = JSON.parse(localStorage.getItem('aetheros.google.selectedCalendars') || '[]');
+                return Array.isArray(selected) && selected.length > 0;
+            } catch { return false; }
+        },
+    },
 ];
 
 /** 宫格渲染态：on=启用且已配置；off=停用；pending=开着但没配好（灰态提示「未配置」） */

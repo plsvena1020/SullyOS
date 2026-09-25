@@ -839,6 +839,7 @@ const Settings: React.FC = () => {
   const [googleEnabled, setGoogleEnabled] = useState(() => { try { return localStorage.getItem('aetheros.google.enabled') === '1'; } catch { return false; } });
   const [googleClientId, setGoogleClientId] = useState(() => { try { return localStorage.getItem('aetheros.google.clientId') || ''; } catch { return ''; } });
   const [googleBridgeUrl, setGoogleBridgeUrl] = useState(() => { try { return localStorage.getItem('aetheros.google.bridgeUrl') || ''; } catch { return ''; } });
+  const [googleBridgeToken, setGoogleBridgeToken] = useState(() => { try { return localStorage.getItem('aetheros.google.bridgeToken') || ''; } catch { return ''; } });
   const [googleAuthCode, setGoogleAuthCode] = useState('');
   const [googleAccounts, setGoogleAccounts] = useState<Array<{ accountId: string; email: string }>>([]);
   const [googleCalendars, setGoogleCalendars] = useState<Record<string, Array<{ id: string; summary: string }>>>({});
@@ -3651,7 +3652,7 @@ const Settings: React.FC = () => {
                 让AI角色感知真实世界：{PERCEPTION_CAPABILITIES.map((c) => c.label).join('、')}。角色会据此关心你、聊近期热点；新增能力在 perceptionRegistry 登记后自动显示，已启用但未配置完成的会灰态提示。
             </p>
 
-            <div className="grid grid-cols-6 gap-2 text-center">
+            <div className="grid grid-cols-4 gap-2 text-center">
                 {PERCEPTION_CAPABILITIES.map((cap) => {
                     const st = perceptionRenderState(cap, realtimeConfig);
                     return (
@@ -3661,7 +3662,6 @@ const Settings: React.FC = () => {
                             className={`py-3 rounded-xl text-xs font-bold flex flex-col items-center justify-center gap-0.5 ${st === 'on' ? cap.tint : cap.tintIdle}`}
                         >
                             <span>{cap.label}</span>
-                            {st === 'pending' && <span className="text-[9px] font-medium opacity-80">未配置</span>}
                         </div>
                     );
                 })}
@@ -4683,12 +4683,12 @@ const Settings: React.FC = () => {
                   )}
               </div>
 
-              {/* Google 日历（只读叠加；refresh 永不回显，无 token 输入框） */}
+              {/* Google 日历配置（一级宫格在「实时感知」标题区，此处只放连接表单） */}
               <div className="bg-sky-50/50 p-4 rounded-2xl space-y-3">
                   <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                           <Calendar size={20} weight="fill" />
-                          <span className="text-sm font-bold text-sky-700">Google 日历</span>
+                          <span className="text-sm font-bold text-sky-700">连接 Google</span>
                           <StatusBadge badgeKey="google" probe={probeGoogle} />
                       </div>
                       <label className="relative inline-flex items-center cursor-pointer">
@@ -4706,6 +4706,10 @@ const Settings: React.FC = () => {
                               <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">桥地址（留空用默认）</label>
                               <input type="text" value={googleBridgeUrl} onChange={e => { setGoogleBridgeUrl(e.target.value); try { localStorage.setItem('aetheros.google.bridgeUrl', e.target.value.trim()); } catch { /* 忽略 */ } }} className="w-full bg-white/80 border border-sky-200 rounded-xl px-3 py-2 text-sm font-mono" placeholder="http://127.0.0.1:8841" />
                               <p className="text-[10px] text-sky-500/60 mt-1">当前生效：{readGoogleBridgeUrl()}</p>
+                          </div>
+                          <div>
+                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">桥 Token（VPS 部署时生成）</label>
+                              <input type="password" value={googleBridgeToken} onChange={e => { setGoogleBridgeToken(e.target.value); try { localStorage.setItem('aetheros.google.bridgeToken', e.target.value.trim()); } catch { /* 忽略 */ } }} className="w-full bg-white/80 border border-sky-200 rounded-xl px-3 py-2 text-sm font-mono" placeholder="VPS 上 /opt/sullyos/.env 的 GOOGLE_BRIDGE_TOKEN" />
                           </div>
                           <button onClick={connectGoogle} className="w-full py-2 bg-sky-500 text-white text-xs font-bold rounded-xl active:scale-95 transition-transform">连接 Google（新窗口授权）</button>
                           <div>
@@ -4741,10 +4745,10 @@ const Settings: React.FC = () => {
                               <button onClick={loadGoogleAccounts} className="flex-1 py-2 bg-sky-100 text-sky-600 text-xs font-bold rounded-xl active:scale-95 transition-transform">刷新账号</button>
                           </div>
                           <p className="text-[10px] text-sky-500/70 leading-relaxed">
-                              1. 在 Google Cloud Console 建 OAuth 客户端（桌面应用），回调地址填 {`${window.location.origin}/settings/google/callback`}（需与桥 GOOGLE_REDIRECT_URI 一致）<br/>
+                              1. 在 Google Cloud Console 建 OAuth 客户端（Web 应用），回调地址填 {readGoogleBridgeUrl()}/oauth/callback（需与桥 GOOGLE_REDIRECT_URI 一致）<br/>
                               2. 上方填 Client ID，点「连接 Google」完成授权，把地址栏 code 粘回来点「完成连接」<br/>
-                              3. 桥 token 配在桥所在机器的环境变量 GOOGLE_BRIDGE_TOKEN；本机 localStorage 键 aetheros.google.bridgeToken 与之一致即可直连。refresh token 只存桥内，永不回显。<br/>
-                              只读：设置页不做任何写入操作；账号与勾选只存本机。
+                              3. 桥 Token 与 Client ID 一样填在上方即可；refresh token 只存 VPS 桥内，永不回显。<br/>
+                              char 可读取你的日历与待办，也可在对话中主动帮你创建（会先给预览等你确认）。
                           </p>
                       </div>
                   )}
