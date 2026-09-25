@@ -41,6 +41,15 @@ const writeCache = (key: string, entry: StatusEntry) => {
     } catch { /* 存储满就算了 */ }
 };
 
+/** 清掉指定徽章的缓存，下一次渲染立即重探（保存设置后调用）。 */
+export const invalidateBadge = (key: string) => {
+    try {
+        const cache = readCache();
+        delete cache[key];
+        localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+    } catch { /* ignore */ }
+};
+
 interface StatusBadgeProps {
     /** 缓存键，同模块各处共用一份探测结果。 */
     badgeKey: string;

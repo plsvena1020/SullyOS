@@ -19,6 +19,7 @@ import { getEffectiveBridges } from './bridgeRegistry';
 import { ActiveMsgStore } from './activeMsgStore';
 import { loadMcpServers } from './mcpClient';
 import { classifyFetchFailure, probeOriginReachability, toSameOriginProxyUrl } from './networkFailureDiagnosis';
+import { PERCEPTION_CAPABILITIES } from './perceptionRegistry';
 
 export type BridgeProbeStatus = 'ok' | 'warn' | 'err' | 'off' | 'checking';
 
@@ -255,8 +256,8 @@ export const probeCloudBackup = async (apiConfig: APIConfig): Promise<StatusEntr
 };
 
 /**
- * 实时感知：五个子能力各答各的「开了但配置没填全」。全没开是灰；
- * 开了的都齐是绿；开了但缺 Key 报黄缺哪几样。零网络依赖。
+ * 实时感知：以 PERCEPTION_CAPABILITIES 注册表为唯一口径（与宫格同源），
+ * 不再硬编码子集。零网络依赖。
  */
 export const probeRealtime = async (realtimeConfig: RealtimeConfig): Promise<StatusEntry> => {
     const entry: StatusEntry = { key: 'realtime', label: '实时感知', status: 'off', detail: '未启用' };
@@ -279,6 +280,14 @@ export const probeRealtime = async (realtimeConfig: RealtimeConfig): Promise<Sta
         if (!realtimeConfig.feishuBaseId?.trim()) missing.push('飞书·表 ID');
     }
     if (realtimeConfig.xhsEnabled) enabled++;
+    // 新增三项走注册表（与宫格同源；flag 语义与上面五项逐字对应，不再各写一遍）。
+    for (const cap of PERCEPTION_CAPABILITIES) {
+        if (cap.id !== 'perspective' && cap.id !== 'bluetooth' && cap.id !== 'google') continue;
+        if (cap.enabled(realtimeConfig)) {
+            enabled++;
+            if (!cap.configured(realtimeConfig)) missing.push(`${cap.label}·未配置`);
+        }
+    }
     if (enabled === 0) return entry;
     if (missing.length > 0) return { ...entry, status: 'warn', detail: `缺 ${missing.join('、')}` };
     return { ...entry, status: 'ok', detail: `${enabled} 项启用` };
