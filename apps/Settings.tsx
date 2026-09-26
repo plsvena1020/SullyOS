@@ -48,8 +48,8 @@ import {
 } from '../utils/avatarModelBackup';
 import { hasChatCompletionsSuffix, normalizeApiBaseUrl, normalizeApiCredential, normalizeApiModel } from '../utils/apiConfigNormalize';
 import { configFromPreset, findActivePresetId, type PresetSwitchPatch } from '../utils/apiPresetSwitch';
-import StatusBadge, { invalidateBadge } from '../components/StatusBadge';
-import { probeApiConfig, probeAgent, probeBridge, probeAmsgWorker, probeVisionApi, probeCloudBackup, probeRealtime, probeMcpServers, probePerspective } from '../utils/statusPanel';
+import StatusBadge from '../components/StatusBadge';
+import { probeApiConfig, probeAgent, probeBridge, probeAmsgWorker, probeVisionApi, probeCloudBackup, probeMcpServers } from '../utils/statusPanel';
 import { classifyFetchFailure, probeOriginReachability, describeReachabilityProbe, parseTargetUrl, toSameOriginProxyUrl } from '../utils/networkFailureDiagnosis';
 import type { StatusEntry } from '../utils/statusPanel';
 import { PERCEPTION_CAPABILITIES, perceptionRenderState } from '../utils/perceptionRegistry';
@@ -1866,8 +1866,7 @@ const Settings: React.FC = () => {
           perspectiveSummaryThreshold: Math.max(parseInt(rtPerspectiveThreshold, 10) || 500, 10),
       };
       updateRealtimeConfig(updates);
-      invalidateBadge('realtime');
-      invalidateBadge('perspective');
+
       RealtimeContextManager.clearCache();
       const nextRealtimeConfig = { ...realtimeConfig, ...updates };
       // 云端凭据 + 按配置裁剪过的提示词一起刷，否则角色到点会照着旧提示词调已关掉的工具。
@@ -2128,8 +2127,7 @@ const Settings: React.FC = () => {
                   }
               };
               updateRealtimeConfig(xhsUpdates);
-              invalidateBadge('realtime');
-      invalidateBadge('perspective');
+        
               const nextConfig = { ...realtimeConfig, ...xhsUpdates };
               syncAmsgToolConfigAndPrompts(nextConfig, { characters, userProfile, groups });
           } else {
@@ -3666,12 +3664,6 @@ const Settings: React.FC = () => {
         {/* 实时感知配置区域 */}
         <SettingsSection
             title="实时感知"
-            badge={
-                <div className="flex items-center gap-1.5">
-                    <StatusBadge badgeKey="realtime" probe={() => probeRealtime(realtimeConfig)} />
-                    <StatusBadge badgeKey="perspective" probe={() => probePerspective(realtimeConfig)} />
-                </div>
-            }
             icon={
                 <div className="p-2 bg-violet-100/50 rounded-xl text-violet-600">
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
