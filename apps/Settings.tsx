@@ -1867,6 +1867,7 @@ const Settings: React.FC = () => {
       };
       updateRealtimeConfig(updates);
       invalidateBadge('realtime');
+      invalidateBadge('perspective');
       RealtimeContextManager.clearCache();
       const nextRealtimeConfig = { ...realtimeConfig, ...updates };
       // 云端凭据 + 按配置裁剪过的提示词一起刷，否则角色到点会照着旧提示词调已关掉的工具。
@@ -2128,6 +2129,7 @@ const Settings: React.FC = () => {
               };
               updateRealtimeConfig(xhsUpdates);
               invalidateBadge('realtime');
+      invalidateBadge('perspective');
               const nextConfig = { ...realtimeConfig, ...xhsUpdates };
               syncAmsgToolConfigAndPrompts(nextConfig, { characters, userProfile, groups });
           } else {
