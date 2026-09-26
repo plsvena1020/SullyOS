@@ -1208,6 +1208,34 @@ export const owesInstantChatReply = (charId: string): boolean =>
   !!getInstantChatPending(charId) || isInstantChatSendInFlight(charId);
 
 /**
+ * tool_pack 上云附带的 Google 段（W2 前端打包）。
+ *
+ * 读本机三件套（与设置页同源：`aetheros.google.enabled` 须为 '1'、
+ * `aetheros.google.selectedCalendars` 为 `accountId::calendarId` 字符串数组的 JSON、
+ * `aetheros.google.bridgeUrl` 为桥地址），拼成 buildToolPack 的 google 参数形状。
+ * 任一缺失/损坏/读不动都返回 undefined——这时 buildToolPack 照旧不写 google 键，
+ * worker 侧照旧 fail-closed（GOOGLE_NOT_ENABLED），不改任何老行为。
+ *
+ * 形状校验（可达性、条目 `::` 切分）收敛在 buildToolPack 内部，这里只做「读得到」，
+ * 不做第二遍判断，两处各写各的只会分叉。
+ */
+export const readGoogleToolPackSegment = ():
+  | { enabled: boolean; selection: string[]; bridgeUrl: string }
+  | undefined => {
+  try {
+    if (localStorage.getItem('aetheros.google.enabled') !== '1') return undefined;
+    const raw = localStorage.getItem('aetheros.google.selectedCalendars');
+    const bridgeUrl = localStorage.getItem('aetheros.google.bridgeUrl');
+    if (raw == null || bridgeUrl == null) return undefined;
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return undefined;
+    return { enabled: true, selection: parsed as string[], bridgeUrl };
+  } catch {
+    return undefined;
+  }
+};
+
+/**
  * 角色侧云端状态的两条条目（fire_pack + tool_pack）。
  *
  * 「哪个 namespace 配哪个 key 配哪个 build 函数」只在这里写一遍：排程和批量同步两条路
@@ -1225,11 +1253,11 @@ const buildCharStateEntries = async (
     value: await packStateValue(JSON.stringify(firePack)),
     updatedAt,
   },
-  // v2 服务端工具循环的角色侧数据（recall 月度总结 / XHS 开关 / 角色名）。
+  // v2 服务端工具循环的角色侧数据（recall 月度总结 / XHS 开关 / 角色名 / Google 勾选）。
   {
     namespace: amsgStateNamespace(char.id),
     key: AMSG_TOOL_PACK_KEY,
-    value: await packStateValue(JSON.stringify(buildToolPack(char))),
+    value: await packStateValue(JSON.stringify(buildToolPack(char, readGoogleToolPackSegment()))),
     updatedAt,
   },
 ];

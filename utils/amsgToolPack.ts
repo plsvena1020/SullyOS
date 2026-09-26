@@ -48,6 +48,22 @@ export interface AmsgToolPack {
    * worker 渲染「你所在的城市」行用；没有就不出那一行，老 worker 不读它，零影响。
    */
   charProvince?: string;
+  /**
+   * Google 日历（worker 侧只读）：selection 沿用 `accountId::calendarId` 字符串数组，
+   * 与设置页 localStorage['aetheros.google.selectedCalendars'] 同形；bridgeUrl 必须是
+   * 公网可达地址（W2 打包点用 isWorkerReachableUrl 卡掉本机回环与私网段，worker 够不着的
+   * 地址不上云）。全可选——缺键老包行为不变；token 永不进包（只走 worker secret）。
+   */
+  google?: AmsgToolPackGoogle;
+}
+
+/** tool_pack 里的 Google 侧数据（token 永不进包，只走 worker secret）。 */
+export interface AmsgToolPackGoogle {
+  enabled: boolean;
+  /** `accountId::calendarId` 字符串数组，与设置页同形。 */
+  selection: string[];
+  /** 公网可达的桥地址（本机回环与私网不上云）。 */
+  bridgeUrl: string;
 }
 
 /**
@@ -131,7 +147,15 @@ export const isWorkerReachableUrl = (url: string): boolean => {
   } catch { return false; }
 };
 
-export const buildToolPack = (char: CharacterProfile): AmsgToolPack => ({
+export const buildToolPack = (
+  char: CharacterProfile,
+  /**
+   * Google 三件套（W2 由调用方现读 localStorage 现传，本模块是环境无关叶子，
+   * 自己不碰 localStorage）。缺省/关掉/空勾选/桥不可达一律不写键——老包行为不变，
+   * worker 侧照旧 fail-closed。token 没有参数位，永不进包。
+   */
+  google?: { enabled: boolean; selection: string[]; bridgeUrl: string },
+): AmsgToolPack => ({
   v: 1,
   charName: char.name,
   xhsEnabled: !!char.xhsEnabled,
@@ -150,6 +174,21 @@ export const buildToolPack = (char: CharacterProfile): AmsgToolPack => ({
   ...(char.location?.city?.trim() ? { charCity: char.location.city.trim() } : {}),
   // 省也带上（worker「你所在的城市」行用；没有就不出那一行）。
   ...(char.location?.province?.trim() ? { charProvince: char.location.province.trim() } : {}),
+  // Google：开关开 + 有有效勾选 + 桥公网可达才带；CF worker 连不上 127.*/私网，
+  // 带了只会教角色用一个必失败的工具（与 xhsMcpConfig 同一护栏思路）。
+  ...(() => {
+    if (!google || google.enabled !== true) return {};
+    const bridgeUrl = google.bridgeUrl?.trim();
+    if (!bridgeUrl || !isWorkerReachableUrl(bridgeUrl)) return {};
+    // 坏形状条目顺手滤掉（worker 侧按 `::` 切分，这边同口径）；全坏等于没勾选。
+    const selection = (google.selection || []).filter((key) => {
+      if (typeof key !== 'string') return false;
+      const sep = key.indexOf('::');
+      return sep > 0 && !!key.slice(0, sep).trim() && !!key.slice(sep + 2).trim();
+    });
+    if (selection.length === 0) return {};
+    return { google: { enabled: true, selection, bridgeUrl } };
+  })(),
 });
 
 /**
@@ -240,6 +279,21 @@ export const parseToolPack = (value: string): AmsgToolPack | null => {
       !Array.isArray(parsed.memories)
     ) {
       return null;
+    }
+    // google 是可选护栏字段：坏形状只剥离它，不连累整包（recall/记忆照跑，
+    // 与 parseToolConfig 丢坏 MCP 条目的思路一致）。
+    const g = (parsed as Record<string, unknown>).google;
+    if (g !== undefined) {
+      const gg = g as { enabled?: unknown; selection?: unknown; bridgeUrl?: unknown };
+      if (
+        !gg || typeof gg !== 'object' ||
+        gg.enabled !== true ||
+        !Array.isArray(gg.selection) ||
+        !(gg.selection as unknown[]).every((s) => typeof s === 'string') ||
+        typeof gg.bridgeUrl !== 'string'
+      ) {
+        delete (parsed as Record<string, unknown>).google;
+      }
     }
     return parsed as AmsgToolPack;
   } catch {

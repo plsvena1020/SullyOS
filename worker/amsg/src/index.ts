@@ -194,6 +194,14 @@ interface Env extends NativeFcmEnv {
   /** 可选共享密钥；配了才校验 X-Client-Token，不配则端点全开。 */
   AMSG_SERVER_TOKEN?: string;
   /**
+   * Google 桥地址（明文 var，见 wrangler.toml [vars]）与桥 token（secret，
+   * 只 `wrangler secret put GOOGLE_BRIDGE_TOKEN` 进 Cloudflare，永不进包/进仓）。
+   * buildToolCtx 用它俩拼 ctx.googleFetch；缺了则 Google 工具走结构化失败，
+   * 不影响其他工具（fail-closed）。
+   */
+  GOOGLE_BRIDGE_URL: string;
+  GOOGLE_BRIDGE_TOKEN: string;
+  /**
    * VPS 宿主自报的运行时标志（sullyos-service.js 注入）：'vps' 表示这份 worker 正跑在
    * SullyOS VPS 兼容层上（没有 DO，定时任务由 node-cron 兜底）。/config-check 把它
    * 转发成 runtime 字段——前端用它区分「VPS 上天生没有 DO」和「CF 上代码新了绑定
@@ -481,8 +489,44 @@ const laterOf = (a: number | null, b: number | null): number | null =>
  *
  * 纯构造：解析与「解析不出来怎么办」都留在 onBeforeFire（它才知道 taskId / charId 这些
  * 报错上下文），这里只管把两份已经验好的数据装成 ctx。
+ *
+ * Google 桥凭据走模块级注入（onBeforeFire 的 FireCtx 够不到 env，上游 hook 签名只给
+ * 任务/状态口；与 configureAutonomyFireDb / configurePlateHomeEnv 同模式）：
+ * buildWorkerConfig 每次进请求拿 env 刷新，buildToolCtx 按当次 fire 打包进 toolCtx。
  */
-const buildToolCtx = (
+let googleBridgeUrl = '';
+let googleBridgeToken = '';
+
+/** export 只为单测（见 googleToolCtx.test.ts）：刷新当次请求的桥地址/token。 */
+export const configureGoogleBridgeEnv = (deps: { url?: unknown; token?: unknown } | null): void => {
+  const url = typeof deps?.url === 'string' ? deps.url.trim().replace(/\/+$/, '') : '';
+  googleBridgeUrl = /^https?:\/\//i.test(url) ? url : '';
+  googleBridgeToken = typeof deps?.token === 'string' ? deps.token : '';
+};
+
+/**
+ * tool_pack.google.selection（`accountId::calendarId` 字符串数组）→ ctx.googleSelection。
+ * 写法照抄 readGoogleSelection 本地回落分支（utils/agenticTools.ts）：按首个 `::`
+ * 切分，坏形状（非串 / 无分隔 / 任一侧为空）跳过，不抛。
+ */
+const parseGoogleSelectionKeys = (
+  selection: unknown,
+): Array<{ accountId: string; calendarId: string }> => {
+  const out: Array<{ accountId: string; calendarId: string }> = [];
+  if (!Array.isArray(selection)) return out;
+  for (const key of selection) {
+    if (typeof key !== 'string') continue;
+    const sep = key.indexOf('::');
+    if (sep < 0) continue;
+    const accountId = key.slice(0, sep);
+    const calendarId = key.slice(sep + 2);
+    if (accountId && calendarId) out.push({ accountId, calendarId });
+  }
+  return out;
+};
+
+/** export 只为单测（见 googleToolCtx.test.ts）：调用方只读 buildToolCtx 拼出的 ctx。 */
+export const buildToolCtx = (
   pack: AmsgToolPack,
   config: AmsgToolConfig,
 ): { toolCtx: AgenticToolCtx; proxyWorkerUrl: string | null; xhsCookie: string; xhsBridgeToken: string } => {
@@ -513,6 +557,30 @@ const buildToolCtx = (
         commentParentIdCache: new Map(),
       },
       lastXhsNotesRef: { current: [] },
+      // Google：tool_pack.google 有才透传（无包 → 两字段都不设，fail-closed 不变）。
+      // selection 按 `::` 切分、坏形状跳过（与 readGoogleSelection 本地回落分支同口径，
+      // 见 utils/agenticTools.ts）；googleFetch 经 env 的桥地址 + secret token 出网
+      // （token 永不进包），10s 超时（AbortSignal.timeout；realtimeWorldCore 那份 8s
+      // AbortController 是常驻天气注入的写法，这里按 lane 规格用 10s）。
+      ...(pack.google
+        ? {
+            googleSelection: parseGoogleSelectionKeys(pack.google.selection),
+            googleFetch: (path: string, init?: RequestInit): Promise<Response> => {
+              const rawHeaders = init?.headers;
+              const headers: Record<string, string> = rawHeaders instanceof Headers
+                ? Object.fromEntries(rawHeaders.entries())
+                : { ...((rawHeaders as Record<string, string> | undefined) ?? {}) };
+              headers['X-Google-Bridge-Token'] = googleBridgeToken;
+              // ...init 在前：method/body 照单透传（写路径 POST /api/events 靠它），
+              // signal/headers 在后：超时与鉴权头恒定覆盖。
+              return fetch(`${googleBridgeUrl}${path}`, {
+                ...init,
+                signal: AbortSignal.timeout(10000),
+                headers,
+              });
+            },
+          }
+        : {}),
     },
     proxyWorkerUrl: config.proxyWorkerUrl ?? null,
     xhsCookie: config.xhsMcpConfig?.cookie ?? '',
@@ -2567,6 +2635,9 @@ export const buildWorkerConfig = (env: Env) => {
     HOME_URL: homeEndpoint.HOME_URL ?? 'http://127.0.0.1:8837',
     AMSG_CLIENT_TOKEN: homeEndpoint.AMSG_CLIENT_TOKEN ?? '',
   });
+  // Google 桥：地址明文 var、token 走 secret；onBeforeFire 的 ctx 够不到 env，
+  // 这里按请求刷新模块级快照（与上面两份同模式），buildToolCtx 打包进 toolCtx。
+  configureGoogleBridgeEnv({ url: env.GOOGLE_BRIDGE_URL, token: env.GOOGLE_BRIDGE_TOKEN });
   return {
     // db 缺省时 factory 自动用 createD1Adapter(env.DB)
     masterKey: env.AMSG_MASTER_KEY,

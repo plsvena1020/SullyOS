@@ -165,6 +165,13 @@ export interface AgenticToolCtx {
      * 生产缺省 googleBridgeFetch；单测注入 stub。纯函数层只经它出网，不直调全局 fetch。
      */
     googleFetch?: (path: string, init?: RequestInit) => Promise<Response>;
+    /**
+     * Google 已选日历（云端 worker 回落）：worker 把 tool_pack.google.selection
+     * 按 `::` 切好经这里递进来；readGoogleSelection 非空时优先用它，不碰
+     * localStorage（worker 内根本没有 localStorage，直读会 fail-closed）。
+     * 浏览器本地调用不带它，照旧走 localStorage 回落分支。
+     */
+    googleSelection?: Array<{ accountId: string; calendarId: string }>;
 }
 
 // ─── RECALL ─────────────────────────────────────────────────────────────────
@@ -1015,39 +1022,50 @@ const GOOGLE_ENABLED_KEY = 'aetheros.google.enabled';
 const GOOGLE_SELECTED_KEY = 'aetheros.google.selectedCalendars';
 
 /** 读勾选：未启用 / 无勾选 / 读不动一律结构化抛错（返回 [] 会让角色以为“查了但没有”）。 */
-function readGoogleSelection(): Array<{ accountId: string; calendarId: string }> {
-    let enabled = false;
-    let raw = '[]';
-    try {
-        enabled = localStorage.getItem(GOOGLE_ENABLED_KEY) === '1';
-        raw = localStorage.getItem(GOOGLE_SELECTED_KEY) || '[]';
-    } catch (e: any) {
-        throw new Error(`GOOGLE_NOT_ENABLED: 读不到 Google 授权状态 (${e?.message || e})`);
-    }
-    if (!enabled) {
-        throw new Error('GOOGLE_NOT_ENABLED: Google 未启用，去设置页开启并授权');
-    }
-    let parsed: unknown;
-    try {
-        parsed = JSON.parse(raw);
-    } catch {
-        throw new Error('GOOGLE_NOT_ENABLED: 已选日历数据损坏，去设置页重选');
-    }
-    const out: Array<{ accountId: string; calendarId: string }> = [];
-    if (Array.isArray(parsed)) {
-        for (const key of parsed) {
-            if (typeof key !== 'string') continue;
-            const sep = key.indexOf('::');
-            if (sep < 0) continue;
-            const accountId = key.slice(0, sep);
-            const calendarId = key.slice(sep + 2);
-            if (accountId && calendarId) out.push({ accountId, calendarId });
+function readGoogleSelection(ctx?: AgenticToolCtx): Array<{ accountId: string; calendarId: string }> {
+    // 云端回落优先：worker 把 tool_pack.google.selection 切好经 ctx 递进来，
+    // 非空才用（空数组/全坏等于没带，继续走本地回落；worker 内回落分支照旧 fail-closed）。
+    const fromCtx = Array.isArray(ctx?.googleSelection)
+        ? ctx.googleSelection.filter((s) =>
+            !!s && typeof s.accountId === 'string' && !!s.accountId &&
+            typeof s.calendarId === 'string' && !!s.calendarId)
+        : [];
+    if (fromCtx.length > 0) {
+        return fromCtx;
+    } else {
+        let enabled = false;
+        let raw = '[]';
+        try {
+            enabled = localStorage.getItem(GOOGLE_ENABLED_KEY) === '1';
+            raw = localStorage.getItem(GOOGLE_SELECTED_KEY) || '[]';
+        } catch (e: any) {
+            throw new Error(`GOOGLE_NOT_ENABLED: 读不到 Google 授权状态 (${e?.message || e})`);
         }
+        if (!enabled) {
+            throw new Error('GOOGLE_NOT_ENABLED: Google 未启用，去设置页开启并授权');
+        }
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(raw);
+        } catch {
+            throw new Error('GOOGLE_NOT_ENABLED: 已选日历数据损坏，去设置页重选');
+        }
+        const out: Array<{ accountId: string; calendarId: string }> = [];
+        if (Array.isArray(parsed)) {
+            for (const key of parsed) {
+                if (typeof key !== 'string') continue;
+                const sep = key.indexOf('::');
+                if (sep < 0) continue;
+                const accountId = key.slice(0, sep);
+                const calendarId = key.slice(sep + 2);
+                if (accountId && calendarId) out.push({ accountId, calendarId });
+            }
+        }
+        if (out.length === 0) {
+            throw new Error('GOOGLE_NOT_ENABLED: 未勾选任何日历，去设置页勾选');
+        }
+        return out;
     }
-    if (out.length === 0) {
-        throw new Error('GOOGLE_NOT_ENABLED: 未勾选任何日历，去设置页勾选');
-    }
-    return out;
 }
 
 /**
@@ -1098,7 +1116,7 @@ export async function runGoogleCalendarEvents(
     args: { timeMin: string; timeMax: string; keyword?: string },
 ): Promise<GoogleCalendarEventHit[]> {
     const fetchImpl = ctx.googleFetch ?? googleBridgeFetch;
-    const selection = readGoogleSelection();
+    const selection = readGoogleSelection(ctx);
     const lists = await Promise.all(selection.map(({ accountId, calendarId }) =>
         readGoogleBridgeItems(
             fetchImpl,
@@ -1119,7 +1137,7 @@ export async function runGoogleTasks(
     _args: Record<string, never>,
 ): Promise<GoogleTaskHit[]> {
     const fetchImpl = ctx.googleFetch ?? googleBridgeFetch;
-    const selection = readGoogleSelection();
+    const selection = readGoogleSelection(ctx);
     const accountIds = [...new Set(selection.map(s => s.accountId))];
     const lists = await Promise.all(accountIds.map(accountId =>
         readGoogleBridgeItems(fetchImpl, `/api/tasks?tasklist=${encodeURIComponent('@default')}`, accountId)
@@ -1156,8 +1174,7 @@ export async function proposeGoogleCreate(
     ctx: AgenticToolCtx,
     args: ProposeGoogleCreateArgs,
 ): Promise<{ summary: string; payload: object; kind: string }> {
-    void ctx;
-    const selection = readGoogleSelection();
+    const selection = readGoogleSelection(ctx);
     if (args.kind === 'event') {
         if (!args.dateKey) {
             throw new Error('GOOGLE_MISSING_FIELD: 创建事件缺 dateKey，先问清日期再 propose');
@@ -1214,11 +1231,10 @@ export async function executeGoogleCreate(
     ctx: AgenticToolCtx,
     args: ExecuteGoogleCreateArgs,
 ): Promise<any> {
-    void ctx;
     if (args.confirmed !== true) {
         throw new Error('GOOGLE_NOT_CONFIRMED: 须先 propose 并经用户确认后再 execute，本次未写入');
     }
-    const selection = readGoogleSelection();
+    const selection = readGoogleSelection(ctx);
     const accountId = args.accountId ?? selection[0].accountId;
     let out: any;
     if (args.kind === 'event') {

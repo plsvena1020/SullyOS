@@ -59,9 +59,15 @@ new_sqlite_classes = ["InstantTickDO"]
 [triggers]
 crons = ["* * * * *"]
 
+# 明文 vars（加密的 Secret 不受 keep_vars 影响，照旧走 secret）。
+# GOOGLE_BRIDGE_URL 只是个地址无机密，可进文件；TOKEN 绝不进文件。
+[vars]
+GOOGLE_BRIDGE_URL = "https://ethernet-vps.bot.cd/google-api"
+
 # Secrets（用 `wrangler secret put <名字>` 或面板设置，别写进本文件）：
 #   AMSG_MASTER_KEY     64 位 hex；SullyOS 设置页能一键生成
 #   VAPID_PUBLIC_KEY    必须和 SullyOS「推送凭据 (VAPID)」面板里的是同一对，
 #   VAPID_PRIVATE_KEY   否则 worker 用别的密钥对签推送会 403
 #   VAPID_EMAIL         可选；缺则回退 mailto: 默认值
 #   AMSG_SERVER_TOKEN   可选；配了则所有端点强制校验 X-Client-Token
+#   GOOGLE_BRIDGE_TOKEN Google 桥鉴权（值只进 secret，文件里永远只有这个名字）

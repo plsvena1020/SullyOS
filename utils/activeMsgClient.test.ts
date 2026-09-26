@@ -41,15 +41,16 @@ vi.mock('./keepAlive', () => ({
 import {
   ActiveMsgClient, buildFirePack, clearNamespaceValuesOrThrow, compareRemotePushSubscription,
   describeInstantChatFailure, dropStaleSubscription, maybeGzipRequestBody, putClientStateOrThrow,
-  readAmsgFailKind, toRemoteAvatarUrl,
+  readAmsgFailKind, readGoogleToolPackSegment, toRemoteAvatarUrl,
 } from './activeMsgClient';
 import {
   AMSG_FIRE_PACK_KEY,
   AMSG_SLOT_CURRENT_TIME, AMSG_SLOT_REALTIME_WORLD, AMSG_SLOT_SCENE,
   AMSG_SLOT_TASK_LIST, AMSG_SLOT_TIME_SINCE_USER, AMSG_SLOT_USER_CLOCK,
+  unpackStateValue,
 } from './amsgFirePack';
 import { clearInstantChatPending, setInstantChatPending } from './amsgInstantChat';
-import { AMSG_TOOL_CONFIG_KEY, AMSG_TOOL_PACK_KEY } from './amsgToolPack';
+import { AMSG_TOOL_CONFIG_KEY, AMSG_TOOL_PACK_KEY, buildToolPack } from './amsgToolPack';
 import * as dailySchedule from './dailySchedule';
 import { ChatPrompts } from './chatPrompts';
 import { DB } from './db';
@@ -2155,5 +2156,135 @@ describe('ActiveMsgClient.sendPushTest（推送测试按钮）', () => {
       { status: 404, headers: { 'Content-Type': 'application/json' } },
     )));
     await expect(ActiveMsgClient.sendPushTest()).rejects.toThrow('云端没有登记');
+  });
+});
+
+// W2 · tool_pack google 打包：前端把本机勾选三件套随包上云，worker 照它回落。
+// 任一缺失/损坏 → 包里不带该字段（worker 照旧 fail-closed，不改行为）。
+describe('tool_pack google 打包（W2 前端打包）', () => {
+  const CHAR = { name: '小满' } as any;
+
+  beforeEach(() => { localStorage.clear(); });
+  afterEach(() => { localStorage.clear(); });
+
+  const setTrio = (selected: string) => {
+    localStorage.setItem('aetheros.google.enabled', '1');
+    localStorage.setItem('aetheros.google.selectedCalendars', selected);
+    localStorage.setItem('aetheros.google.bridgeUrl', 'https://ethernet-vps.bot.cd/google-api');
+  };
+
+  it('三件套齐全 → 包里带 google 字段', () => {
+    setTrio(JSON.stringify(['acc1::cal1', 'acc1::cal2']));
+    expect(readGoogleToolPackSegment()).toEqual({
+      enabled: true,
+      selection: ['acc1::cal1', 'acc1::cal2'],
+      bridgeUrl: 'https://ethernet-vps.bot.cd/google-api',
+    });
+    expect(buildToolPack(CHAR, readGoogleToolPackSegment()).google).toEqual({
+      enabled: true,
+      selection: ['acc1::cal1', 'acc1::cal2'],
+      bridgeUrl: 'https://ethernet-vps.bot.cd/google-api',
+    });
+  });
+
+  it('未启用 → 不带（worker 照旧 fail-closed）', () => {
+    setTrio(JSON.stringify(['acc1::cal1']));
+    localStorage.setItem('aetheros.google.enabled', '0');
+    expect(readGoogleToolPackSegment()).toBeUndefined();
+    expect('google' in buildToolPack(CHAR, readGoogleToolPackSegment())).toBe(false);
+  });
+
+  it('selectedCalendars 损坏 → 不带', () => {
+    localStorage.setItem('aetheros.google.enabled', '1');
+    localStorage.setItem('aetheros.google.selectedCalendars', '{坏掉');
+    localStorage.setItem('aetheros.google.bridgeUrl', 'https://ethernet-vps.bot.cd/google-api');
+    expect(readGoogleToolPackSegment()).toBeUndefined();
+    expect('google' in buildToolPack(CHAR, readGoogleToolPackSegment())).toBe(false);
+  });
+
+  it('缺 bridgeUrl → 不带', () => {
+    localStorage.setItem('aetheros.google.enabled', '1');
+    localStorage.setItem('aetheros.google.selectedCalendars', JSON.stringify(['acc1::cal1']));
+    expect(readGoogleToolPackSegment()).toBeUndefined();
+    expect('google' in buildToolPack(CHAR, readGoogleToolPackSegment())).toBe(false);
+  });
+
+  it('空勾选 → 不带', () => {
+    setTrio(JSON.stringify([]));
+    expect('google' in buildToolPack(CHAR, readGoogleToolPackSegment())).toBe(false);
+  });
+});
+
+// W2 接线：排程上传的那份 tool_pack 是否真把 google 带上云（buildCharStateEntries 的调用点）。
+describe('scheduleCharacterTask 上云的 tool_pack 带 google（W2 接线）', () => {
+  const CHAR_ID = 'char-schedule-google';
+
+  let putBatches: Array<Array<{ namespace: string; key: string; value: string }>>;
+
+  beforeEach(() => {
+    putBatches = [];
+    reiClient.init.mockReset().mockResolvedValue(undefined);
+    reiClient.putClientState.mockReset().mockImplementation(async (entries: any[]) => {
+      putBatches.push(entries);
+      return { success: true };
+    });
+    reiClient._encrypt.mockReset().mockResolvedValue({ iv: 'iv', authTag: 'tag', encryptedData: 'enc' });
+    // 模板本体、表情全库、推送登记这些都不在被测范围，桩掉。
+    vi.spyOn(DB, 'getRecentMessagesByCharId').mockResolvedValue([] as any);
+    vi.spyOn(DB, 'getEmojis').mockResolvedValue([] as any);
+    vi.spyOn(DB, 'getEmojiCategories').mockResolvedValue([] as any);
+    vi.spyOn(ChatPrompts, 'buildSystemPrompt').mockResolvedValue('SYS_PROMPT_MARKER');
+    vi.spyOn(ChatPrompts, 'buildMessageHistory').mockReturnValue({ apiMessages: [] } as any);
+    vi.spyOn(ChatPrompts, 'filterVisibleEmojis').mockReturnValue({ emojis: [], categories: [] } as any);
+    vi.spyOn(ActiveMsgClient, 'registerPushSubscription').mockResolvedValue(undefined);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      status: 200,
+      text: async () => JSON.stringify({ success: true, data: { uuid: 'remote-uuid', status: 'pending' } }),
+      headers: new Headers({ 'content-type': 'application/json' }),
+    }));
+    clearInstantChatPending(CHAR_ID);
+  });
+  afterEach(() => {
+    clearInstantChatPending(CHAR_ID);
+    localStorage.clear();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  const schedule = () => ActiveMsgClient.scheduleCharacterTask({
+    char: { id: CHAR_ID, name: '小满', memories: [], activeMsg2Config: { enabled: true, tasks: [] } } as any,
+    config: { enabled: true, tasks: [] } as any,
+    task: {
+      mode: 'auto',
+      firstSendTime: new Date(Date.now() + 3600_000).toISOString(),
+      recurrenceType: 'none',
+    },
+    userProfile: { name: '小明' } as any,
+    groups: [],
+    realtimeConfig: {} as any,
+    apiConfig: { baseUrl: 'https://api.example.dev', apiKey: 'sk-test', model: 'gpt-test' } as any,
+  });
+
+  const toolPackOf = async () => {
+    const entry = putBatches.flat().find((e) => e.key === AMSG_TOOL_PACK_KEY);
+    expect(entry, '排程必须上传 tool_pack').toBeDefined();
+    return JSON.parse(await unpackStateValue(entry!.value));
+  };
+
+  it('本机三件套齐全 → 上云 tool_pack 带 google', async () => {
+    localStorage.setItem('aetheros.google.enabled', '1');
+    localStorage.setItem('aetheros.google.selectedCalendars', JSON.stringify(['acc1::cal1']));
+    localStorage.setItem('aetheros.google.bridgeUrl', 'https://ethernet-vps.bot.cd/google-api');
+    await schedule();
+    expect((await toolPackOf()).google).toEqual({
+      enabled: true,
+      selection: ['acc1::cal1'],
+      bridgeUrl: 'https://ethernet-vps.bot.cd/google-api',
+    });
+  });
+
+  it('本机没开 → 上云 tool_pack 不带 google（worker 照旧 fail-closed）', async () => {
+    await schedule();
+    expect('google' in (await toolPackOf())).toBe(false);
   });
 });

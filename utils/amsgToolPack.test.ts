@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildToolConfig,
   buildToolPack,
+  isWorkerReachableUrl,
   parseToolConfig,
   parseToolPack,
 } from './amsgToolPack';
@@ -193,5 +194,75 @@ describe('buildToolConfig / parseToolConfig', () => {
     const config = buildToolConfig(undefined);
     expect('mcpServers' in config).toBe(false);
     expect('mcpUseNativeTools' in config).toBe(false);
+  });
+});
+
+describe('google 字段（W1：worker 侧只读日程）', () => {
+  it('含 google 字段的包 JSON 往返保持，token 永不进包', () => {
+    const char = { id: 'c9', name: '九' } as unknown as CharacterProfile;
+    const pack = buildToolPack(char, {
+      enabled: true,
+      selection: ['g1::cal1', 'g1::cal2'],
+      bridgeUrl: 'https://ethernet-vps.bot.cd/google-api',
+    });
+    expect(pack.google).toEqual({
+      enabled: true,
+      selection: ['g1::cal1', 'g1::cal2'],
+      bridgeUrl: 'https://ethernet-vps.bot.cd/google-api',
+    });
+    expect(parseToolPack(JSON.stringify(pack))?.google).toEqual(pack.google);
+    // token 永不进包：只走 worker secret
+    expect(JSON.stringify(pack)).not.toContain('token');
+    expect('bridgeToken' in (pack as Record<string, unknown>)).toBe(false);
+  });
+
+  it('bridgeUrl 本机/私网判不可达，包里不带 google（worker 够不着就不教）', () => {
+    expect(isWorkerReachableUrl('http://127.0.0.1:8841')).toBe(false);
+    expect(isWorkerReachableUrl('http://10.0.0.5:8841/api')).toBe(false);
+    expect(isWorkerReachableUrl('http://192.168.1.10:8841')).toBe(false);
+    expect(isWorkerReachableUrl('http://172.16.5.4:8841')).toBe(false);
+    expect(isWorkerReachableUrl('http://172.31.255.1:8841')).toBe(false);
+    expect(isWorkerReachableUrl('https://ethernet-vps.bot.cd/google-api')).toBe(true);
+
+    const char = { id: 'c10', name: '十' } as unknown as CharacterProfile;
+    for (const bridgeUrl of [
+      'http://127.0.0.1:8841',
+      'http://10.0.0.5:8841',
+      'http://192.168.1.10:8841',
+      'http://172.20.0.1:8841',
+    ]) {
+      const pack = buildToolPack(char, { enabled: true, selection: ['g1::cal1'], bridgeUrl });
+      expect('google' in pack).toBe(false);
+    }
+  });
+
+  it('未启用/空勾选时不带 google；缺参旧包行为不变', () => {
+    const char = { id: 'c11', name: '十一' } as unknown as CharacterProfile;
+    expect('google' in buildToolPack(char)).toBe(false);
+    expect('google' in buildToolPack(char, { enabled: false, selection: ['g1::cal1'], bridgeUrl: 'https://ethernet-vps.bot.cd/google-api' })).toBe(false);
+    expect('google' in buildToolPack(char, { enabled: true, selection: [], bridgeUrl: 'https://ethernet-vps.bot.cd/google-api' })).toBe(false);
+    // 坏形状 selection 顺手滤掉，全坏则不带键
+    expect('google' in buildToolPack(char, { enabled: true, selection: ['oops', ''], bridgeUrl: 'https://ethernet-vps.bot.cd/google-api' })).toBe(false);
+
+    // 老包（无 google 键）解析形状与从前一致
+    const legacy = buildToolPack(char);
+    expect(parseToolPack(JSON.stringify(legacy))).toEqual({
+      v: 1,
+      charName: '十一',
+      xhsEnabled: false,
+      perspectiveEnabled: false,
+      activeMemoryMonths: [],
+      memories: [],
+      timeAwarenessEnabled: true,
+    });
+  });
+
+  it('坏形状 google 被剥离、整包仍有效（不连累 recall/记忆）', () => {
+    const char = { id: 'c12', name: '十二' } as unknown as CharacterProfile;
+    const dirty = { ...buildToolPack(char), google: { enabled: 'yes', selection: 'g1::cal1' } };
+    const parsed = parseToolPack(JSON.stringify(dirty));
+    expect(parsed).not.toBeNull();
+    expect('google' in parsed!).toBe(false);
+    expect(parsed?.charName).toBe('十二');
   });
 });

@@ -194,3 +194,74 @@ describe('W4 propose/execute 确认环', () => {
         })).rejects.toThrow(/REAUTH_REQUIRED/);
     });
 });
+
+// W2 · ctx.googleSelection 回落：worker 把 tool_pack.google 经 ctx 递进来时优先用它，
+// localStorage 只留浏览器本地回落（worker 内根本没有 localStorage，直读会 fail-closed）。
+describe('W2 ctx.googleSelection 回落', () => {
+    beforeEach(() => { localStorage.clear(); });
+    afterEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
+
+    const ctxWithSelection = (
+        googleFetch: GoogleFetchStub,
+        googleSelection: Array<{ accountId: string; calendarId: string }>,
+    ): AgenticToolCtx => ({ ...ctxWith(googleFetch), googleSelection });
+
+    it('runGoogleCalendarEvents：ctx 非空时优先用 ctx（localStorage 为空也不抛）', async () => {
+        const seen: Array<{ path: string; headers: any }> = [];
+        const ctx = ctxWithSelection(async (path, init) => {
+            seen.push({ path, headers: (init as any)?.headers });
+            return okJson({ items: EVENT_RAW });
+        }, [{ accountId: 'acc9', calendarId: 'cal9' }]);
+        const out = await runGoogleCalendarEvents(ctx, RANGE);
+        expect(out).toHaveLength(2);
+        expect(seen).toHaveLength(1);
+        expect(seen[0].path).toContain('calendarId=cal9');
+        expect(seen[0].headers['X-Google-Account']).toBe('acc9');
+    });
+
+    it('runGoogleTasks：ctx 为空数组时回落 localStorage（原逻辑不变）', async () => {
+        localStorage.setItem('aetheros.google.enabled', '1');
+        localStorage.setItem('aetheros.google.selectedCalendars', JSON.stringify(['acc1::cal1']));
+        const ctx = ctxWithSelection(async () => okJson({ items: TASK_RAW }), []);
+        const out = await runGoogleTasks(ctx, {});
+        expect(out).toEqual([{ title: '买机票', dueKey: '2026-09-22' }]);
+    });
+
+    it('runGoogleTasks：ctx 缺席时回落 localStorage（原逻辑不变）', async () => {
+        localStorage.setItem('aetheros.google.enabled', '1');
+        localStorage.setItem('aetheros.google.selectedCalendars', JSON.stringify(['acc1::cal1']));
+        const seen: Array<{ path: string; headers: any }> = [];
+        const ctx = ctxWith(async (path, init) => {
+            seen.push({ path, headers: (init as any)?.headers });
+            return okJson({ items: TASK_RAW });
+        });
+        const out = await runGoogleTasks(ctx, {});
+        expect(out).toEqual([{ title: '买机票', dueKey: '2026-09-22' }]);
+        expect(seen[0].headers['X-Google-Account']).toBe('acc1');
+    });
+
+    it('proposeGoogleCreate：ctx 非空时取 ctx 首个日历（localStorage 为空也不抛）', async () => {
+        const ctx = ctxWithSelection(async () => { throw new Error('propose 不得联网'); },
+            [{ accountId: 'acc9', calendarId: 'cal9' }]);
+        const out = await proposeGoogleCreate(ctx, { kind: 'event', title: '开会', dateKey: '2026-09-25' });
+        expect(out.summary).toContain('cal9');
+    });
+
+    it('executeGoogleCreate：ctx 非空时取 ctx 首个账号（localStorage 为空也不抛）', async () => {
+        const seen: any[] = [];
+        vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: any, init: any) => {
+            seen.push([String(input), init]); return okJson({ id: 'e9' });
+        });
+        const ctx = ctxWithSelection(async () => okJson({}),
+            [{ accountId: 'acc9', calendarId: 'cal9' }]);
+        const out: any = await executeGoogleCreate(ctx, {
+            kind: 'event',
+            payload: buildEventBody({ title: '开会', dateKey: '2026-09-25' }),
+            confirmed: true,
+        });
+        expect(out.id).toBe('e9');
+        expect(seen).toHaveLength(1);
+        expect(seen[0][1].headers['X-Google-Account']).toBe('acc9');
+        expect(JSON.parse(seen[0][1].body).calendarId).toBe('cal9');
+    });
+});
