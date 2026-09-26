@@ -9,7 +9,7 @@ import { processImage } from '../utils/file';
 import { safeResponseJson } from '../utils/safeApi';
 import { mergeSocialComments, prependUniqueSocialPosts, updateSocialPost } from '../utils/socialFeedMerge';
 import { normalizeMastodonStatus, dedupeByRemoteId, toMastodonVisibility, isChineseStatus, visibleInMoments, extractStatuses } from '../utils/momentsFeed';
-import { createBindSession, loadIdentities, mcpBaseUrl, type BoundIdentity } from '../utils/mastodonOAuth';
+import { createBindSession, loadIdentities, mcpBaseUrl, normInstance, type BoundIdentity } from '../utils/mastodonOAuth';
 import { ACCEPTED_IMAGE_MIMES, POST_IMAGE_MAX_BYTES, stripDataUrlPrefix, uploadThenPost } from '../utils/momentsUpload';
 import { generateImageBlobOnly, suggestImageTags } from '../utils/imageGenFlow';
 import { callMcpTool, loadMcpServers } from '../utils/mcpClient';
@@ -140,6 +140,9 @@ const MomentsApp: React.FC = () => {
     // 双 tab：熟人（我 + 角色 + home 时间线）| 发现（公开流，只留中文）
     const [activeTab, setActiveTab] = useState<'known' | 'discover'>('known');
     const [isCreateOpen, setIsCreateOpen] = useState(false);
+    const [isBindOpen, setIsBindOpen] = useState(false);
+    const [bindInstance, setBindInstance] = useState('');
+    const [bindError, setBindError] = useState('');
 
     const [selectedPost, setSelectedPost] = useState<SocialPost | null>(null);
     const [isRefreshing, setIsRefreshing] = useState(false);
@@ -421,25 +424,27 @@ const MomentsApp: React.FC = () => {
     };
 
     // 一键绑定发起：注册应用 → 存 pending → 跳授权页。回调由 PhoneShell effect 接住换 token + 落盘。
-    const handleBind = async () => {
+    const confirmBind = async () => {
         try {
-            const raw = window.prompt('输入 Mastodon 实例域名（如 mastodon.social）');
-            if (!raw) return;
+            const raw = bindInstance.trim();
+            if (!raw) { setBindError('请输入实例域名，如 mastodon.social'); return; }
+            const instance = normInstance(raw);
             const server = findMomentsServer();
             if (!server?.token) {
                 addToast('先在设置 → MCP 添加 Mastodon 服务器（地址见用户文档第八节）', 'info');
                 return;
             }
             const { authorizeUrl, pending } = await createBindSession({
-                instance: raw,
+                instance,
                 ownerId: selectedIdentity,
                 mcpBase: mcpBaseUrl(server),
                 mcpToken: server.token,
                 redirectUri: `${window.location.origin}/`,
             });
             sessionStorage.setItem('mastodon-oauth-pending', JSON.stringify(pending));
+            setIsBindOpen(false);
             window.location.href = authorizeUrl;
-        } catch (e: any) { addToast(String(e?.message ?? e), 'error'); }
+        } catch (e: any) { setBindError(String(e?.message ?? e)); }
     };
 
     const generateComments = async (post: SocialPost) => {
@@ -1141,7 +1146,7 @@ ${identityMap}
                             ‹ 返回
                         </button>
                         <button
-                            onClick={handleBind}
+                            onClick={() => { setBindError(''); setIsBindOpen(true); }}
                             className="absolute px-3 py-1.5 rounded-full bg-black/30 text-white text-[11px] font-bold backdrop-blur-md active:scale-95 transition"
                             style={{ top: 'calc(var(--safe-top) + 8px)', right: '12px' }}
                         >
@@ -1216,6 +1221,36 @@ ${identityMap}
                     </button>
                 )}
             </div>
+
+            {/* --- Bind Mastodon Modal --- */}
+            {isBindOpen && (
+                <div className="absolute inset-0 z-50 bg-white flex flex-col animate-slide-up">
+                    <div className="sticky top-0 z-20 bg-white border-b border-slate-100" style={{ paddingTop: 'var(--safe-top)' }}>
+                        <div className="h-14 flex items-center justify-between px-4">
+                            <button onClick={() => { setIsBindOpen(false); setBindError(''); }} className="text-slate-600 text-sm px-2 py-1">取消</button>
+                            <span className="text-sm font-bold text-slate-800">绑定 Mastodon（正在为：{selectedIdentity === 'user' ? '我' : (characters.find(c => c.id === selectedIdentity)?.name ?? selectedIdentity)}）</span>
+                            <button
+                                onClick={() => { void confirmBind(); }}
+                                className="px-4 py-1.5 rounded-md text-xs font-bold text-white transition-all bg-[#07c160]"
+                            >
+                                确定
+                            </button>
+                        </div>
+                    </div>
+                    <div className="flex-1 overflow-y-auto no-scrollbar p-4">
+                        <input
+                            value={bindInstance}
+                            onChange={e => setBindInstance(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') void confirmBind(); }}
+                            placeholder="mastodon.social"
+                            className="text-base font-bold placeholder:text-slate-300 placeholder:font-normal outline-none mb-2 w-full text-slate-800"
+                        />
+                        {bindError && (
+                            <p className="text-xs text-red-500">{bindError}</p>
+                        )}
+                    </div>
+                </div>
+            )}
 
             {selectedPost && renderDetail()}
         </div>
