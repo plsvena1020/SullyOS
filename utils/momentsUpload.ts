@@ -33,7 +33,7 @@ export function parseUploadResult(res: { success: boolean; data?: any; rawText?:
 export type UploadCallTool = (
   toolName: string,
   args: Record<string, any>,
-) => Promise<{ success: boolean; data?: any; rawText?: string; error?: string }>;
+) => Promise<{ success: boolean; data?: any; rawText?: string; structuredContent?: any; error?: string }>;
 
 export type UploadPostEventKind = 'uploaded' | 'upload_failed' | 'posted' | 'post_failed' | 'cancelled';
 
@@ -44,7 +44,7 @@ export async function uploadThenPost(input: {
   visibility: 'public' | 'unlisted' | 'private' | 'direct';
   image?: { dataUrl: string; mimeType: string; alt: string } | null;
   onEvent?: (e: { kind: UploadPostEventKind; message?: string }) => void;
-}): Promise<{ mediaId: string | null; posted: boolean; cancelled: boolean; postRes: { data?: any; rawText?: string } | null }> {
+}): Promise<{ mediaId: string | null; posted: boolean; cancelled: boolean; postRes: { data?: any; rawText?: string; structuredContent?: any } | null }> {
   const { callTool, ownerId, status, visibility, image, onEvent } = input;
   let mediaId: string | null = null;
   if (image) {
@@ -65,5 +65,5 @@ export async function uploadThenPost(input: {
     return { mediaId, posted: false, cancelled: true, postRes: null };
   }
   onEvent?.({ kind: post.success ? 'posted' : 'post_failed', message: post.error });
-  return { mediaId, posted: post.success, cancelled: false, postRes: post.success ? { data: post.data, rawText: post.rawText } : null };
+  return { mediaId, posted: post.success, cancelled: false, postRes: post.success ? { data: post.data, rawText: post.rawText, structuredContent: post.structuredContent } : null };
 }

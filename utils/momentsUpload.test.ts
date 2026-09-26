@@ -82,4 +82,15 @@ describe('uploadThenPost', () => {
     expect(calls[0][1]).not.toHaveProperty('media_ids');
     expect(r.postRes).not.toBeNull();
   });
+  test('有图编排透出 post 回执 structuredContent', async () => {
+    const callTool = async (name: string, _args: any) => {
+      if (name === 'moments_upload') return { success: true, data: { media_id: 'm1' } };
+      return { success: true, data: { id: 's1' }, rawText: '..', structuredContent: { media_id: 'm1' } };
+    };
+    const r = await uploadThenPost({
+      callTool, ownerId: 'user', status: 'hi', visibility: 'private',
+      image: { dataUrl: 'data:image/png;base64,aGk=', mimeType: 'image/png', alt: 'a' },
+    });
+    expect((r.postRes as any)?.structuredContent?.media_id).toBe('m1');
+  });
 });

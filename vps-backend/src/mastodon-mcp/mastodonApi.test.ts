@@ -44,4 +44,17 @@ describe('mastodonApi', () => {
     expect(id).toBe('m1');
     expect(calls.filter((u) => u.includes('/api/v1/media/m1')).length).toBeGreaterThanOrEqual(1);
   });
+  it('slim 透出 account/language', async () => {
+    const fetchImpl = vi.fn(async () => jsonResp(200, {
+      id: 's9', url: 'https://mstdn.social/@me/9', content: '<p>hi</p>',
+      visibility: 'private', created_at: '2026-09-25T00:00:00Z',
+      in_reply_to_id: null, media_attachments: [],
+      account: { display_name: 'Me', username: 'me', avatar: 'https://mstdn.social/avatar.png' },
+      language: 'zh',
+    }));
+    const api = createMastodonClient({ fetchImpl: fetchImpl as unknown as typeof fetch });
+    const out = await api.postStatus({ instance: 'mstdn.social', accessToken: 'x', status: 'hi' });
+    expect(out.account).toEqual({ display_name: 'Me', username: 'me', avatar: 'https://mstdn.social/avatar.png' });
+    expect(out.language).toBe('zh');
+  });
 });

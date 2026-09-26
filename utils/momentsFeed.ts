@@ -37,6 +37,33 @@ export function visibleInMoments(p: SocialPost): boolean {
 export function visibleInSpark(p: SocialPost): boolean {
   return p.origin !== 'mastodon' && p.origin !== 'moments';
 }
+// MCP 返回形态不固定（data / rawText / content 文本块），尽量宽地抽出 status 数组
+export function extractStatuses(payload: any, structuredContent?: any): any[] {
+  if (Array.isArray(structuredContent?.statuses)) return structuredContent.statuses;
+  if (!payload) return [];
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.statuses)) return payload.statuses;
+  if (Array.isArray(payload?.result)) return payload.result;
+  if (Array.isArray(payload?.content)) {
+    for (const block of payload.content) {
+      const text = typeof block === 'string' ? block : block?.text;
+      if (typeof text !== 'string') continue;
+      try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed?.statuses)) return parsed.statuses;
+      } catch { /* 不是 JSON 就跳过 */ }
+    }
+  }
+  if (typeof payload === 'string') {
+    try {
+      const parsed = JSON.parse(payload);
+      if (Array.isArray(parsed)) return parsed;
+      if (Array.isArray(parsed?.statuses)) return parsed.statuses;
+    } catch { /* ignore */ }
+  }
+  return [];
+}
 // 发现页中文过滤：Mastodon language 字段为准（zh 开头全收：简/繁/粤）；缺失时看正文含 CJK 即收。
 export function isChineseStatus(s: { language?: string | null; text: string }): boolean {
   if (s.language) return s.language.toLowerCase().startsWith('zh');

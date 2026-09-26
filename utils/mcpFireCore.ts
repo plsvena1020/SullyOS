@@ -340,6 +340,7 @@ export interface McpToolResult {
     data?: any;
     rawText?: string;
     error?: string;
+    structuredContent?: any;
 }
 
 interface McpJsonRpcRequest {
@@ -836,6 +837,7 @@ export const callMcpToolCore = async (
             args: normalizedArgs,
             success: result.success,
             ...(result.success ? { result: resultPreview } : { error: result.error }),
+            ...(Array.isArray((result as any)?.structuredContent?.statuses) ? { statuses: (result as any).structuredContent.statuses.length } : {}),
         });
         return result;
     };
@@ -875,9 +877,9 @@ export const callMcpToolCore = async (
             const fullText = textParts.join('\n').trim();
             if (result.isError) return finish({ success: false, error: fullText || 'MCP 工具执行失败', rawText: fullText });
             try {
-                return finish({ success: true, data: JSON.parse(fullText), rawText: fullText });
+                return finish({ success: true, data: JSON.parse(fullText), rawText: fullText, ...(result.structuredContent !== undefined ? { structuredContent: result.structuredContent } : {}) });
             } catch {
-                return finish({ success: true, data: fullText, rawText: fullText });
+                return finish({ success: true, data: fullText, rawText: fullText, ...(result.structuredContent !== undefined ? { structuredContent: result.structuredContent } : {}) });
             }
         }
         return finish({ success: true, data: result });

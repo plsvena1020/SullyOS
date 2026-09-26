@@ -8,7 +8,7 @@ import { isBlobRef, resolveRefToDataUrl } from '../utils/blobRef';
 import { processImage } from '../utils/file';
 import { safeResponseJson } from '../utils/safeApi';
 import { mergeSocialComments, prependUniqueSocialPosts, updateSocialPost } from '../utils/socialFeedMerge';
-import { normalizeMastodonStatus, dedupeByRemoteId, toMastodonVisibility, isChineseStatus, visibleInMoments } from '../utils/momentsFeed';
+import { normalizeMastodonStatus, dedupeByRemoteId, toMastodonVisibility, isChineseStatus, visibleInMoments, extractStatuses } from '../utils/momentsFeed';
 import { createBindSession, loadIdentities, mcpBaseUrl, type BoundIdentity } from '../utils/mastodonOAuth';
 import { ACCEPTED_IMAGE_MIMES, POST_IMAGE_MAX_BYTES, stripDataUrlPrefix, uploadThenPost } from '../utils/momentsUpload';
 import { generateImageBlobOnly, suggestImageTags } from '../utils/imageGenFlow';
@@ -307,33 +307,6 @@ const MomentsApp: React.FC = () => {
         try { return new URL(url).hostname; } catch { return ''; }
     };
 
-    // MCP 返回形态不固定（data / rawText / content 文本块），尽量宽地抽出 status 数组
-    const extractStatuses = (payload: any): any[] => {
-        if (!payload) return [];
-        if (Array.isArray(payload)) return payload;
-        if (Array.isArray(payload?.statuses)) return payload.statuses;
-        if (Array.isArray(payload?.result)) return payload.result;
-        if (Array.isArray(payload?.content)) {
-            for (const block of payload.content) {
-                const text = typeof block === 'string' ? block : block?.text;
-                if (typeof text !== 'string') continue;
-                try {
-                    const parsed = JSON.parse(text);
-                    if (Array.isArray(parsed)) return parsed;
-                    if (Array.isArray(parsed?.statuses)) return parsed.statuses;
-                } catch { /* 不是 JSON 就跳过 */ }
-            }
-        }
-        if (typeof payload === 'string') {
-            try {
-                const parsed = JSON.parse(payload);
-                if (Array.isArray(parsed)) return parsed;
-                if (Array.isArray(parsed?.statuses)) return parsed.statuses;
-            } catch { /* ignore */ }
-        }
-        return [];
-    };
-
     const statusToPost = (s: any, instanceFallback: string, ownerId: string, tagDiscover: boolean): SocialPost | null => {
         if (!s || s.id == null) return null;
         const instance = hostOf(s.url) || instanceFallback;
@@ -370,7 +343,7 @@ const MomentsApp: React.FC = () => {
             const res = await callMcpTool(server, tool, kind === 'home' ? { ownerId: selectedIdentity, limit: 20 } : { limit: 20 });
             if (controller.signal.aborted) return;
             if (!res.success) throw new Error(res.error || '同步失败');
-            const raw = extractStatuses(res.data ?? res.rawText);
+            const raw = extractStatuses(res.data ?? res.rawText, (res as any).structuredContent);
             const ownerId = kind === 'home' ? 'user' : 'public';
             const normalized: SocialPost[] = [];
             for (const s of raw) {
@@ -431,7 +404,7 @@ const MomentsApp: React.FC = () => {
             });
             if (!outcome.posted) return;
             if (!mountedRef.current) return;
-            const remote = parsePostedStatus(outcome.postRes?.data ?? outcome.postRes?.rawText);
+            const remote = parsePostedStatus(outcome.postRes?.structuredContent ?? outcome.postRes?.data ?? outcome.postRes?.rawText);
             if (remote.id) {
                 updatePostInFeed(post.id, current => ({
                     ...current,

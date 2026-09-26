@@ -22,6 +22,8 @@ const slim = (s) => ({
   visibility: s.visibility, created_at: s.created_at,
   in_reply_to_id: s.in_reply_to_id ?? null,
   media_attachments: (s.media_attachments ?? []).map((m) => ({ id: m.id, url: m.url })),
+  account: s.account ? { display_name: s.account.display_name ?? '', username: s.account.username ?? '', avatar: s.account.avatar ?? '' } : null,
+  language: s.language ?? null,
 });
 
 const idempotencyKeyOf = (payload) =>

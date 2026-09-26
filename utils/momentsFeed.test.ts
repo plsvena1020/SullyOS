@@ -59,3 +59,17 @@ describe('moments feed', () => {
     expect(visibleInSpark({ origin: 'gen' } as never)).toBe(true);
   });
 });
+describe('extractStatuses', () => {
+  it('structuredContent.statuses 最高优先级', async () => {
+    const { extractStatuses } = await import('./momentsFeed.js');
+    expect(extractStatuses(null, { statuses: [{ id: '1' }] })).toEqual([{ id: '1' }]);
+  });
+  it('data.statuses 原分支照旧', async () => {
+    const { extractStatuses } = await import('./momentsFeed.js');
+    expect(extractStatuses({ statuses: [{ id: '2' }] }, undefined)).toEqual([{ id: '2' }]);
+  });
+  it('字符串“取回 N 条”回 [] 不抛', async () => {
+    const { extractStatuses } = await import('./momentsFeed.js');
+    expect(extractStatuses('取回 20 条', undefined)).toEqual([]);
+  });
+});
