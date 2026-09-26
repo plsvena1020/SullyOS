@@ -18,6 +18,10 @@ const WIRED_TOOL_SCHEMAS: Record<string, string> = {
   schedule_cancel: '参数 {"task_id":"要取消的任务短 id（8 位）；当前只有一个待触发任务时可省略"}；取消角色的一个定时主动消息任务',
   schedule_renew: '参数 {"send_at":"新触发时间，写你本地墙钟的 YYYY-MM-DDTHH:mm:ss，不带时区后缀，必须晚于当前时间","task_id":"要续期的任务短 id（8 位）；只有一个任务时可省略"}，仅 send_at 必填；给角色的定时主动消息续期',
   save_diary: '参数 {"text":"要记下的内容"}（以角色身份写进手机日记）',
+  google_calendar_query: '参数 {"timeMin":"ISO 起点（必填，如 2026-09-26T00:00:00+08:00）","timeMax":"ISO 终点（必填）","keyword":"可选，按标题/地点子串过滤"}；查用户已勾选 Google 日历在该时段内的事件',
+  google_task_query: '参数 {}（无参数）；查用户 Google 待办（只返回未完成）',
+  google_create_propose: '参数 {"kind":"event 或 task（必填）","title":"标题（必填）","dateKey":"event 用 YYYY-MM-DD（必填）","timeText":"可选 HH:mm","location":"可选","description":"可选","dueKey":"task 用 YYYY-MM-DD","notes":"可选"}；只做预览不落盘，拿到 payload 后必须等用户点头',
+  google_create_execute: '参数 {"kind":"event 或 task（必填）","payload":"propose 返回的 payload 原样（必填）","confirmed":"用户点头后才可 true（必填）"}；用户未确认就调会直接失败',
 };
 
 function safeText(value: unknown): string {
